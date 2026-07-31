@@ -1,6 +1,7 @@
 package com.agent.sandbox.ast;
 
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.errors.RepositoryNotFoundException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -81,6 +82,15 @@ class AstServiceDiffTest {
         assertThatThrownBy(() -> service.applyDiff(plainDirectory, VALID_DIFF))
                 .isInstanceOf(AstServiceException.class)
                 .hasCauseInstanceOf(IOException.class);
+    }
+
+    @Test
+    void validatesRepositoryBeforeParsingNonEmptyPatch() throws IOException {
+        Path plainDirectory = Files.createDirectory(temporaryDirectory.resolve("invalid-patch"));
+
+        assertThatThrownBy(() -> new AstService().applyDiff(plainDirectory, "not a diff"))
+                .isInstanceOf(AstServiceException.class)
+                .hasCauseInstanceOf(RepositoryNotFoundException.class);
     }
 
     @Test

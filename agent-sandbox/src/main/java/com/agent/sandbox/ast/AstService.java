@@ -94,15 +94,14 @@ public final class AstService {
                 throw new AstServiceException("Git 工作树根目录不是目录: " + root);
             }
 
-            byte[] patchBytes = unifiedDiff.getBytes(StandardCharsets.UTF_8);
-            validatePatch(root, patchBytes);
-
             try (Git git = Git.open(root.toFile())) {
                 Path workTree = git.getRepository().getWorkTree().toPath().toRealPath();
                 if (!workTree.equals(root)) {
                     throw new AstServiceException("路径不是 Git 工作树根目录: " + root);
                 }
 
+                byte[] patchBytes = unifiedDiff.getBytes(StandardCharsets.UTF_8);
+                validatePatch(root, patchBytes);
                 ApplyResult result = git.apply()
                         .setPatch(new ByteArrayInputStream(patchBytes))
                         .call();
