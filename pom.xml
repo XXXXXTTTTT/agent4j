@@ -34,6 +34,8 @@
         <jgit.version>7.7.1.202607240634-r</jgit.version>
         <docker-java.version>3.7.1</docker-java.version>
         <pty4j.version>0.13.12</pty4j.version>
+        <httpclient5.version>5.5.1</httpclient5.version>
+        <httpcore5.version>5.3.6</httpcore5.version>
     </properties>
 
     <build>

@@ -363,8 +363,9 @@ dockerClient.createContainerCmd(target.image())
 
 启动后用 `logContainerCmd` 的 `ResultCallback.Adapter<Frame>` 按
 `Frame.getStreamType()` 分离 UTF-8 stdout/stderr 并推送日志；用
-`WaitContainerResultCallback.awaitStatusCode(timeout.toMillis(), MILLISECONDS)`
-读取退出码。返回 null 表示超时，此时 stop 容器并返回 `-1`。`finally` 始终
+`WaitContainerResultCallback.awaitCompletion(timeout.toMillis(), MILLISECONDS)`
+等待退出；返回 false 表示超时，此时 stop 容器并返回 `-1`，返回 true 后通过
+`awaitStatusCode()` 读取退出码。`finally` 始终
 执行 `removeContainerCmd(id).withForce(true).exec()`；已有主异常时把清理异常
 加入 suppressed，无主异常时清理异常成为 `SandboxExecutionException`。`close`
 关闭 DockerClient 并保留 close 异常 cause。
