@@ -1,0 +1,28 @@
+# Java 构建产物
+target/
+*.class
+*.jar
+*.war
+
+# IDE 与编辑器配置
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# 本地日志与临时文件
+*.log
+logs/
+tmp/
+*.out
+
+# 敏感信息
+.env
+*.pem
+*.key
