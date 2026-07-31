@@ -47,10 +47,12 @@ JavaParser 使用 `ParserConfiguration.LanguageLevel.JAVA_21`。源文件不存�
 
 ## Diff 应用
 
-`applyDiff` 使用 JGit `ApplyCommand` 读取 UTF-8 Unified Diff，不使用字符串
-替换模拟补丁。调用前要求 `repositoryRoot` 是现有 Git 工作树根目录；调用后
-将 JGit 返回的更新文件转为绝对规范路径，并验证每个路径都位于工作树根目录
-内。空补丁、非 Git 目录、补丁冲突和越界路径均抛出 `AstServiceException`。
+`applyDiff` 使用 JGit `Patch` 预解析 UTF-8 Unified Diff，并在写文件前验证每个
+非 `/dev/null` 新旧路径均位于工作树根目录内；验证通过后将同一补丁字节交给
+JGit `ApplyCommand`，不使用字符串替换模拟补丁。调用前要求 `repositoryRoot`
+是现有 Git 工作树根目录；调用后将 JGit 返回的更新文件转为绝对规范路径，
+并再次验证每个路径都位于工作树根目录内。空补丁、非 Git 目录、解析问题、
+补丁冲突和越界路径均抛出 `AstServiceException`。
 
 返回列表按 JGit 的更新顺序冻结为不可修改列表。服务不自动提交代码，不修改
 Git 配置，也不处理远程仓库。
@@ -74,8 +76,11 @@ CompletableFuture<CommandResult> execute(
 - `PtyTarget(Path bashExecutable, Path workingDirectory)`
 
 `TerminalTarget` 是只允许 `DockerTarget` 与 `PtyTarget` 的 sealed interface。
-`Stream` 精确包含 `STDOUT`、`STDERR`、`PTY`。所有构造器拒绝 null、空命令、
-非正超时和不存在的宿主路径。
+`Stream` 精确包含 `STDOUT`、`STDERR`、`PTY`。`CommandRequest` 拒绝 null target、
+空命令和非正超时；`DockerTarget` 拒绝空镜像、空容器工作目录和不存在的宿主
+工作目录；`PtyTarget` 拒绝不存在的 Bash 可执行文件与工作目录；结果与日志
+record 拒绝 null 字符串。命令超时时 `CommandResult.exitCode` 固定为 `-1`，
+`timedOut` 固定为 `true`；未超时时返回进程或容器的实际退出码。
 
 ## SandboxTerminalService
 
