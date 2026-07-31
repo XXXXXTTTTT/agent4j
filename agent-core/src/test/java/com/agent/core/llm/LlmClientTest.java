@@ -1,5 +1,6 @@
 package com.agent.core.llm;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -181,5 +182,116 @@ class LlmClientTest {
                     .hasCauseInstanceOf(RestClientResponseException.class);
         }
         server.verify();
+    }
+
+    @Test
+    void wrapsSseHttpErrorsAndPreservesCause() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://gateway.test");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        LlmClient.ChatCompletionRequest request = new LlmClient.ChatCompletionRequest(
+                "gpt-test",
+                List.of(ChatMessage.user("Hello")),
+                List.of(),
+                null,
+                null,
+                true);
+
+        server.expect(once(), requestTo("https://gateway.test/v1/chat/completions"))
+                .andRespond(withStatus(HttpStatus.BAD_GATEWAY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"error\":{\"message\":\"upstream unavailable\"}}"));
+
+        try (LlmClient client = new LlmClient(builder.build(), objectMapper, CHAT_COMPLETIONS_PATH)) {
+            assertThatThrownBy(() -> client.stream(request, chunk -> {
+            }))
+                    .isInstanceOf(LlmClientException.class)
+                    .hasCauseInstanceOf(RestClientResponseException.class)
+                    .satisfies(exception -> {
+                        RestClientResponseException cause =
+                                (RestClientResponseException) exception.getCause();
+                        assertThat(cause.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+                        assertThat(cause.getResponseBodyAsString()).contains("upstream unavailable");
+                    });
+        }
+        server.verify();
+    }
+
+    @Test
+    void joinsMultipleDataLinesWithinOneSseEvent() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://gateway.test");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        LlmClient.ChatCompletionRequest request = streamingRequest();
+        String sse = """
+                data: {"id":"chunk-multi",
+                data: "object":"chat.completion.chunk","created":1720000000,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"joined"},"finish_reason":null}]}
+
+                data: [DONE]
+
+                """;
+
+        server.expect(once(), requestTo("https://gateway.test/v1/chat/completions"))
+                .andRespond(withSuccess(sse, MediaType.TEXT_EVENT_STREAM));
+
+        List<LlmClient.ChatCompletionChunk> chunks = new ArrayList<>();
+        try (LlmClient client = new LlmClient(builder.build(), objectMapper, CHAT_COMPLETIONS_PATH)) {
+            client.stream(request, chunks::add);
+        }
+
+        assertThat(chunks).hasSize(1);
+        assertThat(chunks.getFirst().id()).isEqualTo("chunk-multi");
+        assertThat(chunks.getFirst().choices().getFirst().delta().content()).isEqualTo("joined");
+        server.verify();
+    }
+
+    @Test
+    void preservesMalformedSseJsonCause() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://gateway.test");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+
+        server.expect(once(), requestTo("https://gateway.test/v1/chat/completions"))
+                .andRespond(withSuccess("data: not-json\n\n", MediaType.TEXT_EVENT_STREAM));
+
+        try (LlmClient client = new LlmClient(builder.build(), objectMapper, CHAT_COMPLETIONS_PATH)) {
+            assertThatThrownBy(() -> client.stream(streamingRequest(), chunk -> {
+            }))
+                    .isInstanceOf(LlmClientException.class)
+                    .hasRootCauseInstanceOf(JsonProcessingException.class);
+        }
+        server.verify();
+    }
+
+    @Test
+    void preservesSseConsumerFailureCause() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://gateway.test");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        IllegalStateException failure = new IllegalStateException("consumer failed");
+        String sse = """
+                data: {"id":"chunk-1","object":"chat.completion.chunk","created":1720000000,"model":"gpt-test","choices":[]}
+
+                data: [DONE]
+
+                """;
+
+        server.expect(once(), requestTo("https://gateway.test/v1/chat/completions"))
+                .andRespond(withSuccess(sse, MediaType.TEXT_EVENT_STREAM));
+
+        try (LlmClient client = new LlmClient(builder.build(), objectMapper, CHAT_COMPLETIONS_PATH)) {
+            assertThatThrownBy(() -> client.stream(streamingRequest(), chunk -> {
+                throw failure;
+            }))
+                    .isInstanceOf(LlmClientException.class)
+                    .hasCause(failure);
+        }
+        server.verify();
+    }
+
+    private LlmClient.ChatCompletionRequest streamingRequest() {
+        return new LlmClient.ChatCompletionRequest(
+                "gpt-test",
+                List.of(ChatMessage.user("Hello")),
+                List.of(),
+                null,
+                null,
+                true);
     }
 }

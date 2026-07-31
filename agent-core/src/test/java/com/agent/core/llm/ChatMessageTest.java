@@ -4,9 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ChatMessageTest {
 
@@ -47,6 +49,22 @@ class ChatMessageTest {
         assertThat(json.get("tool_call_id").textValue()).isEqualTo("call-1");
         assertThat(json.get("content").textValue()).isEqualTo("result");
         assertThat(json.has("tool_calls")).isFalse();
+    }
+
+    @Test
+    void copiesAndFreezesToolCalls() {
+        List<ChatMessage.ToolCall> toolCalls = new ArrayList<>();
+        toolCalls.add(new ChatMessage.ToolCall(
+                "call-1",
+                "function",
+                new ChatMessage.FunctionCall("lookup", "{}")));
+
+        ChatMessage message = ChatMessage.assistantToolCalls(toolCalls);
+        toolCalls.clear();
+
+        assertThat(message.toolCalls()).hasSize(1);
+        assertThatThrownBy(() -> message.toolCalls().clear())
+                .isInstanceOf(UnsupportedOperationException.class);
     }
 
     private String roleValue(ChatMessage message) {

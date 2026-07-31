@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -104,9 +105,17 @@ public final class LlmClient implements AutoCloseable {
             ClientHttpResponse response,
             Consumer<ChatCompletionChunk> consumer) throws IOException {
         if (response.getStatusCode().isError()) {
-            String body = new String(response.getBody().readAllBytes(), StandardCharsets.UTF_8);
+            byte[] responseBody = response.getBody().readAllBytes();
+            RestClientResponseException httpException = new RestClientResponseException(
+                    "LLM SSE 请求失败",
+                    response.getStatusCode(),
+                    response.getStatusText(),
+                    response.getHeaders(),
+                    responseBody,
+                    StandardCharsets.UTF_8);
             throw new LlmClientException(
-                    "LLM SSE 请求失败，HTTP 状态码 " + response.getStatusCode().value() + ": " + body);
+                    "LLM SSE 请求失败，HTTP 状态码 " + response.getStatusCode().value(),
+                    httpException);
         }
 
         try (BufferedReader reader = new BufferedReader(
