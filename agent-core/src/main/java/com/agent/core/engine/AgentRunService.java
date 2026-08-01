@@ -1,0 +1,337 @@
+package com.agent.core.engine;
+
+import com.agent.core.trace.TraceEvent;
+import com.agent.core.trace.TraceEventPublisher;
+
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
+import java.time.Instant;
+import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+
+/**
+ * 基于虚拟线程驱动持久化 Run 生命周期。
+ */
+public final class AgentRunService implements AutoCloseable {
+
+    private static final Logger LOGGER = System.getLogger(AgentRunService.class.getName());
+
+    private final Checkpointer checkpointer;
+    private final GraphRegistry graphRegistry;
+    private final TraceEventPublisher tracePublisher;
+    private final ExecutorService executor;
+    private final AtomicBoolean closed = new AtomicBoolean();
+
+    /**
+     * 创建运行服务。
+     *
+     * @param checkpointer   权威 Checkpoint 端口
+     * @param graphRegistry 图注册表
+     * @param tracePublisher Trace 发布端口
+     */
+    public AgentRunService(
+            Checkpointer checkpointer,
+            GraphRegistry graphRegistry,
+            TraceEventPublisher tracePublisher) {
+        this.checkpointer = Objects.requireNonNull(checkpointer, "checkpointer 不能为空");
+        this.graphRegistry = Objects.requireNonNull(graphRegistry, "graphRegistry 不能为空");
+        this.tracePublisher = Objects.requireNonNull(tracePublisher, "tracePublisher 不能为空");
+        this.executor = Executors.newThreadPerTaskExecutor(
+                Thread.ofVirtual().name("agent-run-", 0).factory());
+    }
+
+    /**
+     * 创建并异步启动 Run。
+     *
+     * @param graphId      精确图标识
+     * @param initialState 初始不可变状态
+     * @return 版本 0 快照
+     */
+    public RunCheckpoint start(String graphId, AgentState initialState) {
+        ensureOpen();
+        requireText(graphId, "graphId");
+        Objects.requireNonNull(initialState, "initialState 不能为空");
+
+        StateGraph graph = graphRegistry.create(graphId);
+        RunCheckpoint created;
+        try {
+            created = checkpointer.create(
+                    UUID.randomUUID(), graphId, initialState, graph.entryPoint());
+        } catch (RuntimeException exception) {
+            graph.close();
+            throw exception;
+        }
+        dispatch(created, false, graph);
+        return created;
+    }
+
+    /**
+     * 读取 Run 最新权威快照。
+     *
+     * @param runId Run 标识
+     * @return 最新快照
+     */
+    public RunCheckpoint get(UUID runId) {
+        Objects.requireNonNull(runId, "runId 不能为空");
+        return checkpointer.loadLatest(runId)
+                .orElseThrow(() -> new RunNotFoundException(runId));
+    }
+
+    /**
+     * 批准或拒绝等待中的 Run。
+     *
+     * @param runId   Run 标识
+     * @param command 审批命令
+     * @return 审批产生的新版本快照
+     */
+    public RunCheckpoint decide(UUID runId, ApprovalCommand command) {
+        ensureOpen();
+        Objects.requireNonNull(runId, "runId 不能为空");
+        Objects.requireNonNull(command, "command 不能为空");
+        RunCheckpoint waiting = get(runId);
+        if (waiting.status() != RunStatus.WAITING_APPROVAL
+                || waiting.version() != command.expectedVersion()) {
+            throw new CheckpointConflictException(runId, command.expectedVersion());
+        }
+
+        InterruptRequest interrupt = Objects.requireNonNull(
+                waiting.interruptRequest(), "等待审批快照缺少 interruptRequest");
+        if (command.decision() == ApprovalDecision.REJECT) {
+            RunCheckpoint rejected = checkpointer.append(new CheckpointAppend(
+                    runId,
+                    command.expectedVersion(),
+                    RunStatus.REJECTED,
+                    waiting.state(),
+                    null,
+                    interrupt,
+                    ApprovalDecision.REJECT,
+                    command.reason(),
+                    null));
+            publish(new TraceEvent.Rejected(
+                    UUID.randomUUID(),
+                    runId,
+                    rejected.version(),
+                    Instant.now(),
+                    interrupt.nodeName(),
+                    command.reason()));
+            return rejected;
+        }
+
+        RunCheckpoint approved = checkpointer.append(new CheckpointAppend(
+                runId,
+                command.expectedVersion(),
+                RunStatus.RUNNING,
+                waiting.state(),
+                waiting.nextNode(),
+                null,
+                ApprovalDecision.APPROVE,
+                command.reason(),
+                null));
+        publish(new TraceEvent.Approved(
+                UUID.randomUUID(),
+                runId,
+                approved.version(),
+                Instant.now(),
+                interrupt.nodeName(),
+                command.reason()));
+        dispatch(approved, true);
+        return approved;
+    }
+
+    /** 恢复所有最新状态为 RUNNING 的 Run。 */
+    public void recoverRunningRuns() {
+        ensureOpen();
+        for (RunCheckpoint checkpoint : checkpointer.loadLatestByStatus(RunStatus.RUNNING)) {
+            boolean bypass = checkpoint.approvalDecision() == ApprovalDecision.APPROVE;
+            dispatch(checkpoint, bypass);
+        }
+    }
+
+    private void dispatch(RunCheckpoint checkpoint, boolean bypassInterruptAtStart) {
+        StateGraph graph;
+        try {
+            graph = graphRegistry.create(checkpoint.graphId());
+        } catch (RuntimeException exception) {
+            storeFailure(checkpoint, exception);
+            return;
+        }
+        dispatch(checkpoint, bypassInterruptAtStart, graph);
+    }
+
+    private void dispatch(
+            RunCheckpoint checkpoint,
+            boolean bypassInterruptAtStart,
+            StateGraph graph) {
+        try {
+            executor.submit(() -> executeCheckpoint(
+                    checkpoint, bypassInterruptAtStart, graph));
+        } catch (RejectedExecutionException exception) {
+            graph.close();
+            storeFailure(checkpoint, exception);
+        }
+    }
+
+    private void executeCheckpoint(
+            RunCheckpoint initial,
+            boolean bypassInterruptAtStart,
+            StateGraph graph) {
+        AtomicReference<RunCheckpoint> current = new AtomicReference<>(initial);
+        try (graph) {
+            GraphExecutionResult result = graph.execute(
+                    new GraphExecutionRequest(
+                            initial.runId(),
+                            initial.state(),
+                            initial.nextNode(),
+                            bypassInterruptAtStart),
+                    executionListener(current));
+            if (result instanceof GraphExecutionResult.Interrupted interrupted) {
+                RunCheckpoint waiting = appendAndSet(
+                        current,
+                        new CheckpointAppend(
+                                initial.runId(),
+                                current.get().version(),
+                                RunStatus.WAITING_APPROVAL,
+                                interrupted.state(),
+                                interrupted.nodeName(),
+                                interrupted.request(),
+                                null,
+                                null,
+                                null));
+                publish(new TraceEvent.Interrupted(
+                        UUID.randomUUID(),
+                        initial.runId(),
+                        waiting.version(),
+                        Instant.now(),
+                        interrupted.nodeName(),
+                        interrupted.request()));
+            }
+        } catch (RuntimeException exception) {
+            storeFailure(current.get(), exception);
+        }
+    }
+
+    private GraphExecutionListener executionListener(
+            AtomicReference<RunCheckpoint> current) {
+        return new GraphExecutionListener() {
+            @Override
+            public void onNodeStarted(String nodeName, AgentState state) {
+                RunCheckpoint checkpoint = current.get();
+                publish(new TraceEvent.NodeStarted(
+                        UUID.randomUUID(),
+                        checkpoint.runId(),
+                        checkpoint.version(),
+                        Instant.now(),
+                        nodeName));
+            }
+
+            @Override
+            public void onNodeCompleted(
+                    String nodeName,
+                    String nextNode,
+                    AgentState state) {
+                RunCheckpoint previous = current.get();
+                boolean completed = StateGraph.END.equals(nextNode);
+                RunCheckpoint updated = appendAndSet(
+                        current,
+                        new CheckpointAppend(
+                                previous.runId(),
+                                previous.version(),
+                                completed ? RunStatus.COMPLETED : RunStatus.RUNNING,
+                                state,
+                                completed ? null : nextNode,
+                                null,
+                                null,
+                                null,
+                                null));
+                publish(new TraceEvent.NodeCompleted(
+                        UUID.randomUUID(),
+                        updated.runId(),
+                        updated.version(),
+                        Instant.now(),
+                        nodeName,
+                        nextNode));
+                if (completed) {
+                    publish(new TraceEvent.Completed(
+                            UUID.randomUUID(),
+                            updated.runId(),
+                            updated.version(),
+                            Instant.now()));
+                }
+            }
+        };
+    }
+
+    private RunCheckpoint appendAndSet(
+            AtomicReference<RunCheckpoint> current,
+            CheckpointAppend append) {
+        RunCheckpoint updated = checkpointer.append(append);
+        current.set(updated);
+        return updated;
+    }
+
+    private void storeFailure(RunCheckpoint current, RuntimeException exception) {
+        String error = stackTrace(exception);
+        try {
+            RunCheckpoint failed = checkpointer.append(new CheckpointAppend(
+                    current.runId(),
+                    current.version(),
+                    RunStatus.FAILED,
+                    current.state(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    error));
+            publish(new TraceEvent.Failed(
+                    UUID.randomUUID(),
+                    failed.runId(),
+                    failed.version(),
+                    Instant.now(),
+                    error));
+        } catch (RuntimeException persistenceFailure) {
+            persistenceFailure.addSuppressed(exception);
+            LOGGER.log(Level.ERROR, "无法保存 Run 失败 Checkpoint", persistenceFailure);
+        }
+    }
+
+    private void publish(TraceEvent event) {
+        try {
+            tracePublisher.publish(event);
+        } catch (RuntimeException exception) {
+            LOGGER.log(Level.ERROR, "Trace 事件发布失败: " + event.type(), exception);
+        }
+    }
+
+    private static String stackTrace(Throwable throwable) {
+        StringWriter writer = new StringWriter();
+        throwable.printStackTrace(new PrintWriter(writer));
+        return writer.toString();
+    }
+
+    private static void requireText(String value, String name) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(name + " 不能为空");
+        }
+    }
+
+    private void ensureOpen() {
+        if (closed.get()) {
+            throw new IllegalStateException("AgentRunService 已关闭");
+        }
+    }
+
+    /** 停止接收新任务并等待已提交的虚拟线程任务结束。 */
+    @Override
+    public void close() {
+        if (closed.compareAndSet(false, true)) {
+            executor.close();
+        }
+    }
+}
