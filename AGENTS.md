@@ -145,6 +145,21 @@ git
 
 [ ] 建立基于 WebSocket 的实时日志与思考链路推送（Trace）。
 
+阶段五：Web 工作台与产品交互闭环 (Phase 5 - Product Workbench & Web API)
+[ ] 搭建 `agent-web` 模块 REST Controller 与 WebSocket / SSE 响应式长连接网关，实现任务提交、状态查询、中断审批与长日志流式推送。
+[ ] 构建 Agent Web 前端控制台 (Web Workbench)：
+  - **Monaco Editor 代码对比**：可视化渲染 `CoderNode` 修改前后的绿/红 Diff 差异。
+  - **xterm.js Web 终端**：基于 WebSocket 实时渲染 `OpsNode` 在 Docker PTY 沙箱里带 ANSI 颜色的命令行输出。
+  - **HITL 审批弹窗卡片**：展示高风险操作参数，提供“批准/修改/拒绝”交互按钮。
+  - **Playwright 视觉预览画廊**：展示 `ReviewerNode` 抓取的实时网页截图与 DOM 结构。
+
+阶段六：Codebase RAG、全链路 Trace 与评测体系 (Phase 6 - Codebase RAG, Trace & Eval)
+[ ] 在 PostgreSQL 中开启 `pgvector` 扩展，建 `parent_chunks` 和 `child_chunks` 向量表。
+[ ] 实现数据接入管线与大工程 Codebase RAG：采用父子文档 (Parent-Child Chunking) 切片策略，结合 JavaParser AST 符号索引 + pgvector 余弦相似度 + BM25 全文索引实现三层混合检索。
+[ ] 实现 `MemoryManager` 长期记忆中心：提取并存储用户编码偏好、项目架构规范与历史 Bad Case，在 `PlannerNode` 阶段动态检索并注入 Prompt。
+[ ] 集成 Langfuse / OpenTelemetry 链路追踪，实现节点拓扑 Trace 留痕、Token 消耗统计与 Bad Case 自动归因分析。
+[ ] 建立包含 50+ 真实业务 Task 的 Benchmark 自动化评测管线，监控 $pass^k$ 稳定性指标与首字延迟 (TTFT)。
+
 7. Git 提交与工程隔离规范 (Git Commit & Exclusion Rules)
 
 为了保障代码仓库的干净、可追溯以及自动化 CI/CD 流程的稳定性，所有开发人员与 AI Coding Agent 必须严格遵守以下版本控制规范。
