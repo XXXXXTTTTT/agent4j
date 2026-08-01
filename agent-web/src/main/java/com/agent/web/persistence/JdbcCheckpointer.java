@@ -21,6 +21,7 @@ import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -76,7 +77,7 @@ public final class JdbcCheckpointer implements Checkpointer {
             String graphId,
             AgentState initialState,
             String entryNode) {
-        Instant createdAt = clock.instant();
+        Instant createdAt = databaseInstant();
         RunCheckpoint checkpoint = new RunCheckpoint(
                 runId,
                 0,
@@ -113,7 +114,7 @@ public final class JdbcCheckpointer implements Checkpointer {
     @Override
     public RunCheckpoint append(CheckpointAppend append) {
         Objects.requireNonNull(append, "append 不能为空");
-        Instant createdAt = clock.instant();
+        Instant createdAt = databaseInstant();
         return requireTransactionResult(transactionTemplate.execute(status -> {
             int updated = jdbcClient.sql("""
                     update agent_runs
@@ -302,6 +303,10 @@ public final class JdbcCheckpointer implements Checkpointer {
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("Checkpoint JSON 反序列化失败", exception);
         }
+    }
+
+    private Instant databaseInstant() {
+        return clock.instant().truncatedTo(ChronoUnit.MICROS);
     }
 
     private RunCheckpoint requireTransactionResult(RunCheckpoint result) {
