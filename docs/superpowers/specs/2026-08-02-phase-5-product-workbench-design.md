@@ -167,6 +167,8 @@ reviewer.screenshotDataUrl
 `AutoCloseable`。
 
 - `subscribe(UUID runId)` 返回不重放历史事件的 `Flux<RunLogEvent>`。
+- `openSubscription(UUID runId)` 立即占用订阅并返回公开的可关闭
+  `RunLogSubscription`；其 `events()` 在终止时自动执行幂等 `close()`。
 - 同一 Run 允许 SSE 与 WebSocket 等多个并发订阅者。
 - 每个订阅者拥有独立 1024 条 `ArrayBlockingQueue`，慢订阅者溢出时只完成该订阅并记录
   完整服务日志，不影响其他订阅者与 Run。
@@ -228,7 +230,8 @@ null。数值和布尔字符串必须严格解析，非法持久化值导致完�
 /ws/runs/{runId}/terminal
 ```
 
-连接先占用有界日志订阅，再读取权威 Checkpoint，避免快照读取期间丢失事件。首帧为：
+连接通过 `openSubscription(runId)` 先占用有界日志订阅，再读取权威 Checkpoint，避免快照
+读取期间丢失事件。首帧为：
 
 ```json
 {
@@ -257,9 +260,10 @@ GET /api/runs/{runId}/logs
 Accept: text/event-stream
 ```
 
-响应先发送事件名 `snapshot`，再发送事件名 `log`。两种事件的 data 使用与 WebSocket
-完全相同的 `SNAPSHOT`、`LOG` frame JSON；`id` 分别使用 Checkpoint version 和日志
-eventId。终态后正常完成流，Run 不存在返回 404。
+响应同样先通过 `openSubscription(runId)` 占用订阅，再读取 Checkpoint；发送顺序为事件名
+`snapshot`，随后为事件名 `log`。两种事件的 data 使用与 WebSocket 完全相同的
+`SNAPSHOT`、`LOG` frame JSON；`id` 分别使用 Checkpoint version 和日志 eventId。终态后
+正常完成流，Run 不存在返回 404，所有终止路径关闭订阅。
 
 ## Web Workbench
 
