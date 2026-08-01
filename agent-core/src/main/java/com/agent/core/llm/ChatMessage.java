@@ -5,6 +5,8 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonValue;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 
 import java.util.Arrays;
 import java.util.List;
@@ -23,7 +25,7 @@ import java.util.Objects;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ChatMessage(
         Role role,
-        String content,
+        Content content,
         String name,
         @JsonProperty("tool_call_id") String toolCallId,
         @JsonInclude(JsonInclude.Include.NON_EMPTY)
@@ -44,7 +46,8 @@ public record ChatMessage(
      * @return 系统消息
      */
     public static ChatMessage system(String content) {
-        return new ChatMessage(Role.SYSTEM, requireContent(content), null, null, List.of());
+        return new ChatMessage(
+                Role.SYSTEM, new TextContent(requireContent(content)), null, null, List.of());
     }
 
     /**
@@ -54,7 +57,8 @@ public record ChatMessage(
      * @return 用户消息
      */
     public static ChatMessage user(String content) {
-        return new ChatMessage(Role.USER, requireContent(content), null, null, List.of());
+        return new ChatMessage(
+                Role.USER, new TextContent(requireContent(content)), null, null, List.of());
     }
 
     /**
@@ -64,7 +68,23 @@ public record ChatMessage(
      * @return 助手消息
      */
     public static ChatMessage assistant(String content) {
-        return new ChatMessage(Role.ASSISTANT, requireContent(content), null, null, List.of());
+        return new ChatMessage(
+                Role.ASSISTANT, new TextContent(requireContent(content)), null, null, List.of());
+    }
+
+    /**
+     * 创建多模态用户消息。
+     *
+     * @param parts 文本与图像内容块
+     * @return 多模态用户消息
+     */
+    public static ChatMessage userMultimodal(List<ContentPart> parts) {
+        return new ChatMessage(
+                Role.USER,
+                new MultimodalContent(parts),
+                null,
+                null,
+                List.of());
     }
 
     /**
@@ -91,7 +111,7 @@ public record ChatMessage(
     public static ChatMessage tool(String toolCallId, String content) {
         return new ChatMessage(
                 Role.TOOL,
-                requireContent(content),
+                new TextContent(requireContent(content)),
                 null,
                 Objects.requireNonNull(toolCallId, "toolCallId 不能为空"),
                 List.of());
@@ -99,6 +119,101 @@ public record ChatMessage(
 
     private static String requireContent(String content) {
         return Objects.requireNonNull(content, "content 不能为空");
+    }
+
+    /** OpenAI 消息内容。 */
+    @JsonSerialize(using = ChatMessageContentSerializer.class)
+    @JsonDeserialize(using = ChatMessageContentDeserializer.class)
+    public sealed interface Content permits TextContent, MultimodalContent {
+    }
+
+    /** 纯文本消息内容。 */
+    public record TextContent(String text) implements Content {
+
+        /** 校验纯文本内容。 */
+        public TextContent {
+            Objects.requireNonNull(text, "text 不能为空");
+        }
+    }
+
+    /** 多模态消息内容。 */
+    public record MultimodalContent(List<ContentPart> parts) implements Content {
+
+        /** 冻结多模态内容块。 */
+        public MultimodalContent {
+            Objects.requireNonNull(parts, "parts 不能为空");
+            if (parts.isEmpty()) {
+                throw new IllegalArgumentException("parts 不能为空列表");
+            }
+            parts = List.copyOf(parts);
+        }
+    }
+
+    /** 多模态内容块。 */
+    public sealed interface ContentPart permits TextPart, ImageUrlPart {
+    }
+
+    /** 文本内容块。 */
+    public record TextPart(String text) implements ContentPart {
+
+        /** 校验文本内容块。 */
+        public TextPart {
+            Objects.requireNonNull(text, "text 不能为空");
+        }
+    }
+
+    /** 图像 URL 内容块。 */
+    public record ImageUrlPart(ImageUrl imageUrl) implements ContentPart {
+
+        /** 校验图像 URL 内容块。 */
+        public ImageUrlPart {
+            Objects.requireNonNull(imageUrl, "imageUrl 不能为空");
+        }
+    }
+
+    /** OpenAI 图像 URL 内容。 */
+    public record ImageUrl(String url, ImageDetail detail) {
+
+        /** 校验图像 URL。 */
+        public ImageUrl {
+            if (url == null || url.isBlank()) {
+                throw new IllegalArgumentException("url 不能为空");
+            }
+            Objects.requireNonNull(detail, "detail 不能为空");
+        }
+    }
+
+    /** 图像分析细节等级。 */
+    public enum ImageDetail {
+        AUTO("auto"),
+        LOW("low"),
+        HIGH("high");
+
+        private final String jsonValue;
+
+        ImageDetail(String jsonValue) {
+            this.jsonValue = jsonValue;
+        }
+
+        /** 返回协议中的精确细节值。 */
+        @JsonValue
+        public String jsonValue() {
+            return jsonValue;
+        }
+
+        /**
+         * 从协议值解析细节等级。
+         *
+         * @param value 协议值
+         * @return 对应细节等级
+         */
+        @JsonCreator
+        public static ImageDetail fromJson(String value) {
+            return Arrays.stream(values())
+                    .filter(detail -> detail.jsonValue.equals(value))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("未知图像细节: " + value));
+        }
     }
 
     /**
