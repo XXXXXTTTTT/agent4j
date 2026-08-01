@@ -114,6 +114,32 @@ class RunTraceWebSocketTest {
     }
 
     @Test
+    void buffersEventsPublishedWhileLoadingTheSnapshot() {
+        TraceEvent terminal = new TraceEvent.Completed(
+                UUID.fromString("cd7bd24f-0a30-4303-bec0-250308e65a33"),
+                RUN_ID,
+                2,
+                NOW);
+        when(checkpointer.loadLatest(RUN_ID)).thenAnswer(invocation -> {
+            eventBus.publish(terminal);
+            return Optional.of(runningCheckpoint());
+        });
+        List<JsonNode> frames = new CopyOnWriteArrayList<>();
+        ReactorNettyWebSocketClient client = new ReactorNettyWebSocketClient();
+
+        client.execute(uri(RUN_ID), session -> session.receive()
+                        .map(message -> readJson(message.getPayloadAsText()))
+                        .doOnNext(frames::add)
+                        .take(Duration.ofMillis(500))
+                        .then(session.close()))
+                .block(Duration.ofSeconds(5));
+
+        assertThat(frames)
+                .extracting(frame -> frame.path("kind").textValue())
+                .containsExactly("SNAPSHOT", "EVENT");
+    }
+
+    @Test
     void clientDisconnectRemovesSubscriptionForNextConnection() {
         List<JsonNode> firstFrames = receiveFrames(RUN_ID, 1, () -> { });
         TraceEvent event = started(RUN_ID, "reviewer");

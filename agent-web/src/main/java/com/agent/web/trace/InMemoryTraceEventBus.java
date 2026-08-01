@@ -33,7 +33,20 @@ public final class InMemoryTraceEventBus implements TraceEventPublisher, AutoClo
     public Flux<TraceEvent> subscribe(UUID runId) {
         ensureOpen();
         Objects.requireNonNull(runId, "runId 不能为空");
-        return Flux.defer(() -> register(runId));
+        return Flux.defer(() -> openSubscription(runId).events());
+    }
+
+    /** 在读取快照前占用有界通道，防止连接建立期间丢失事件。 */
+    TraceSubscription openSubscription(UUID runId) {
+        ensureOpen();
+        Objects.requireNonNull(runId, "runId 不能为空");
+        RunChannel channel = new RunChannel();
+        RunChannel existing = channels.putIfAbsent(runId, channel);
+        if (existing != null) {
+            throw new IllegalStateException("Run 已有 Trace 订阅: " + runId);
+        }
+        return new TraceSubscription(
+                channel.flux(), () -> removeAndComplete(runId, channel));
     }
 
     /** 发布事件；没有当前订阅者时直接丢弃。 */
@@ -70,17 +83,6 @@ public final class InMemoryTraceEventBus implements TraceEventPublisher, AutoClo
         channels.forEach(this::removeAndComplete);
     }
 
-    private Flux<TraceEvent> register(UUID runId) {
-        ensureOpen();
-        RunChannel channel = new RunChannel();
-        RunChannel existing = channels.putIfAbsent(runId, channel);
-        if (existing != null) {
-            return Flux.error(new IllegalStateException(
-                    "Run 已有 Trace 订阅: " + runId));
-        }
-        return channel.flux().doFinally(signal -> removeAndComplete(runId, channel));
-    }
-
     private void removeAndComplete(UUID runId, RunChannel channel) {
         if (channels.remove(runId, channel)) {
             channel.complete();
@@ -115,6 +117,30 @@ public final class InMemoryTraceEventBus implements TraceEventPublisher, AutoClo
 
         private Flux<TraceEvent> flux() {
             return sink.asFlux();
+        }
+    }
+
+    /** 将通道事件流与幂等清理动作绑定。 */
+    static final class TraceSubscription implements AutoCloseable {
+
+        private final Flux<TraceEvent> events;
+        private final Runnable closeAction;
+        private final AtomicBoolean closed = new AtomicBoolean();
+
+        private TraceSubscription(Flux<TraceEvent> events, Runnable closeAction) {
+            this.events = events;
+            this.closeAction = closeAction;
+        }
+
+        Flux<TraceEvent> events() {
+            return events.doFinally(signal -> close());
+        }
+
+        @Override
+        public void close() {
+            if (closed.compareAndSet(false, true)) {
+                closeAction.run();
+            }
         }
     }
 }

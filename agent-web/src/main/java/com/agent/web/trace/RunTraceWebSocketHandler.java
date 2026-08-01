@@ -45,16 +45,26 @@ public final class RunTraceWebSocketHandler implements WebSocketHandler {
     @Override
     public Mono<Void> handle(WebSocketSession session) {
         UUID runId = extractRunId(session);
-        RunCheckpoint checkpoint = checkpointer.loadLatest(runId).orElse(null);
+        InMemoryTraceEventBus.TraceSubscription subscription =
+                eventBus.openSubscription(runId);
+        RunCheckpoint checkpoint;
+        try {
+            checkpoint = checkpointer.loadLatest(runId).orElse(null);
+        } catch (RuntimeException exception) {
+            subscription.close();
+            throw exception;
+        }
         if (checkpoint == null) {
+            subscription.close();
             return session.close(RUN_NOT_FOUND);
         }
 
         Flux<Object> frames = Flux.concat(
                 Mono.just(new TraceSnapshotFrame("SNAPSHOT", RunView.from(checkpoint))),
-                eventBus.subscribe(runId)
+                subscription.events()
                         .map(event -> new TraceEventFrame("EVENT", event)));
-        return session.send(frames.map(frame -> session.textMessage(writeJson(frame))));
+        return session.send(frames.map(frame -> session.textMessage(writeJson(frame))))
+                .doFinally(signal -> subscription.close());
     }
 
     private UUID extractRunId(WebSocketSession session) {
