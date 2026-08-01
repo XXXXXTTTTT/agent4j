@@ -3,6 +3,8 @@ package com.agent.core.engine;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -18,6 +20,7 @@ public final class StateGraph implements AutoCloseable {
     public static final String END = "__END__";
 
     private final int maxSteps;
+    private final InterruptPolicy interruptPolicy;
     private final ExecutorService executor;
     private final Map<String, Node> nodes = new LinkedHashMap<>();
     private final Map<String, String> edges = new LinkedHashMap<>();
@@ -32,10 +35,22 @@ public final class StateGraph implements AutoCloseable {
      * @param maxSteps 单次执行允许的最大节点步数
      */
     public StateGraph(int maxSteps) {
+        this(maxSteps, InterruptPolicy.never());
+    }
+
+    /**
+     * 创建支持节点前中断的状态图。
+     *
+     * @param maxSteps       单次执行允许的最大节点步数
+     * @param interruptPolicy 节点执行前中断策略
+     */
+    public StateGraph(int maxSteps, InterruptPolicy interruptPolicy) {
         if (maxSteps <= 0) {
             throw new IllegalArgumentException("maxSteps 必须大于 0");
         }
         this.maxSteps = maxSteps;
+        this.interruptPolicy = Objects.requireNonNull(
+                interruptPolicy, "interruptPolicy 不能为空");
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
     }
 
@@ -140,19 +155,82 @@ public final class StateGraph implements AutoCloseable {
             throw new IllegalStateException("尚未设置入口节点");
         }
 
-        String currentNode = entryPoint;
-        AgentState currentState = initialState;
+        GraphExecutionResult result = execute(
+                new GraphExecutionRequest(
+                        UUID.randomUUID(), initialState, entryPoint, false),
+                NoOpGraphExecutionListener.INSTANCE);
+        if (result instanceof GraphExecutionResult.Completed completed) {
+            return completed.state();
+        }
+        GraphExecutionResult.Interrupted interrupted =
+                (GraphExecutionResult.Interrupted) result;
+        throw new IllegalStateException("图执行被中断: " + interrupted.nodeName());
+    }
+
+    /**
+     * 返回图入口节点的精确名称。
+     *
+     * @return 入口节点名称
+     */
+    public String entryPoint() {
+        ensureOpen();
+        if (entryPoint == null) {
+            throw new IllegalStateException("尚未设置入口节点");
+        }
+        return entryPoint;
+    }
+
+    /**
+     * 从请求指定节点执行图。
+     *
+     * @param request  执行请求
+     * @param listener 节点边界监听器
+     * @return 完成或挂起结果
+     */
+    public GraphExecutionResult execute(
+            GraphExecutionRequest request,
+            GraphExecutionListener listener) {
+        ensureOpen();
+        Objects.requireNonNull(request, "request 不能为空");
+        Objects.requireNonNull(listener, "listener 不能为空");
+        requireRegisteredNode(request.startNode());
+
+        String currentNode = request.startNode();
+        AgentState currentState = request.state();
+        boolean bypassInterrupt = request.bypassInterruptAtStart();
         int steps = 0;
 
         while (!END.equals(currentNode)) {
             if (steps >= maxSteps) {
                 throw new MaxStepsExceededException(maxSteps);
             }
+            if (bypassInterrupt) {
+                bypassInterrupt = false;
+            } else {
+                Optional<InterruptRequest> evaluated = Objects.requireNonNull(
+                        interruptPolicy.evaluate(request.runId(), currentNode, currentState),
+                        "interruptPolicy 返回值不能为空");
+                if (evaluated.isPresent()) {
+                    InterruptRequest interruptRequest = evaluated.orElseThrow();
+                    if (!currentNode.equals(interruptRequest.nodeName())) {
+                        throw new IllegalStateException(
+                                "中断请求节点名称与当前节点不一致: current="
+                                        + currentNode
+                                        + ", request="
+                                        + interruptRequest.nodeName());
+                    }
+                    return new GraphExecutionResult.Interrupted(
+                            currentState, currentNode, interruptRequest);
+                }
+            }
+            listener.onNodeStarted(currentNode, currentState);
             currentState = executeNode(currentNode, currentState);
             steps++;
-            currentNode = resolveNextNode(currentNode, currentState);
+            String nextNode = resolveNextNode(currentNode, currentState);
+            listener.onNodeCompleted(currentNode, nextNode, currentState);
+            currentNode = nextNode;
         }
-        return currentState;
+        return new GraphExecutionResult.Completed(currentState);
     }
 
     private AgentState executeNode(String nodeName, AgentState state) {
@@ -236,5 +314,17 @@ public final class StateGraph implements AutoCloseable {
     }
 
     private record ConditionalTransition(Condition condition, Map<String, String> routes) {
+    }
+
+    private enum NoOpGraphExecutionListener implements GraphExecutionListener {
+        INSTANCE;
+
+        @Override
+        public void onNodeStarted(String nodeName, AgentState state) {
+        }
+
+        @Override
+        public void onNodeCompleted(String nodeName, String nextNode, AgentState state) {
+        }
     }
 }
