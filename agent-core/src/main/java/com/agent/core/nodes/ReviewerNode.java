@@ -11,6 +11,7 @@ import com.agent.sandbox.browser.BrowserAutomation;
 import com.agent.sandbox.browser.BrowserScreenshot;
 import com.agent.sandbox.browser.NavigationResult;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectReader;
 
@@ -43,6 +44,7 @@ public final class ReviewerNode implements Node {
 
     private final BrowserAutomation browserAutomation;
     private final ModelRouter modelRouter;
+    private final ObjectMapper objectMapper;
     private final Duration browserTimeout;
     private final ObjectReader decisionReader;
 
@@ -62,7 +64,7 @@ public final class ReviewerNode implements Node {
         this.browserAutomation = Objects.requireNonNull(
                 browserAutomation, "browserAutomation 不能为空");
         this.modelRouter = Objects.requireNonNull(modelRouter, "modelRouter 不能为空");
-        Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
+        this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
         this.browserTimeout = Objects.requireNonNull(
                 browserTimeout, "browserTimeout 不能为空");
         if (browserTimeout.isZero() || browserTimeout.isNegative()) {
@@ -132,7 +134,29 @@ public final class ReviewerNode implements Node {
         if (!(message.content() instanceof ChatMessage.TextContent textContent)) {
             throw new IllegalStateException("审查模型响应 content 必须是 TextContent");
         }
+        validateDecisionTypes(objectMapper.readTree(textContent.text()));
         return decisionReader.readValue(textContent.text());
+    }
+
+    private void validateDecisionTypes(JsonNode decisionNode) {
+        if (decisionNode == null || !decisionNode.isObject()) {
+            throw new IllegalArgumentException("审查决策必须是 JSON 对象");
+        }
+        requireDecisionType(decisionNode, "approved", JsonNode::isBoolean, "boolean");
+        requireDecisionType(decisionNode, "summary", JsonNode::isTextual, "string");
+        requireDecisionType(decisionNode, "feedback", JsonNode::isTextual, "string");
+    }
+
+    private void requireDecisionType(
+            JsonNode decisionNode,
+            String field,
+            java.util.function.Predicate<JsonNode> typeCheck,
+            String expectedType) {
+        JsonNode fieldValue = decisionNode.get(field);
+        if (fieldValue == null || !typeCheck.test(fieldValue)) {
+            throw new IllegalArgumentException(
+                    "审查决策字段 " + field + " 必须是 " + expectedType);
+        }
     }
 
     private String buildEvidence(

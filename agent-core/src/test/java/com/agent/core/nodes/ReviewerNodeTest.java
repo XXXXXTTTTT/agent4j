@@ -171,6 +171,22 @@ class ReviewerNodeTest {
     }
 
     @Test
+    void rejectsCoercedReviewerDecisionFieldTypes() throws Exception {
+        ReviewerNode booleanStringNode = reviewerNode();
+        expectModelResponse(textContent(
+                "{\"approved\":\"true\",\"summary\":\"正常\",\"feedback\":\"无\"}"));
+        ReviewerNode numericSummaryNode = reviewerNode();
+        expectModelResponse(textContent(
+                "{\"approved\":true,\"summary\":123,\"feedback\":\"无\"}"));
+
+        AgentState booleanString = booleanStringNode.execute(completeOpsState());
+        AgentState numericSummary = numericSummaryNode.execute(completeOpsState());
+
+        assertReviewFailure(booleanString, "IllegalArgumentException", "approved");
+        assertReviewFailure(numericSummary, "IllegalArgumentException", "summary");
+    }
+
+    @Test
     void preservesBrowserFutureFailureStack() {
         browser.navigationFailure = new IllegalStateException("browser failed");
         ReviewerNode node = reviewerNode();
