@@ -21,6 +21,10 @@ Thumbs.db
 logs/
 tmp/
 *.out
+node_modules/
+coverage/
+.vite/
+.frontend/
 
 # 敏感信息
 .env

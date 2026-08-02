@@ -1,6 +1,6 @@
 # Agent4j 技术攻关、踩坑复盘与面试表达指南
 
-> 证据基线：`c70ead3`（2026-08-02）。本文依据 Phase 1 至 Phase 5 的 Git
+> 证据基线：Phase 5 Task 9 前端工程里程碑（2026-08-03）。本文依据 Phase 1 至 Phase 5 的 Git
 > 补丁、`docs/superpowers/specs/` 设计文档、生产代码和自动化测试整理。Phase 5
 > 后端闭环已经落地；React 工作台在此基线仅完成依赖清单与构建骨架，Monaco、xterm
 > 和工作台浏览器闭环仍在开发。后续 Phase 5 提交必须同步维护本文。
@@ -411,18 +411,32 @@ HTML 注入；截图只接受精确前缀 `data:image/png;base64,`。
 模式，不把它们写成已解决事故。完成相关 TDD 与真实 Playwright 浏览器测试后，应补充
 实际问题、提交和回归测试证据。
 
-### 2.22 Node/jsdom 引擎版本冲突
+### 2.22 Node/jsdom 引擎与前端依赖安全冲突
 
 **【问题现象】** 原计划固定 Node 22.14.0，但锁定的 `jsdom@30.0.1` 要求
-`^22.22.2 || ^24.15.0 || >=26.0.0`，安装会产生 engine 不兼容。
+`^22.22.2 || ^24.15.0 || >=26.0.0`，安装会产生 engine 不兼容。Task 9 首次执行
+`npm ci` 后，`npm audit` 又报告 1 个 low 和 1 个 moderate：直接依赖
+`monaco-editor@0.56.0` 传递安装了 `dompurify@3.4.8`。Vite 还明确警告 ESM
+`vite.config.ts` 的最近 `package.json` 未声明 module 类型。
 
 **【根因分析】** 单独选择“稳定 Node 22”不够，必须同时验证依赖锁文件中的 engines
-约束；全局 Node 版本也不能代表 Maven 构建使用的版本。
+约束；全局 Node 版本也不能代表 Maven 构建使用的版本。版本“新”也不等于依赖链安全：
+0.56.0 的 DOMPurify 传递链命中了 npm 通告，而 0.53.0 不依赖 DOMPurify。
+`@monaco-editor/react@4.7.0` 的 peer 范围是精确的 `>=0.25.0 <1`，因此 0.53.0
+满足组件约束。
 
 **【解决方案/代码级实现】** `c70ead3` 将设计和计划统一修正为 Node 22.22.2，npm 固定
 10.9.2；`frontend-maven-plugin` 使用模块内 `.frontend` 工具链，避免依赖机器全局
-Node。`.frontend/`、`node_modules/`、coverage 和 Vite cache 均由根 `.gitignore`
-排除。前端构建接入 Maven 后还必须验证 `npm ci`、Vitest 和 Vite build 三条路径。
+Node。Task 9 将 `package.json` 声明为 ESM，并把 Monaco 固定为 0.53.0，重新生成锁文件
+后要求 `npm audit` 所有严重级别为 0。`.frontend/`、`node_modules/`、coverage 和 Vite
+cache 均由根 `.gitignore` 排除。前端构建接入 Maven 后还必须验证 `npm ci`、Vitest、
+TypeScript 和 Vite build 四条路径。
+
+**【验证结果】** Task 9 使用模块内 Node 22.22.2/npm 10.9.2 从锁文件执行 `npm ci`，
+实际依赖树为 `@monaco-editor/react@4.7.0 -> monaco-editor@0.53.0`，不再包含 DOMPurify，
+`npm audit --audit-level=low` 返回 0 vulnerabilities。显式 JDK 21 的 Maven 反应堆执行
+167 个 Java 测试与 8 个 Vitest 测试，失败、错误和跳过均为 0；TypeScript 编译和 Vite
+build 也独立通过。
 
 ## 3. 面试话术提炼（STAR 法则）
 

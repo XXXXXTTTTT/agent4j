@@ -326,7 +326,7 @@ Vite                             8.2.0
 TypeScript                       7.0.2
 @vitejs/plugin-react             6.0.5
 @monaco-editor/react             4.7.0
-monaco-editor                    0.56.0
+monaco-editor                    0.53.0
 @xterm/xterm                     6.0.0
 @xterm/addon-fit                 0.11.0
 lucide-react                     1.28.0
@@ -339,6 +339,11 @@ npm                              10.9.2
 
 测试依赖锁定到 `@testing-library/react 16.3.2`、`jest-dom 7.0.0`、
 `user-event 14.6.1` 与 `jsdom 30.0.1`。`package-lock.json` 必须提交。
+
+`monaco-editor` 原设计版本 0.56.0 会传递安装存在 npm 安全通告的
+`dompurify@3.4.8`。0.53.0 不依赖 DOMPurify，且满足
+`@monaco-editor/react@4.7.0` 声明的 `>=0.25.0 <1` peer 范围，因此固定为
+0.53.0。前端依赖门禁要求 `npm audit` 的 high、critical、moderate 和 low 均为 0。
 
 `frontend-maven-plugin` 在 `generate-resources` 安装固定 Node/npm、执行 `npm ci` 和
 `npm run build`；Vite 输出到 `agent-web/target/classes/static`。前端 Vitest 在 Maven

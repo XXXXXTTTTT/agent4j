@@ -6,7 +6,7 @@
 
 **Architecture:** `agent-core` 只新增执行上下文和实时日志端口；`agent-web` 用进程内有界总线适配 WebSocket/SSE，并继续以 Checkpoint 为权威状态。React 工作台通过精确的同源协议呈现 Monaco Diff、xterm ANSI 日志、HITL 和 Playwright 证据，不建立第二套 Run 生命周期。
 
-**Tech Stack:** Java 21、Spring Boot 3.3.13、WebFlux、PostgreSQL Checkpointer、React 19.2.8、TypeScript 7.0.2、Vite 8.2.0、Monaco Editor 0.56.0、xterm.js 6.0.0、Vitest 4.1.10、Playwright for Java 1.61.0。
+**Tech Stack:** Java 21、Spring Boot 3.3.13、WebFlux、PostgreSQL Checkpointer、React 19.2.8、TypeScript 7.0.2、Vite 8.2.0、Monaco Editor 0.53.0、xterm.js 6.0.0、Vitest 4.1.10、Playwright for Java 1.61.0。
 
 ---
 
@@ -479,7 +479,7 @@ test(web): 验证工作台运行闭环
 
 - [ ] **Step 1: 添加前端清单并生成锁文件**
 
-`package.json` 固定设计文档全部版本，scripts 精确为 `dev`、`build`、`test:run`。运行 `npm install --package-lock-only` 生成并提交 lock；`.gitignore` 增加 `node_modules/`、`coverage/`、`.vite/`、`.frontend/`。
+`package.json` 固定设计文档全部版本，scripts 精确为 `dev`、`build`、`test:run`。运行 `npm install --package-lock-only` 生成并提交 lock；`.gitignore` 增加 `node_modules/`、`coverage/`、`.vite/`、`.frontend/`。运行 `npm audit` 并要求所有严重级别数量均为 0。
 
 - [ ] **Step 2: 写协议解码和 Diff 红灯测试**
 
