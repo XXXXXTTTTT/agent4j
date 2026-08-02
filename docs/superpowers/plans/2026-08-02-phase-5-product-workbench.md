@@ -514,7 +514,7 @@ export type TerminalFrame =
 
 - [ ] **Step 5: Maven 接入并运行绿灯**
 
-`frontend-maven-plugin:2.0.2` 固定 Node `v22.14.0`、npm `10.9.2`，在 `generate-resources` 执行 `npm ci` 与 `npm run build`，在 `test` 执行 `npm run test:run`。Vite `outDir` 固定为 `../../../target/classes/static`。
+`frontend-maven-plugin:2.0.2` 固定 Node `v22.22.2`、npm `10.9.2`，在 `generate-resources` 执行 `npm ci` 与 `npm run build`，在 `test` 执行 `npm run test:run`。Vite `outDir` 固定为 `../../../target/classes/static`。
 
 Run: `npm run test:run`
 

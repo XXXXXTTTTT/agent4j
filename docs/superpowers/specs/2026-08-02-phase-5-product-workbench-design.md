@@ -333,7 +333,7 @@ lucide-react                     1.28.0
 parse-diff                       0.12.0
 Vitest                           4.1.10
 frontend-maven-plugin            2.0.2
-Node.js                          22.14.0
+Node.js                          22.22.2
 npm                              10.9.2
 ```
 
