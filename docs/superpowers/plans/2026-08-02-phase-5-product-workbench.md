@@ -64,7 +64,7 @@ assertThat(result).isInstanceOf(GraphExecutionResult.Completed.class);
 
 - [ ] **Step 2: 运行红灯**
 
-Run: `mvn -pl agent-core -Dtest=StateGraphTest test`
+Run: `mvn -pl agent-core -am "-Dtest=StateGraphTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 
 Expected: FAIL，`NodeExecutionContext` 不存在或 `Node` 没有上下文重载。
 
@@ -95,7 +95,7 @@ Future<AgentState> future = executor.submit(() -> node.execute(
 
 - [ ] **Step 4: 运行绿灯与模块回归**
 
-Run: `mvn -pl agent-core test`
+Run: `mvn -pl agent-core -am test`
 
 Expected: PASS，旧 Lambda 行为与上下文测试同时通过。
 
@@ -134,7 +134,7 @@ assertThat(result.variables()).containsEntry(OpsNode.EXIT_CODE_KEY, "0");
 
 - [ ] **Step 2: 运行红灯**
 
-Run: `mvn -pl agent-core -Dtest=RunLogEventTest,OpsNodeTest test`
+Run: `mvn -pl agent-core -am "-Dtest=RunLogEventTest,OpsNodeTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 
 Expected: FAIL，新协议、构造器和 `ops.logError` 尚不存在。
 
@@ -167,7 +167,7 @@ public interface RunLogPublisher {
 
 - [ ] **Step 4: 运行绿灯与回归**
 
-Run: `mvn -pl agent-core test`
+Run: `mvn -pl agent-core -am test`
 
 Expected: PASS。
 
@@ -199,7 +199,7 @@ assertThat(waiting.state().variables()).containsEntry("ops.command", "mvn test")
 
 - [ ] **Step 2: 运行红灯**
 
-Run: `mvn -pl agent-core -Dtest=AgentRunServiceTest test`
+Run: `mvn -pl agent-core -am "-Dtest=AgentRunServiceTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 
 Expected: FAIL，四参数命令不存在。
 
@@ -225,7 +225,7 @@ public ApprovalCommand {
 
 - [ ] **Step 4: 运行绿灯与回归**
 
-Run: `mvn -pl agent-core test`
+Run: `mvn -pl agent-core -am test`
 
 Expected: PASS。
 
@@ -255,7 +255,7 @@ assertThat(result.variables())
 
 - [ ] **Step 2: 运行红灯**
 
-Run: `mvn -pl agent-core -Dtest=ReviewerNodeTest test`
+Run: `mvn -pl agent-core -am "-Dtest=ReviewerNodeTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 
 Expected: FAIL，三个常量和证据状态尚不存在。
 
@@ -274,7 +274,7 @@ AgentState evidenceState = state
 
 - [ ] **Step 4: 运行绿灯与回归**
 
-Run: `mvn -pl agent-core test`
+Run: `mvn -pl agent-core -am test`
 
 Expected: PASS。
 
@@ -299,7 +299,7 @@ feat(core): 保留审查浏览器证据
 
 - [ ] **Step 2: 运行红灯**
 
-Run: `mvn -pl agent-web -Dtest=InMemoryRunLogEventBusTest,RunLifecycleEventPublisherTest test`
+Run: `mvn -pl agent-web -am "-Dtest=InMemoryRunLogEventBusTest,RunLifecycleEventPublisherTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 
 Expected: FAIL，日志总线与组合 publisher 不存在。
 
@@ -320,7 +320,7 @@ Sinks.Many<RunLogEvent> sink = Sinks.many().unicast()
 
 - [ ] **Step 4: 运行绿灯与 Web 模块回归**
 
-Run: `mvn -pl agent-web test`
+Run: `mvn -pl agent-web -am test`
 
 Expected: PASS。
 
@@ -349,7 +349,7 @@ feat(web): 建立运行日志事件总线
 
 - [ ] **Step 2: 运行红灯**
 
-Run: `mvn -pl agent-web -Dtest=RunControllerTest,RunTerminalControllerTest test`
+Run: `mvn -pl agent-web -am "-Dtest=RunControllerTest,RunTerminalControllerTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 
 Expected: FAIL，新路径和 DTO 字段不存在。
 
@@ -373,7 +373,7 @@ SSE 方法先调用 `openSubscription(runId)`，再读取快照并返回
 
 - [ ] **Step 4: 运行绿灯与回归**
 
-Run: `mvn -pl agent-web test`
+Run: `mvn -pl agent-web -am test`
 
 Expected: PASS。
 
@@ -396,7 +396,7 @@ feat(web): 扩展运行查询与审批接口
 
 - [ ] **Step 2: 运行红灯**
 
-Run: `mvn -pl agent-web -Dtest=RunTerminalWebSocketTest test`
+Run: `mvn -pl agent-web -am "-Dtest=RunTerminalWebSocketTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 
 Expected: FAIL，Handler 与路由不存在。
 
@@ -416,7 +416,7 @@ return session.send(frames.map(frame -> session.textMessage(writeJson(frame))))
 
 - [ ] **Step 4: 运行绿灯与回归**
 
-Run: `mvn -pl agent-web test`
+Run: `mvn -pl agent-web -am test`
 
 Expected: PASS。
 
@@ -438,7 +438,7 @@ feat(web): 推送实时终端 WebSocket
 
 - [ ] **Step 2: 运行红灯**
 
-Run: `mvn -pl agent-web -Dtest=ProductWorkbenchLifecycleIntegrationTest test`
+Run: `mvn -pl agent-web -am "-Dtest=ProductWorkbenchLifecycleIntegrationTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 
 Expected: FAIL，生产装配尚未把同一 `RunLogPublisher` 注入图节点或生命周期发布器。
 
@@ -592,7 +592,7 @@ React Testing Library 验证精确 `graphId`/JSON 启动、三个 Tab、Diff 文
 
 Run: `npm run test:run -- src/components/Workbench.test.tsx`
 
-Run: `mvn -pl agent-web -Dtest=ProductWorkbenchBrowserTest test`
+Run: `mvn -pl agent-web -am "-Dtest=ProductWorkbenchBrowserTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 
 Expected: 两条命令均 FAIL，工作台组件和真实静态页面尚不存在。
 
@@ -608,7 +608,7 @@ Run: `npm run test:run`
 
 Run: `npm run build`
 
-Run: `mvn -pl agent-web -Dtest=ProductWorkbenchBrowserTest test`
+Run: `mvn -pl agent-web -am "-Dtest=ProductWorkbenchBrowserTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`
 
 Expected: 全部 PASS，无 TypeScript、React 或 Vite 警告；真实浏览器生成临时桌面/移动 PNG
 到 `target/`。
