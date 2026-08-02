@@ -7,6 +7,7 @@ import com.agent.core.engine.GraphRegistry;
 import com.agent.web.log.InMemoryRunLogEventBus;
 import com.agent.web.persistence.JdbcCheckpointer;
 import com.agent.web.trace.InMemoryTraceEventBus;
+import com.agent.web.trace.RunLifecycleEventPublisher;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -59,12 +60,21 @@ public class HarnessConfiguration {
         return new InMemoryRunLogEventBus();
     }
 
+    /** 组合 Trace 发布与 Run 终态日志清理。 */
+    @Bean
+    RunLifecycleEventPublisher runLifecycleEventPublisher(
+            InMemoryTraceEventBus traceEventBus,
+            InMemoryRunLogEventBus runLogEventBus) {
+        return new RunLifecycleEventPublisher(traceEventBus, runLogEventBus);
+    }
+
     /** 创建基于虚拟线程的 Agent Run 服务。 */
     @Bean(destroyMethod = "close")
     AgentRunService agentRunService(
             Checkpointer checkpointer,
             GraphRegistry graphRegistry,
-            InMemoryTraceEventBus traceEventBus) {
-        return new AgentRunService(checkpointer, graphRegistry, traceEventBus);
+            RunLifecycleEventPublisher lifecycleEventPublisher) {
+        return new AgentRunService(
+                checkpointer, graphRegistry, lifecycleEventPublisher);
     }
 }
