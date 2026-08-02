@@ -338,7 +338,9 @@ npm                              10.9.2
 ```
 
 测试依赖锁定到 `@testing-library/react 16.3.2`、`jest-dom 7.0.0`、
-`user-event 14.6.1` 与 `jsdom 30.0.1`。`package-lock.json` 必须提交。
+`user-event 14.6.1`、`jsdom 30.0.1`、`@types/react 19.2.18` 与
+`@types/react-dom 19.2.4`。`package-lock.json` 必须提交。Vite build 只负责转译与打包，
+不能替代 `tsc --noEmit`；两条命令都是前端门禁。
 
 `monaco-editor` 原设计版本 0.56.0 会传递安装存在 npm 安全通告的
 `dompurify@3.4.8`。0.53.0 不依赖 DOMPurify，且满足

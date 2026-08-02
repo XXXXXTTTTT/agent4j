@@ -479,7 +479,7 @@ test(web): 验证工作台运行闭环
 
 - [ ] **Step 1: 添加前端清单并生成锁文件**
 
-`package.json` 固定设计文档全部版本，scripts 精确为 `dev`、`build`、`test:run`。运行 `npm install --package-lock-only` 生成并提交 lock；`.gitignore` 增加 `node_modules/`、`coverage/`、`.vite/`、`.frontend/`。运行 `npm audit` 并要求所有严重级别数量均为 0。
+`package.json` 固定设计文档全部版本，scripts 精确为 `dev`、`build`、`test:run`。React 类型声明固定为 `@types/react 19.2.18` 与 `@types/react-dom 19.2.4`。运行 `npm install --package-lock-only` 生成并提交 lock；`.gitignore` 增加 `node_modules/`、`coverage/`、`.vite/`、`.frontend/`。运行 `npm audit` 并要求所有严重级别数量均为 0。
 
 - [ ] **Step 2: 写协议解码和 Diff 红灯测试**
 
@@ -520,7 +520,9 @@ Run: `npm run test:run`
 
 Run: `npm run build`
 
-Expected: 两条命令均 PASS。
+Run: `node_modules/.bin/tsc --noEmit`
+
+Expected: 三条命令均 PASS。
 
 - [ ] **Step 6: 提交**
 

@@ -438,6 +438,43 @@ TypeScript 和 Vite build 四条路径。
 167 个 Java 测试与 8 个 Vitest 测试，失败、错误和跳过均为 0；TypeScript 编译和 Vite
 build 也独立通过。
 
+### 2.23 Vite build 通过不代表 TypeScript 类型完整
+
+**【问题现象】** Task 9 的 Vite build 可以在没有 React 声明包时成功；Task 10 首次新增
+`useRunWorkbench` 后，独立 `tsc --noEmit` 报 `TS7016`，指出 `react` 没有声明文件，
+随后 Hook 状态回调都退化为隐式 `any`。
+
+**【根因分析】** Vite 使用转译器生成浏览器产物，不执行 TypeScript 完整语义检查；React
+19 的运行包也不内置 DefinitelyTyped 声明。只把 Vite build 当编译门禁，会在没有类型
+安全的情况下产出静态文件。
+
+**【解决方案/代码级实现】** 从 npm 精确读取并锁定 `@types/react@19.2.18` 与
+`@types/react-dom@19.2.4`；后者声明的 peerDependency 是
+`@types/react ^19.2.0`，两者一致。Task 10 起把 `tsc --noEmit` 与 Vitest、Vite build
+并列为前端门禁，并持续由 `package-lock.json` 固定传递依赖。
+
+### 2.24 双 WebSocket 的连接所有权与跨 Run 污染
+
+**【问题现象】** 工作台切换 Run 后，旧 Trace/终端连接若继续存活，会把旧 Run 事件写入
+新页面；即使 URL 正确，服务端或代理返回的 payload runId 与连接 runId 不一致时，前端
+若只解码字段类型仍会接受跨 Run 数据。审批 409 后重读最新 Run 的 GET 也会失败，若该
+二次失败越过统一错误处理，界面只知道审批冲突，不知道权威状态读取失败。
+
+**【根因分析】** WebSocket URL 隔离、payload 身份校验和 React 组件生命周期是三层独立
+防线；只实现其中一层不足以保证 Run 隔离。409 处理本身又是一条新的 I/O 链，不能沿用
+“冲突已处理”的假设吞掉后续异常。
+
+**【解决方案/代码级实现】** `useRunWorkbench` 独占一个 Trace socket 和一个
+`TerminalSession`，第二次 `start` 与组件卸载都会幂等关闭旧连接。连接状态直接使用浏览器
+标准 `WebSocket.readyState`，不增加私有字符串协议。Trace 的 `run.runId`/
+`event.runId` 和终端的 `terminal.runId`/`event.runId` 都必须与连接 runId 精确相等；
+不一致时记录 Error 并关闭对应连接。审批 409 只执行一次 `GET /api/runs/{runId}`，该 GET
+失败时把新异常写入 Hook error 并继续抛给调用方，不重复审批，也不刷新历史。
+
+**【验证结果】** `useRunWorkbench.test.tsx` 与 `TerminalSession.test.ts` 覆盖创建后两条
+连接、切换/卸载清理、ANSI 原样转发、409 单次重读、终态刷新、跨 Run 帧拒绝和二次 GET
+失败；Task 10 全量前端测试为 4 个文件、16 个测试，TypeScript 与 Vite build 同时通过。
+
 ## 3. 面试话术提炼（STAR 法则）
 
 以下话术只陈述仓库已有证据，不使用无法验证的吞吐量或线上故障数字。面试时可以结合
