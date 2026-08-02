@@ -4,11 +4,70 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class StateGraphTest {
+
+    @Test
+    void rejectsInvalidNodeExecutionContext() {
+        assertThatThrownBy(() -> new NodeExecutionContext(null, "work"))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("runId");
+        assertThatThrownBy(() -> new NodeExecutionContext(UUID.randomUUID(), " "))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("nodeName");
+    }
+
+    @Test
+    void passesExactRunContextToNodeOnVirtualThread() {
+        UUID runId = UUID.randomUUID();
+        AtomicReference<NodeExecutionContext> observedContext = new AtomicReference<>();
+        AtomicBoolean virtualThread = new AtomicBoolean();
+        Node node = new Node() {
+            @Override
+            public AgentState execute(AgentState state) {
+                throw new AssertionError("不应调用无上下文入口");
+            }
+
+            @Override
+            public AgentState execute(NodeExecutionContext context, AgentState state) {
+                observedContext.set(context);
+                virtualThread.set(Thread.currentThread().isVirtual());
+                return state.withTraceEntry("work");
+            }
+        };
+
+        try (StateGraph graph = new StateGraph(2)) {
+            graph.addNode("work", node)
+                    .addEdge("work", StateGraph.END)
+                    .setEntryPoint("work");
+
+            GraphExecutionResult result = graph.execute(
+                    new GraphExecutionRequest(runId, AgentState.empty(), "work", false),
+                    new GraphExecutionListener() {
+                        @Override
+                        public void onNodeStarted(String nodeName, AgentState state) {
+                        }
+
+                        @Override
+                        public void onNodeCompleted(
+                                String nodeName,
+                                String nextNode,
+                                AgentState state) {
+                        }
+                    });
+
+            assertThat(result).isInstanceOf(GraphExecutionResult.Completed.class);
+            assertThat(observedContext.get())
+                    .isEqualTo(new NodeExecutionContext(runId, "work"));
+            assertThat(virtualThread).isTrue();
+        }
+    }
 
     @Test
     void executesPlannerToolFlowOnVirtualThreads() {

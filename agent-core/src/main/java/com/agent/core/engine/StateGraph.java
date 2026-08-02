@@ -224,7 +224,7 @@ public final class StateGraph implements AutoCloseable {
                 }
             }
             listener.onNodeStarted(currentNode, currentState);
-            currentState = executeNode(currentNode, currentState);
+            currentState = executeNode(request.runId(), currentNode, currentState);
             steps++;
             String nextNode = resolveNextNode(currentNode, currentState);
             listener.onNodeCompleted(currentNode, nextNode, currentState);
@@ -233,13 +233,14 @@ public final class StateGraph implements AutoCloseable {
         return new GraphExecutionResult.Completed(currentState);
     }
 
-    private AgentState executeNode(String nodeName, AgentState state) {
+    private AgentState executeNode(UUID runId, String nodeName, AgentState state) {
         Node node = nodes.get(nodeName);
         if (node == null) {
             throw new IllegalStateException("节点未注册: " + nodeName);
         }
 
-        Future<AgentState> future = executor.submit(() -> node.execute(state));
+        Future<AgentState> future = executor.submit(() -> node.execute(
+                new NodeExecutionContext(runId, nodeName), state));
         try {
             AgentState result = future.get();
             if (result == null) {
