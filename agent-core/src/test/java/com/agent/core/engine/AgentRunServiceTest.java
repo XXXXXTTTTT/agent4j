@@ -138,6 +138,97 @@ class AgentRunServiceTest {
     }
 
     @Test
+    void approvesExactWhitelistedVariableUpdateWithoutMutatingWaitingState() {
+        InMemoryCheckpointer checkpointer = new InMemoryCheckpointer();
+        InterruptRequest interrupt = new InterruptRequest(
+                UUID.fromString("bc6c5920-c6ed-42c8-9d72-adab29365243"),
+                "ops",
+                "需要人工审批",
+                Map.of("ops.command", "mvn test", "missing", "not present"));
+        GraphRegistry registry = new GraphRegistry(Map.of("approval", () ->
+                new StateGraph(2, (runId, nodeName, state) -> Optional.of(interrupt))
+                        .addNode("ops", state -> state.withTraceEntry("ops"))
+                        .addEdge("ops", StateGraph.END)
+                        .setEntryPoint("ops")));
+        AgentState initialState = AgentState.empty()
+                .withVariable("ops.command", "mvn test")
+                .withVariable("protected", "keep");
+
+        try (AgentRunService service = new AgentRunService(
+                checkpointer, registry, event -> { })) {
+            RunCheckpoint started = service.start("approval", initialState);
+            RunCheckpoint waiting = checkpointer.awaitStatus(
+                    started.runId(), RunStatus.WAITING_APPROVAL, AWAIT_TIMEOUT);
+
+            assertThatThrownBy(() -> service.decide(
+                    started.runId(),
+                    new ApprovalCommand(
+                            ApprovalDecision.APPROVE,
+                            waiting.version(),
+                            "非法受保护变量",
+                            Map.of("protected", "changed"))))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("protected");
+            assertThatThrownBy(() -> service.decide(
+                    started.runId(),
+                    new ApprovalCommand(
+                            ApprovalDecision.APPROVE,
+                            waiting.version(),
+                            "非法缺失变量",
+                            Map.of("missing", "changed"))))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("missing");
+            assertThat(checkpointer.loadHistory(started.runId())).hasSize(2);
+
+            RunCheckpoint approved = service.decide(
+                    started.runId(),
+                    new ApprovalCommand(
+                            ApprovalDecision.APPROVE,
+                            waiting.version(),
+                            "批准修改",
+                            Map.of("ops.command", "mvn verify")));
+
+            assertThat(waiting.state().variables())
+                    .containsEntry("ops.command", "mvn test")
+                    .containsEntry("protected", "keep");
+            assertThat(approved.state().variables())
+                    .containsEntry("ops.command", "mvn verify")
+                    .containsEntry("protected", "keep");
+        }
+    }
+
+    @Test
+    void validatesAndCopiesApprovalVariableUpdates() {
+        Map<String, String> updates = new LinkedHashMap<>();
+        updates.put("ops.command", "mvn verify");
+        ApprovalCommand command = new ApprovalCommand(
+                ApprovalDecision.APPROVE, 1, "批准", updates);
+        updates.put("ops.command", "changed later");
+
+        assertThat(command.variableUpdates())
+                .containsExactlyEntriesOf(Map.of("ops.command", "mvn verify"));
+        assertThat(new ApprovalCommand(
+                ApprovalDecision.APPROVE, 1, "批准").variableUpdates()).isEmpty();
+        assertThatThrownBy(() -> new ApprovalCommand(
+                ApprovalDecision.REJECT,
+                1,
+                "拒绝",
+                Map.of("ops.command", "mvn verify")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new ApprovalCommand(
+                ApprovalDecision.APPROVE, 1, "批准", Map.of(" ", "value")))
+                .isInstanceOf(IllegalArgumentException.class);
+        Map<String, String> nullValue = new LinkedHashMap<>();
+        nullValue.put("ops.command", null);
+        assertThatThrownBy(() -> new ApprovalCommand(
+                ApprovalDecision.APPROVE, 1, "批准", nullValue))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new ApprovalCommand(
+                ApprovalDecision.APPROVE, 1, "批准", null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
     void rejectsWaitingRunWithoutSchedulingAnotherGraph() {
         InMemoryCheckpointer checkpointer = new InMemoryCheckpointer();
         List<TraceEvent> events = new CopyOnWriteArrayList<>();

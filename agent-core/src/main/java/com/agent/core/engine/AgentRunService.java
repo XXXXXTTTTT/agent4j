@@ -8,6 +8,7 @@ import java.io.StringWriter;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -124,11 +125,13 @@ public final class AgentRunService implements AutoCloseable {
             return rejected;
         }
 
+        AgentState approvedState = applyVariableUpdates(
+                waiting.state(), interrupt, command.variableUpdates());
         RunCheckpoint approved = checkpointer.append(new CheckpointAppend(
                 runId,
                 command.expectedVersion(),
                 RunStatus.RUNNING,
-                waiting.state(),
+                approvedState,
                 waiting.nextNode(),
                 null,
                 ApprovalDecision.APPROVE,
@@ -143,6 +146,24 @@ public final class AgentRunService implements AutoCloseable {
                 command.reason()));
         dispatch(approved, true);
         return approved;
+    }
+
+    private AgentState applyVariableUpdates(
+            AgentState state,
+            InterruptRequest interrupt,
+            Map<String, String> variableUpdates) {
+        AgentState updated = state;
+        for (Map.Entry<String, String> entry : variableUpdates.entrySet()) {
+            String key = entry.getKey();
+            if (!interrupt.details().containsKey(key)) {
+                throw new IllegalArgumentException("中断未公开状态变量: " + key);
+            }
+            if (!state.variables().containsKey(key)) {
+                throw new IllegalArgumentException("状态变量不存在: " + key);
+            }
+            updated = updated.withVariable(key, entry.getValue());
+        }
+        return updated;
     }
 
     /** 恢复所有最新状态为 RUNNING 的 Run。 */
