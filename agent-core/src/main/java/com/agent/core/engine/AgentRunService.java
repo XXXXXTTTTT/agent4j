@@ -8,6 +8,7 @@ import java.io.StringWriter;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -83,6 +84,21 @@ public final class AgentRunService implements AutoCloseable {
         Objects.requireNonNull(runId, "runId 不能为空");
         return checkpointer.loadLatest(runId)
                 .orElseThrow(() -> new RunNotFoundException(runId));
+    }
+
+    /**
+     * 按版本升序读取 Run 的全部权威快照。
+     *
+     * @param runId Run 标识
+     * @return 不可变 Checkpoint 历史
+     */
+    public List<RunCheckpoint> history(UUID runId) {
+        Objects.requireNonNull(runId, "runId 不能为空");
+        List<RunCheckpoint> history = checkpointer.loadHistory(runId);
+        if (history.isEmpty()) {
+            throw new RunNotFoundException(runId);
+        }
+        return List.copyOf(history);
     }
 
     /**

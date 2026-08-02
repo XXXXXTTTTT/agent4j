@@ -6,6 +6,7 @@ import com.agent.core.engine.ApprovalCommand;
 import com.agent.core.engine.ApprovalDecision;
 import com.agent.core.engine.CheckpointConflictException;
 import com.agent.core.engine.GraphNotFoundException;
+import com.agent.core.engine.InterruptRequest;
 import com.agent.core.engine.RunCheckpoint;
 import com.agent.core.engine.RunNotFoundException;
 import com.agent.core.engine.RunStatus;
@@ -18,6 +19,8 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -123,11 +126,86 @@ class RunControllerTest {
     }
 
     @Test
+    void getsRunHistoryInVersionOrder() {
+        RunCheckpoint waiting = new RunCheckpoint(
+                RUN_ID,
+                1,
+                "coder-ops-reviewer",
+                RunStatus.WAITING_APPROVAL,
+                AgentState.empty().withVariable("ops.command", "mvn test"),
+                "ops",
+                new InterruptRequest(
+                        UUID.fromString("7b85ad29-ad8d-4281-9973-b93beb096a60"),
+                        "ops",
+                        "需要审批命令",
+                        Map.of("ops.command", "mvn test")),
+                null,
+                null,
+                null,
+                CREATED_AT.plusSeconds(1));
+        when(runService.history(RUN_ID)).thenReturn(List.of(runningCheckpoint(), waiting));
+
+        webTestClient.get()
+                .uri("/api/runs/{runId}/history", RUN_ID)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[0].version").isEqualTo(0)
+                .jsonPath("$[1].version").isEqualTo(1)
+                .jsonPath("$[1].status").isEqualTo("WAITING_APPROVAL")
+                .jsonPath("$[1].interruptRequest.details['ops.command']")
+                .isEqualTo("mvn test");
+    }
+
+    @Test
+    void approvesWaitingRunWithExactVariableUpdates() {
+        AgentState approvedState = AgentState.empty()
+                .withVariable("ops.command", "mvn verify");
+        RunCheckpoint approved = new RunCheckpoint(
+                RUN_ID,
+                2,
+                "coder-ops-reviewer",
+                RunStatus.RUNNING,
+                approvedState,
+                "ops",
+                null,
+                ApprovalDecision.APPROVE,
+                "使用修改后的命令",
+                null,
+                CREATED_AT.plusSeconds(2));
+        when(runService.decide(
+                RUN_ID,
+                new ApprovalCommand(
+                        ApprovalDecision.APPROVE,
+                        1,
+                        "使用修改后的命令",
+                        Map.of("ops.command", "mvn verify"))))
+                .thenReturn(approved);
+
+        webTestClient.post()
+                .uri("/api/runs/{runId}/approval", RUN_ID)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {
+                          "decision": "APPROVE",
+                          "expectedVersion": 1,
+                          "reason": "使用修改后的命令",
+                          "variableUpdates": {"ops.command": "mvn verify"}
+                        }
+                        """)
+                .exchange()
+                .expectStatus().isAccepted()
+                .expectBody()
+                .jsonPath("$.state.variables['ops.command']").isEqualTo("mvn verify");
+    }
+
+    @Test
     void mapsUnknownGraphAndRunToNotFound() {
         when(runService.start(eq("missing"), any(AgentState.class)))
                 .thenThrow(new GraphNotFoundException("missing"));
         UUID missingRun = UUID.fromString("48bfc730-ff14-4666-a164-65141c5a796b");
         when(runService.get(missingRun)).thenThrow(new RunNotFoundException(missingRun));
+        when(runService.history(missingRun)).thenThrow(new RunNotFoundException(missingRun));
 
         webTestClient.post()
                 .uri("/api/runs")
@@ -150,6 +228,39 @@ class RunControllerTest {
                 .expectBody()
                 .jsonPath("$.status").isEqualTo(404)
                 .jsonPath("$.instance").isEqualTo("/api/runs/" + missingRun);
+
+        webTestClient.get()
+                .uri("/api/runs/{runId}/history", missingRun)
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectBody()
+                .jsonPath("$.status").isEqualTo(404)
+                .jsonPath("$.instance")
+                .isEqualTo("/api/runs/" + missingRun + "/history");
+    }
+
+    @Test
+    void mapsIllegalApprovalUpdateToBadRequest() {
+        when(runService.decide(eq(RUN_ID), any(ApprovalCommand.class)))
+                .thenThrow(new IllegalArgumentException(
+                        "variableUpdates 不允许键: ops.Command"));
+
+        webTestClient.post()
+                .uri("/api/runs/{runId}/approval", RUN_ID)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {
+                          "decision": "APPROVE",
+                          "expectedVersion": 1,
+                          "reason": "修改命令",
+                          "variableUpdates": {"ops.Command": "mvn verify"}
+                        }
+                        """)
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.detail")
+                .isEqualTo("variableUpdates 不允许键: ops.Command");
     }
 
     @Test
@@ -206,6 +317,15 @@ class RunControllerTest {
                   "decision": "APPROVE",
                   "expectedVersion": -1,
                   "reason": " "
+                }
+                """, "/api/runs/" + RUN_ID + "/approval");
+        assertBadRequest("""
+                {
+                  "decision": "APPROVE",
+                  "expectedVersion": 1,
+                  "reason": "已核对",
+                  "variableUpdates": {},
+                  "extra": true
                 }
                 """, "/api/runs/" + RUN_ID + "/approval");
 

@@ -375,7 +375,7 @@ class AgentRunServiceTest {
     }
 
     @Test
-    void getsLatestCheckpointAndRejectsUnknownRun() {
+    void getsLatestCheckpointAndHistoryAndRejectsUnknownRun() {
         InMemoryCheckpointer checkpointer = new InMemoryCheckpointer();
         GraphRegistry registry = new GraphRegistry(Map.of("success", () ->
                 new StateGraph(1)
@@ -388,8 +388,15 @@ class AgentRunServiceTest {
             RunCheckpoint started = service.start("success", AgentState.empty());
 
             assertThat(service.get(started.runId()).runId()).isEqualTo(started.runId());
+            assertThat(service.history(started.runId()))
+                    .isNotEmpty()
+                    .first()
+                    .isEqualTo(started);
             UUID missing = UUID.fromString("3dc442ae-3158-428f-a64d-44cb88830dd0");
             assertThatThrownBy(() -> service.get(missing))
+                    .isInstanceOfSatisfying(RunNotFoundException.class, exception ->
+                            assertThat(exception.runId()).isEqualTo(missing));
+            assertThatThrownBy(() -> service.history(missing))
                     .isInstanceOfSatisfying(RunNotFoundException.class, exception ->
                             assertThat(exception.runId()).isEqualTo(missing));
         }

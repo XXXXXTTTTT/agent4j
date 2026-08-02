@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -36,6 +37,14 @@ public final class RunController {
     @GetMapping("/{runId}")
     public RunView get(@PathVariable UUID runId) {
         return RunView.from(runService.get(runId));
+    }
+
+    /** 按版本升序查询 Run 的全部权威快照。 */
+    @GetMapping("/{runId}/history")
+    public List<RunView> history(@PathVariable UUID runId) {
+        return runService.history(runId).stream()
+                .map(RunView::from)
+                .toList();
     }
 
     /** 批准或拒绝等待中的 Run。 */

@@ -4,6 +4,7 @@ import com.agent.core.engine.AgentRunService;
 import com.agent.core.engine.Checkpointer;
 import com.agent.core.engine.GraphFactory;
 import com.agent.core.engine.GraphRegistry;
+import com.agent.web.log.InMemoryRunLogEventBus;
 import com.agent.web.persistence.JdbcCheckpointer;
 import com.agent.web.trace.InMemoryTraceEventBus;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -50,6 +51,12 @@ public class HarnessConfiguration {
     @Bean(destroyMethod = "close")
     InMemoryTraceEventBus traceEventBus() {
         return new InMemoryTraceEventBus();
+    }
+
+    /** 创建进程内实时 Run 日志总线。 */
+    @Bean(destroyMethod = "close")
+    InMemoryRunLogEventBus runLogEventBus() {
+        return new InMemoryRunLogEventBus();
     }
 
     /** 创建基于虚拟线程的 Agent Run 服务。 */
