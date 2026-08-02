@@ -35,6 +35,9 @@ public final class ReviewerNode implements Node {
     public static final String FEEDBACK_KEY = "reviewer.feedback";
     public static final String MODEL_KEY = "reviewer.model";
     public static final String ERROR_KEY = "reviewer.error";
+    public static final String FINAL_URL_KEY = "reviewer.finalUrl";
+    public static final String DOM_KEY = "reviewer.dom";
+    public static final String SCREENSHOT_DATA_URL_KEY = "reviewer.screenshotDataUrl";
 
     private static final String SYSTEM_INSTRUCTION = """
             你是最终质量审查节点。请结合测试日志、页面 DOM 和截图进行判断。
@@ -85,6 +88,7 @@ public final class ReviewerNode implements Node {
     @Override
     public AgentState execute(AgentState state) {
         Objects.requireNonNull(state, "state 不能为空");
+        AgentState evidenceState = state;
         try {
             URI requestedUri = URI.create(requireUrl(state));
             validateOpsEvidence(state.variables());
@@ -100,6 +104,10 @@ public final class ReviewerNode implements Node {
             String imageUrl = "data:image/png;base64,"
                     + Base64.getEncoder().encodeToString(
                             Objects.requireNonNull(screenshot, "截图不能为空").pngBytes());
+            evidenceState = state
+                    .withVariable(FINAL_URL_KEY, navigation.finalUrl().toString())
+                    .withVariable(DOM_KEY, dom)
+                    .withVariable(SCREENSHOT_DATA_URL_KEY, imageUrl);
             ModelRequest request = new ModelRequest(
                     List.of(
                             ChatMessage.system(SYSTEM_INSTRUCTION),
@@ -113,7 +121,7 @@ public final class ReviewerNode implements Node {
                     null);
             RoutedCompletion completion = modelRouter.complete(TaskType.VISION, request);
             ReviewerDecision decision = parseDecision(completion);
-            return state
+            return evidenceState
                     .withVariable(APPROVED_KEY, Boolean.toString(decision.approved()))
                     .withVariable(SUMMARY_KEY, decision.summary())
                     .withVariable(FEEDBACK_KEY, decision.feedback())
@@ -123,7 +131,7 @@ public final class ReviewerNode implements Node {
             if (exception instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            return state
+            return evidenceState
                     .withVariable(ERROR_KEY, stackTrace(exception))
                     .withTraceEntry("reviewer");
         }

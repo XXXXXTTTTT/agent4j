@@ -78,6 +78,13 @@ class ReviewerNodeTest {
         assertThat(browser.navigationTimeout).isEqualTo(BROWSER_TIMEOUT);
         assertThat(browser.screenshotTimeout).isEqualTo(BROWSER_TIMEOUT);
         assertThat(result.variables())
+                .containsEntry(ReviewerNode.FINAL_URL_KEY, PAGE_URI.toString())
+                .containsEntry(
+                        ReviewerNode.DOM_KEY,
+                        "<html><body>ready</body></html>")
+                .containsEntry(
+                        ReviewerNode.SCREENSHOT_DATA_URL_KEY,
+                        "data:image/png;base64,AQID")
                 .containsEntry(ReviewerNode.APPROVED_KEY, "true")
                 .containsEntry(ReviewerNode.SUMMARY_KEY, "测试和页面正常")
                 .containsEntry(ReviewerNode.FEEDBACK_KEY, "无需修改")
@@ -204,6 +211,14 @@ class ReviewerNodeTest {
         AgentState result = node.execute(completeOpsState());
 
         assertReviewFailure(result, "ModelRoutingException", "VISION");
+        assertThat(result.variables())
+                .containsEntry(ReviewerNode.FINAL_URL_KEY, PAGE_URI.toString())
+                .containsEntry(
+                        ReviewerNode.DOM_KEY,
+                        "<html><body>ready</body></html>")
+                .containsEntry(
+                        ReviewerNode.SCREENSHOT_DATA_URL_KEY,
+                        "data:image/png;base64,AQID");
         assertThat(result.variables().get(ReviewerNode.ERROR_KEY))
                 .contains("Suppressed: com.agent.core.llm.ModelEndpointException")
                 .contains("CallNotPermittedException");
