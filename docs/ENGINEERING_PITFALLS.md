@@ -721,6 +721,9 @@ Git 语义，应用后对返回路径再检查一次。冲突测试验证原文�
 | `c70ead3` | Node 与 jsdom engines 兼容 | 设计、计划和本地工具链统一到 22.22.2 |
 | `6446a83` | WinPTY 超时进程树与读取线程清理 | `PtyCommandExecutorTest` 5 项超时/ANSI/退出码测试 |
 | `57bcaa1` | Maven 前端测试 worker 并发受控 | Vitest 5 文件、22 测试在固定 Node 下通过 |
+| `ca0b94f` | pgvector vector(8)、GIN/HNSW、事务 replace 与回滚 | `JdbcRagStoreIntegrationTest` 5 项真实容器测试 |
+| `a3eb48f` | BM25 与三路混合稳定排序 | `Bm25ScorerTest` 3 项、`HybridRagRetrieverTest` 3 项 |
+| `bc17890` | Java fixture ingest 到混合检索闭环 | `JdbcRagStoreIntegrationTest` 的重载、隔离和替换断言 |
 
 ### 4.2 持续维护门禁
 
@@ -752,3 +755,19 @@ Phase 5 后续每个里程碑提交前，都要同步检查本文：
   30 秒阻塞，随后又暴露 `APPROVED` 越过 `INTERRUPTED` 的异步发布顺序；分别采用有界
   PTY reader 轮询和按 Run 等待中断事件发布修复，最终 `mvn clean verify` 于 `17:43:34`
   返回 `BUILD SUCCESS`。
+
+### 4.4 Phase 6.1 最终验收记录
+
+2026-08-03 在显式 JDK `21.0.2`、Docker Desktop Engine `27.4.0` 环境执行第二次
+`mvn clean verify`，返回 `BUILD SUCCESS`：
+
+- Java：`agent-sandbox 37`、`agent-core 85`、`agent-rag 20`、`agent-web 47`，共 `189`
+  个测试，失败、错误、跳过均为 `0`；`pgvector/pgvector:pg16` 实际启动并执行迁移。
+- RAG：父子 AST/文本切片、Unicode BM25、向量/GIN 召回、HNSW 索引、repository 隔离、
+  外键失败回滚和同库替换均由真实测试覆盖；RAG 集成类没有 assumption skip。
+- 前端：Maven 固定 Node `22.22.2`、npm `10.9.2`；Vite 转换 `2494` 个模块，Vitest
+  `5` 个文件、`22` 个测试通过，npm audit 报告 `0 vulnerabilities`。
+- 资源：验收后 `docker ps -a` 没有 `com.agent.runtime.managed=true` 容器，未发现
+  `winpty-agent`、Bash、Playwright 或 Surefire 残留进程；工作区 target、node_modules 和
+  `.frontend` 均由 `.gitignore` 排除。首次全量失败的一个旧 Docker 管理容器已按精确 ID
+  移除，随后 clean verify 复验通过。
