@@ -25,6 +25,7 @@ node_modules/
 coverage/
 .vite/
 .frontend/
+.worktrees/
 
 # 敏感信息
 .env
