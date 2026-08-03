@@ -2,11 +2,18 @@ package com.agent.rag.store;
 
 import com.agent.rag.domain.ChildChunk;
 import com.agent.rag.domain.ParentChunk;
+import com.agent.rag.domain.RagHit;
+import com.agent.rag.domain.RagQuery;
+import com.agent.rag.embedding.EmbeddingModel;
+import com.agent.rag.ingest.CodebaseIngestionService;
+import com.agent.rag.search.HybridRagRetriever;
+import com.agent.sandbox.ast.AstService;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
@@ -17,6 +24,9 @@ import javax.sql.DataSource;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
 
@@ -36,6 +46,9 @@ class JdbcRagStoreIntegrationTest {
 
     private DataSource dataSource;
     private JdbcRagStore store;
+
+    @TempDir
+    Path temporaryDirectory;
 
     @BeforeAll
     static void startPostgres() {
@@ -136,6 +149,71 @@ class JdbcRagStoreIntegrationTest {
         assertThat(store.findByLexical("repo-b", "onlyB", 10))
                 .extracting(RetrievalRow::childChunk)
                 .containsExactly(child);
+    }
+
+    @Test
+    void ingestsJavaFixtureAndReplacesRepositoryForHybridRetrieval() throws Exception {
+        Path source = temporaryDirectory.resolve("src/main/java/fixture/Fixture.java");
+        Files.createDirectories(source.getParent());
+        Files.writeString(source, """
+                package fixture;
+
+                public class Fixture {
+                    public void needle() {
+                        System.out.println("needle");
+                    }
+
+                    public void needle(int count) {
+                        System.out.println(count);
+                    }
+                }
+                """, StandardCharsets.UTF_8);
+        EmbeddingModel model = new EmbeddingModel() {
+            @Override
+            public int dimensions() {
+                return 8;
+            }
+
+            @Override
+            public float[] embed(String text) {
+                return text.contains("needle")
+                        ? new float[]{1, 0, 0, 0, 0, 0, 0, 0}
+                        : new float[]{0, 1, 0, 0, 0, 0, 0, 0};
+            }
+        };
+        CodebaseIngestionService ingestion =
+                new CodebaseIngestionService(new AstService(), model, store);
+        ingestion.ingest(temporaryDirectory, "repo-ingest");
+
+        assertThat(store.countParents("repo-ingest")).isEqualTo(1);
+        assertThat(store.countChildren("repo-ingest")).isEqualTo(2);
+        assertThat(store.findByLexical("repo-ingest", "needle", 10))
+                .extracting(row -> row.childChunk().symbol())
+                .containsExactly(
+                        "fixture.Fixture#public void needle()",
+                        "fixture.Fixture#public void needle(int count)");
+        List<RagHit> hits = new HybridRagRetriever(store, model).search(
+                new RagQuery("repo-ingest", "needle", null, 10));
+        assertThat(hits).isNotEmpty();
+        assertThat(hits.getFirst().childChunk().content()).contains("needle");
+
+        Files.writeString(source, """
+                package fixture;
+
+                public class Fixture {
+                    public void replacement() {
+                        System.out.println("replacement");
+                    }
+                }
+                """, StandardCharsets.UTF_8);
+        ingestion.ingest(temporaryDirectory, "repo-ingest");
+
+        assertThat(store.countChildren("repo-ingest")).isEqualTo(1);
+        assertThat(store.findByLexical("repo-ingest", "needle", 10)).isEmpty();
+        assertThat(store.findByLexical("repo-ingest", "replacement", 10))
+                .singleElement()
+                .extracting(row -> row.childChunk().symbol())
+                .isEqualTo("fixture.Fixture#public void replacement()");
     }
 
     private ParentChunk parent(String repositoryId, String path, String symbol) {

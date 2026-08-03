@@ -157,6 +157,18 @@ public final class JdbcRagStore implements RagStore {
         }
     }
 
+    long countParents(String repositoryId) {
+        requireRepositoryId(repositoryId);
+        try {
+            Long count = jdbcTemplate.queryForObject(
+                    "select count(*) from rag_parent_chunks where repository_id = ?",
+                    Long.class, repositoryId);
+            return Objects.requireNonNull(count);
+        } catch (DataAccessException exception) {
+            throw new RagStoreException("统计父块数量失败: " + repositoryId, exception);
+        }
+    }
+
     @Override
     public double averageDocumentLength(String repositoryId) {
         requireRepositoryId(repositoryId);
