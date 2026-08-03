@@ -12,6 +12,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -29,6 +33,8 @@ public final class AgentRunService implements AutoCloseable {
     private final GraphRegistry graphRegistry;
     private final TraceEventPublisher tracePublisher;
     private final ExecutorService executor;
+    private final ConcurrentMap<UUID, CompletableFuture<Void>> interruptPublications =
+            new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
 
     /**
@@ -120,6 +126,7 @@ public final class AgentRunService implements AutoCloseable {
 
         InterruptRequest interrupt = Objects.requireNonNull(
                 waiting.interruptRequest(), "等待审批快照缺少 interruptRequest");
+        awaitInterruptPublication(runId);
         if (command.decision() == ApprovalDecision.REJECT) {
             RunCheckpoint rejected = checkpointer.append(new CheckpointAppend(
                     runId,
@@ -229,25 +236,35 @@ public final class AgentRunService implements AutoCloseable {
                             bypassInterruptAtStart),
                     executionListener(current));
             if (result instanceof GraphExecutionResult.Interrupted interrupted) {
-                RunCheckpoint waiting = appendAndSet(
-                        current,
-                        new CheckpointAppend(
-                                initial.runId(),
-                                current.get().version(),
-                                RunStatus.WAITING_APPROVAL,
-                                interrupted.state(),
-                                interrupted.nodeName(),
-                                interrupted.request(),
-                                null,
-                                null,
-                                null));
-                publish(new TraceEvent.Interrupted(
-                        UUID.randomUUID(),
-                        initial.runId(),
-                        waiting.version(),
-                        Instant.now(),
-                        interrupted.nodeName(),
-                        interrupted.request()));
+                CompletableFuture<Void> publication = new CompletableFuture<>();
+                interruptPublications.put(initial.runId(), publication);
+                try {
+                    RunCheckpoint waiting = appendAndSet(
+                            current,
+                            new CheckpointAppend(
+                                    initial.runId(),
+                                    current.get().version(),
+                                    RunStatus.WAITING_APPROVAL,
+                                    interrupted.state(),
+                                    interrupted.nodeName(),
+                                    interrupted.request(),
+                                    null,
+                                    null,
+                                    null));
+                    publish(new TraceEvent.Interrupted(
+                            UUID.randomUUID(),
+                            initial.runId(),
+                            waiting.version(),
+                            Instant.now(),
+                            interrupted.nodeName(),
+                            interrupted.request()));
+                    publication.complete(null);
+                } catch (RuntimeException exception) {
+                    publication.completeExceptionally(exception);
+                    throw exception;
+                } finally {
+                    interruptPublications.remove(initial.runId(), publication);
+                }
             }
         } catch (RuntimeException exception) {
             storeFailure(current.get(), exception);
@@ -311,6 +328,21 @@ public final class AgentRunService implements AutoCloseable {
         RunCheckpoint updated = checkpointer.append(append);
         current.set(updated);
         return updated;
+    }
+
+    private void awaitInterruptPublication(UUID runId) {
+        CompletableFuture<Void> publication = interruptPublications.get(runId);
+        if (publication == null) {
+            return;
+        }
+        try {
+            publication.get();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("等待中断 Trace 发布被中断", exception);
+        } catch (ExecutionException exception) {
+            throw new IllegalStateException("中断 Trace 发布失败", exception.getCause());
+        }
     }
 
     private void storeFailure(RunCheckpoint current, RuntimeException exception) {
