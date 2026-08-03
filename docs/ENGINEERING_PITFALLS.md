@@ -1,9 +1,8 @@
 # Agent4j 技术攻关、踩坑复盘与面试表达指南
 
-> 证据基线：Phase 5 Task 11 Web 工作台里程碑（2026-08-03）。本文依据 Phase 1 至 Phase 5
-> 的 Git 补丁、`docs/superpowers/specs/` 设计文档、生产代码和自动化测试整理。Phase 5
-> 后端闭环、React 工作台、Monaco/xterm/HITL/Reviewer 证据视图和真实浏览器闭环已经落地；
-> Task 12 全量验收结果仍需在最终提交前同步补充。
+> 证据基线：Phase 5 Task 12 全量验收（2026-08-03）。本文依据 Phase 1 至 Phase 5 的
+> Git 补丁、`docs/superpowers/specs/` 设计文档、生产代码和自动化测试整理。Phase 5
+> 后端闭环、React 工作台、Monaco/xterm/HITL/Reviewer 证据视图和真实浏览器闭环均已落地。
 
 ## 1. 项目核心攻关与避坑总览
 
@@ -159,7 +158,28 @@ old/new path 做标准化并验证仍在根目录；之后才把同一字节交�
 **【证据】** `PtyCommandExecutorTest.preservesAnsiControlSequences`、
 `returnsNonZeroExitCodeWithoutException`、`terminatesProcessAtTimeout`。
 
-### 2.8 Docker 一次性容器的清理必须覆盖所有出口
+### 2.8 Windows WinPTY 的进程树与读取线程必须分别治理
+
+**【问题现象】** 首次全量验收中，超时用例偶发在命令已返回后无法删除 JUnit 临时工作目录；
+进一步复现时，PTY 超时结果会稳定等待约 30 秒。字节码显示 pty4j 的
+`WinPtyProcess.toHandle()` 不支持，直接调用 `Process.descendants()` 会抛异常；即使主进程
+退出，WinPTY 输入流的原生读取也可能继续阻塞。
+
+**【根因分析】** pty4j 的 `destroyForcibly()` 实际关闭 WinPTY 代理，不等价于 Java 原生
+进程树强杀；Bash 启动的子进程可能短暂持有工作目录。WinPTY 的输入流在被虚拟线程读取时，
+仅调用 `InputStream.close()` 不能保证立即唤醒 Windows 原生 read，未加边界的 `join()` 会
+把 100ms 命令拖到 30 秒。
+
+**【解决方案/代码级实现】** `PtyCommandExecutor` 从 pty4j 明确提供的 `pid()` 构造
+`ProcessHandle`，在关闭 WinPTY 前快照并反向强杀 Bash 后代，使用 `onExit()` 和 1 秒上限
+等待进程树；随后关闭 PTY 输出流并中断虚拟读取线程，读取线程再等待同一上限。超时结果仍
+严格返回 `exitCode=-1`、`timedOut=true`，正常路径继续完整排空输出。新增工作目录释放回归
+测试，并以两次全模块及一次全量 Maven 实测验证。
+
+**【证据】** `PtyCommandExecutorTest.releasesWorkingDirectoryBeforeReturningFromTimeout`、
+`terminatesProcessAtTimeout`；两次 `mvn -pl agent-sandbox test` 均为 `37/37`。
+
+### 2.9 Docker 一次性容器的清理必须覆盖所有出口
 
 **【问题现象】** 如果只在成功路径清理，非零退出、超时、日志 consumer 抛错或 Docker
 API 抛错都会绕过普通清理逻辑，留下容器和工作区挂载。
@@ -176,7 +196,7 @@ API 抛错都会绕过普通清理逻辑，留下容器和工作区挂载。
 `returnsActualNonZeroExitCode`、`stopsAndRemovesContainerAtTimeout`，以及每个测试后的容器
 标签清理断言。
 
-### 2.9 Coder -> Ops 不能吞工具异常
+### 2.10 Coder -> Ops 不能吞工具异常
 
 **【问题现象】** 如果补丁冲突或命令 Future 异常只变成一个短错误消息，后续 Agent 无法
 判断失败层级，也无法形成可靠修复循环。
@@ -190,7 +210,7 @@ publisher 失败另存 `ops.logError`，不丢弃已完成的命令结果。
 
 ## Phase 3：Playwright、模型路由与 Reviewer
 
-### 2.10 Playwright 的线程亲和性死穴
+### 2.11 Playwright 的线程亲和性死穴
 
 **【问题现象】** 常见异步写法是每次调用 `CompletableFuture.supplyAsync`，但这会让
 Playwright、Browser、Context 和 Page 在不同线程上创建、操作或关闭，产生线程安全错误
@@ -213,7 +233,7 @@ Playwright、headless Chromium、Context、Page 的延迟创建、导航、点�
 **【证据】** `PlaywrightBrowserServiceTest` 使用真实 Chromium 验证导航、点击、DOM、
 全页 PNG、超时、异步和重复关闭。
 
-### 2.11 多模型降级必须把“响应有效性”算进熔断
+### 2.12 多模型降级必须把“响应有效性”算进熔断
 
 **【问题现象】** 端点 HTTP 200 但 `choices` 为空或首条 message 为 null 时，如果先让
 熔断器记录成功、再在外部校验响应，坏端点不会积累失败；OPEN 端点若被当成总路由失败，
@@ -237,7 +257,7 @@ HALF_OPEN 和 CLOSED 的切换完全由调用方注入的 Resilience4j 配置和
 `recordsEmptyChoicesAsCircuitFailureAndFallsBack`、
 `aggregatesOpenCircuitFailuresInEndpointOrder`。
 
-### 2.12 Jackson 的类型强制会污染 Reviewer 决策
+### 2.13 Jackson 的类型强制会污染 Reviewer 决策
 
 **【问题现象】** 模型返回 `{"approved":"true"}` 或数字型 `summary` 时，单纯反序列化
 record 会触发标量类型强制，使非法协议看起来合法。
@@ -255,7 +275,7 @@ content 和类型错误全部进入 `reviewer.error` 完整堆栈。
 
 ## Phase 4：PostgreSQL Checkpoint、HITL 与 Trace
 
-### 2.13 PostgreSQL 是唯一权威源，事件通道不参与双写
+### 2.14 PostgreSQL 是唯一权威源，事件通道不参与双写
 
 **【问题现象】** 如果数据库 Checkpoint 和实时事件总线都被当作 Run 状态，任一发布失败
 都会产生两个“最新状态”；若在同一业务路径中强制双写成功，WebSocket 故障还会回滚已
@@ -272,7 +292,7 @@ content 和类型错误全部进入 `reviewer.error` 完整堆栈。
 Redis，它只能承担事件分发通道，不能保存或裁决 Run 最新状态；这正是避免应用层双写
 陷阱的边界。
 
-### 2.14 并发审批靠数据库乐观锁裁决
+### 2.15 并发审批靠数据库乐观锁裁决
 
 **【问题现象】** 两个人同时批准/拒绝同一 `WAITING_APPROVAL` Run，如果只在 JVM 内检查
 版本，多个实例或并发请求会形成重复追加竞态。
@@ -298,7 +318,7 @@ where run_id = :runId
 **【证据】** `JdbcCheckpointerTest` 的两个并发 append 只有一个成功；
 `AgentRunServiceTest.rejectsStaleOrTerminalApprovalAndAllowsOnlyOneConcurrentDecision`。
 
-### 2.15 HITL 恢复不是简单地“重新跑图”
+### 2.16 HITL 恢复不是简单地“重新跑图”
 
 **【问题现象】** 批准后若仍从图入口运行会重复已完成节点；若恢复时继续执行同一中断
 策略，会立即再次挂起；若永久绕过策略，又会跳过后续危险节点。
@@ -314,7 +334,7 @@ where run_id = :runId
 系统明确采用至少一次节点执行语义：进程若在外部副作用完成、Checkpoint 提交前崩溃，
 节点会再次执行，因此带外部副作用的节点必须由业务保证幂等，不能宣称 exactly-once。
 
-### 2.16 `timestamptz` 精度导致对象往返不相等
+### 2.17 `timestamptz` 精度导致对象往返不相等
 
 **【问题现象】** Java `Instant` 可带纳秒，而 PostgreSQL `timestamptz` 以微秒保存；写入
 后立即返回的 Java 对象与再次查询对象在尾部纳秒不同，集成测试比较失败。
@@ -325,7 +345,7 @@ where run_id = :runId
 `clock.instant().truncatedTo(ChronoUnit.MICROS)`，创建、追加和数据库读取使用同一精度。
 真实 PostgreSQL REST/WebSocket/HITL 闭环测试验证持久化对象与 API 视图一致。
 
-### 2.17 WebSocket 的快照/事件窗口
+### 2.18 WebSocket 的快照/事件窗口
 
 **【问题现象】** 原实现先 `loadLatest(runId)`，再订阅 Trace。数据库读取期间到达的终态或
 节点事件没有订阅者，会被永久丢弃，客户端只看到旧快照并持续等待。
@@ -342,7 +362,7 @@ where run_id = :runId
 
 ## Phase 5：响应式长连接与 Web 工作台
 
-### 2.18 一个共享 Sink 会让慢客户端拖累所有人
+### 2.19 一个共享 Sink 会让慢客户端拖累所有人
 
 **【问题现象】** 终端输出速度高于浏览器消费速度时，无界缓冲会持续占用内存；共享有界
 缓冲又会让一个慢连接导致同 Run 的所有订阅者失败。
@@ -359,7 +379,7 @@ Run 全部日志流，`close()` 完成所有流并拒绝后续使用。
 关闭；`RunLifecycleEventPublisherTest` 证明终态 Trace delegate 抛错时仍在 `finally`
 完成日志流。
 
-### 2.19 终端 WebSocket/SSE 必须共用一个强类型协议
+### 2.20 终端 WebSocket/SSE 必须共用一个强类型协议
 
 **【问题现象】** 如果两种传输各自拼 JSON，字段、枚举或快照缺省值会漂移；如果先查
 Checkpoint 再订阅，Phase 4 的事件窗口会在终端流中重现。
@@ -375,7 +395,7 @@ exitCode 和 timedOut 执行严格字符串解析，非法持久化值明确失�
 `terminalSnapshotUsesNullForMissingResultsAndRejectsInvalidValues`；
 `RunTerminalWebSocketTest` 覆盖快照窗口、ANSI、4404、终态和断连清理。
 
-### 2.20 HITL“修改”必须是双白名单交集
+### 2.21 HITL“修改”必须是双白名单交集
 
 **【问题现象】** 审批接口若接受任意 Map，就能借“修改命令”写入隐藏状态键；只检查
 中断详情或只检查状态变量也不足以证明该键既存在又被公开允许修改。
@@ -392,7 +412,7 @@ exitCode 和 timedOut 执行严格字符串解析，非法持久化值明确失�
 `RunControllerTest` 对 `ops.command` 与 `ops.Command` 的精确区分、
 `ProductWorkbenchLifecycleIntegrationTest` 的修改批准闭环。
 
-### 2.21 Monaco Diff 与 xterm 的生命周期边界
+### 2.22 Monaco Diff 与 xterm 的生命周期边界
 
 **【问题现象】** Monaco 不能直接把 Unified Diff 当作两份完整源码；xterm 若在后端或
 前端清洗字符串会丢失 ANSI。动态组件若不执行清理，会在重连和卸载后遗留 WebSocket、Terminal、
@@ -416,7 +436,7 @@ Task 11 进一步采用“编辑器面板首次按需加载、加载后保持挂
 路径、证据版本和 DOM 安全；`ProductWorkbenchBrowserTest` 使用真实 Chromium 验证 Monaco
 可视行、xterm ANSI、320 像素宽 PNG、桌面/移动布局和 `pageErrors` 为空。
 
-### 2.22 Node/jsdom 引擎与前端依赖安全冲突
+### 2.23 Node/jsdom 引擎与前端依赖安全冲突
 
 **【问题现象】** 原计划固定 Node 22.14.0，但锁定的 `jsdom@30.0.1` 要求
 `^22.22.2 || ^24.15.0 || >=26.0.0`，安装会产生 engine 不兼容。Task 9 首次执行
@@ -439,11 +459,11 @@ TypeScript 和 Vite build 四条路径。
 
 **【验证结果】** Task 9 使用模块内 Node 22.22.2/npm 10.9.2 从锁文件执行 `npm ci`，
 实际依赖树为 `@monaco-editor/react@4.7.0 -> monaco-editor@0.53.0`，不再包含 DOMPurify，
-`npm audit --audit-level=low` 返回 0 vulnerabilities。显式 JDK 21 的 Maven 反应堆执行
-167 个 Java 测试与 8 个 Vitest 测试，失败、错误和跳过均为 0；TypeScript 编译和 Vite
-build 也独立通过。
+`npm audit --audit-level=low` 返回 0 vulnerabilities。Task 9 当时的 Maven 反应堆执行
+167 个 Java 测试与 8 个 Vitest 测试；Phase 5 完成后的 Task 12 计数见 4.3。TypeScript
+编译和 Vite build 也独立通过。
 
-### 2.23 Vite build 通过不代表 TypeScript 类型完整
+### 2.24 Vite build 通过不代表 TypeScript 类型完整
 
 **【问题现象】** Task 9 的 Vite build 可以在没有 React 声明包时成功；Task 10 首次新增
 `useRunWorkbench` 后，独立 `tsc --noEmit` 报 `TS7016`，指出 `react` 没有声明文件，
@@ -458,7 +478,7 @@ build 也独立通过。
 `@types/react ^19.2.0`，两者一致。Task 10 起把 `tsc --noEmit` 与 Vitest、Vite build
 并列为前端门禁，并持续由 `package-lock.json` 固定传递依赖。
 
-### 2.24 双 WebSocket 的连接所有权与跨 Run 污染
+### 2.25 双 WebSocket 的连接所有权与跨 Run 污染
 
 **【问题现象】** 工作台切换 Run 后，旧 Trace/终端连接若继续存活，会把旧 Run 事件写入
 新页面；即使 URL 正确，服务端或代理返回的 payload runId 与连接 runId 不一致时，前端
@@ -478,9 +498,10 @@ build 也独立通过。
 
 **【验证结果】** `useRunWorkbench.test.tsx` 与 `TerminalSession.test.ts` 覆盖创建后两条
 连接、切换/卸载清理、ANSI 原样转发、409 单次重读、终态刷新、跨 Run 帧拒绝和二次 GET
-失败；Task 10 全量前端测试为 4 个文件、16 个测试，TypeScript 与 Vite build 同时通过。
+失败；Task 10 当时的全量前端测试为 4 个文件、16 个测试，Task 11/12 的最终计数见 4.3。
+TypeScript 与 Vite build 同时通过。
 
-### 2.25 Vite 入口、Monaco CDN 与内部强制分包
+### 2.26 Vite 入口、Monaco CDN 与内部强制分包
 
 **【问题现象】** 初版 `index.html` 未引用 `src/main.tsx`，Vite 只转换两个模块却仍返回
 成功，真实页面没有“图 ID”。补入口后，`@monaco-editor/react` 默认 CDN 在离线测试中
@@ -504,7 +525,7 @@ vendor chunk，Vite 告警阈值按实测 2523.67 KB 设置为 2600 KB，不再�
 实际加载 editor worker 与本地 Monaco chunk，`ProductWorkbenchBrowserTest` 通过并要求
 浏览器 `pageerror` 集合为空。
 
-### 2.26 非重放终端流与权威快照的启动时序
+### 2.27 非重放终端流与权威快照的启动时序
 
 **【问题现象】** 进程内日志总线不重放历史事件；若浏览器在终端 WebSocket 首帧
 `SNAPSHOT` 到达前就批准运行，审批后的短命 Ops 日志可能在订阅尚未建立时被丢弃。反过来，
@@ -517,7 +538,7 @@ vendor chunk，Vite 告警阈值按实测 2523.67 KB 设置为 2600 KB，不再�
 浏览器闭环在批准前条件等待 Trace 区精确显示 `PTY 已连接`，随后才提交修改审批。终态后
 Hook 再并行读取最新 Run 与 history，用 PostgreSQL 权威结果覆盖短暂前端状态。
 
-### 2.27 证据版本跟随与 Monaco 可视文本断言
+### 2.28 证据版本跟随与 Monaco 可视文本断言
 
 **【问题现象】** Run 从 version 0 前进到 Reviewer 完成版本后，画廊选择仍可能锁在旧版本，
 页面持续显示“等待 ReviewerNode 截图”。真实 Monaco 把可视空格渲染为 NBSP，直接对整个
@@ -531,6 +552,25 @@ Monaco 又是虚拟化编辑器，测试必须读取其可视行语义，不能�
 版本，同时仍允许用户手动切换历史；浏览器测试等待 `.view-line`，仅在断言阶段把字符码 160
 规范化为空格，不修改生产 DOM 内容。`Workbench.test.tsx` 的权威版本前进回归测试和真实
 Chromium 测试共同覆盖这两层行为。
+
+### 2.29 Maven 前端生命周期中的 worker 并发压力
+
+**【问题现象】** 独立执行 Vitest 时 5 个文件可以通过，但第一次 `mvn clean verify` 在
+固定 Node `v22.22.2` 下让默认 `forks` 池的 5 个 worker 全部等待 60 秒；切换为 5 个
+`threads` worker 后，在前序 `npm ci` 与 Vite 构建完成的全量链路中仍出现同样的启动超时。
+
+**【根因分析】** 失败发生在 worker 尚未进入测试文件之前，且单独运行与 Maven 运行的
+差异只在生命周期前置步骤和并发启动数量。Windows 机器在 Java 集成测试、Node 安装依赖和
+Monaco worker 构建后的可用资源窗口不足以同时启动 5 个 jsdom worker；这不是断言失败，
+也不是把 Node 升级到 25 的理由。
+
+**【解决方案/代码级实现】** `vite.config.ts` 固定 Vitest 使用隔离的 `forks` 池，但把
+`maxWorkers` 设为 `1` 并关闭 `fileParallelism`。单 worker 保留进程隔离和 jsdom 语义，避免
+并发启动竞态；固定的 Maven Node/npm 工具链仍为 `v22.22.2/10.9.2`。该配置下独立运行
+和 Maven 生命周期均通过，前端测试仍报告精确 `5` 个文件、`22` 个测试。
+
+**【证据】** 首次全量失败日志、固定 Node 单 fork `22/22`、最终 `mvn clean verify` 的
+`agent-web` 成功结果；`npm audit --audit-level=low` 返回 `0 vulnerabilities`。
 
 ## 3. 面试话术提炼（STAR 法则）
 
@@ -629,6 +669,8 @@ Git 语义，应用后对返回路径再检查一次。冲突测试验证原文�
 | `c70fcd5` | PostgreSQL `timestamptz` 微秒精度 | 真实 PostgreSQL 生命周期集成测试 |
 | `0ce305c` | WebSocket 快照读取期间不丢事件 | `buffersEventsPublishedWhileLoadingTheSnapshot` |
 | `c70ead3` | Node 与 jsdom engines 兼容 | 设计、计划和本地工具链统一到 22.22.2 |
+| `6446a83` | WinPTY 超时进程树与读取线程清理 | `PtyCommandExecutorTest` 5 项超时/ANSI/退出码测试 |
+| `57bcaa1` | Maven 前端测试 worker 并发受控 | Vitest 5 文件、22 测试在固定 Node 下通过 |
 
 ### 4.2 持续维护门禁
 
@@ -640,3 +682,19 @@ Phase 5 后续每个里程碑提交前，都要同步检查本文：
 4. 前端完成后补充 Monaco、xterm、HITL 和视觉画廊的真实浏览器问题与截图测试证据。
 5. 全量验收后补充 Java、Vitest、Vite、Docker、PostgreSQL、PTY 和 Chromium 的实际执行
    结果，不引用过期测试计数。
+
+### 4.3 Phase 5 Task 12 实际验收记录
+
+2026-08-03 在显式 JDK `21.0.2`、Docker Desktop Engine 和本机 Chromium 环境执行：
+
+- Maven 反应堆：`agent-sandbox 37`、`agent-core 85`、`agent-web 47`，共 `169` 个 Java
+  测试，失败、错误、跳过均为 `0`；`agent-rag` 无测试源。
+- 前端：Vitest `5` 个文件、`22` 个测试通过；`tsc --noEmit` 通过；Vite 转换 `2494`
+  个模块并成功生成静态资源；`npm audit --audit-level=low` 为 `0 vulnerabilities`。
+- 集成边界：实际执行 JavaParser/JGit、Docker Bash、PTY Bash、Playwright Chromium、
+  PostgreSQL Checkpoint、REST、WebSocket 和真实浏览器工作台；日志中没有 assumption skip。
+- 浏览器截图：`agent-web/target/workbench/desktop.png` 与 `mobile.png` 人工检查通过，
+  页面非空、Monaco/xterm/PNG/DOM 均真实呈现，无重叠或横向溢出。
+- 资源清理：测试后没有发现本项目命令行、Playwright、Vitest、Surefire 或 WinPTY 残留进程；
+  `docker ps -a` 未发现本项目创建的 PostgreSQL 或一次性沙箱容器。工作区中已有的其他
+  Docker 容器未纳入本项目清理范围。
