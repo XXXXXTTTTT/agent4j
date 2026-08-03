@@ -622,6 +622,41 @@ repository 隔离、外键失败回滚、Java fixture 两个重载方法、混�
 `Bm25ScorerTest` 3 项和 `HybridRagRetrieverTest` 3 项在 JDK `21.0.2` 下全部通过；没有
 发生 assumption skip。
 
+### 2.31 Phase 6.2 长期记忆的 scope 隔离、数组值语义与 Planner 注入
+
+**【问题现象】** 长期记忆需要同时承载用户编码偏好、项目架构规范和历史 Bad Case；如果
+只按文本或 repository 查询，用户之间会互相看到记忆，类型过滤也会失效。模型返回的
+JSON 可能夹带未知字段、未知 type、null 或非字符串值。两路 PostgreSQL 查询分别把同一
+条目映射成不同 Java 对象时，record 默认对 `float[]` 使用引用相等，manager 会把向量/词法
+同一条目误判为不一致。Planner 还必须在模型失败时保留完整堆栈，而不能悄悄退化为空上下文。
+
+**【根因分析】** 长期记忆与代码块索引不是同一语义单元，必须拥有独立的表、唯一键和
+`repositoryId + userId + memoryType` 精确 scope；模型输出协议若不先验证字段集合，Jackson
+的宽松行为会把协议漂移隐藏起来。Java record 不会自动把数组改成值语义；向量和词法 SQL
+是两个 ResultSet，不能依赖对象引用或默认 record equals 做跨查询合并。Planner 的记忆端口
+又位于 `agent-core`，若直接依赖 JDBC 实现会破坏核心层边界。
+
+**【解决方案/代码级实现】** `V2__create_memory_table.sql` 使用 `rag_memories`、八维
+`vector`、生成的 `tsvector`、GIN/HNSW 索引和
+`unique(repository_id, user_id, memory_type, content_hash)`；`JdbcMemoryStore` 用绑定参数
+执行整批 upsert，重复内容保留原 `memory_id/created_at`，任一行失败整体回滚。`MemoryEntry`
+对 embedding 做构造器/accessor 防御性复制，并像 `ChildChunk` 一样覆盖
+`equals/hashCode` 使用 `Arrays.equals/hashCode`。`ModelMemoryExtractor` 在路由前固定
+`QUICK_CLASSIFICATION`、空 tools、temperature `0.0`，先对根节点和每个 item 做精确字段集合、
+JSON 类型、枚举和 20 项上限校验；任何错误包装为带 cause 的 `MemoryExtractionException`。
+`MemoryManager` 用精确 UTF-8 SHA-256 去重，向量/词法分独立 min-max 后按 `0.65/0.35` 合成，
+拒绝 store 返回的外部 scope。`agent-core` 只定义不可变 `MemoryContextRequest`、
+`MemoryContext` 和 `MemoryContextProvider`；`MemoryContextProviderAdapter` 在 `agent-rag`
+中格式化命中，`PlannerNode` 通过构造器注入端口，在 `TaskType.CODE` Prompt 中明确当前任务
+优先于不可信历史记忆，并把失败堆栈写入 `planner.error`。
+
+**【验证结果】** JDK `21.0.2` 下 `MemoryDomainTest` 4 项、`MemoryManagerTest` 5 项、
+`ModelMemoryExtractorTest` 2 项、`PlannerNodeTest` 3 项全部通过；真实 Docker Engine
+`27.4.0` 上的 `JdbcMemoryStoreIntegrationTest` 5 项实际执行 `pgvector/pgvector:pg16`，
+覆盖 V2 表/索引、重复 upsert、scope/type 隔离、向量/GIN 召回、批次回滚和 manager 真实
+捕获闭环。`MemoryPlannerGraphTest` 验证 `PlannerNode -> CoderNode -> OpsNode` 的 Unified
+Diff 修改、终端结果 `after` 和精确 trace `[planner, coder, ops]`。
+
 ## 3. 面试话术提炼（STAR 法则）
 
 以下话术只陈述仓库已有证据，不使用无法验证的吞吐量或线上故障数字。面试时可以结合
