@@ -48,6 +48,36 @@ public record MemoryEntry(
         return Arrays.copyOf(embedding, embedding.length);
     }
 
+    /** 以 embedding 元素值参与相等判断，而不是比较数组引用。 */
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof MemoryEntry that)) {
+            return false;
+        }
+        return Objects.equals(memoryId, that.memoryId)
+                && Objects.equals(repositoryId, that.repositoryId)
+                && Objects.equals(userId, that.userId)
+                && Objects.equals(type, that.type)
+                && Objects.equals(title, that.title)
+                && Objects.equals(content, that.content)
+                && Objects.equals(contentHash, that.contentHash)
+                && Arrays.equals(embedding, that.embedding)
+                && Objects.equals(createdAt, that.createdAt)
+                && Objects.equals(updatedAt, that.updatedAt);
+    }
+
+    /** 与 equals 保持 embedding 数组的值语义一致。 */
+    @Override
+    public int hashCode() {
+        int result = Objects.hash(
+                memoryId, repositoryId, userId, type, title, content,
+                contentHash, createdAt, updatedAt);
+        return 31 * result + Arrays.hashCode(embedding);
+    }
+
     private static float[] copyEmbedding(float[] value) {
         Objects.requireNonNull(value, "embedding 不能为空");
         if (value.length != 8) {

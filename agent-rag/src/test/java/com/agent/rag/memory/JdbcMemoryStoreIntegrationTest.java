@@ -1,5 +1,6 @@
 package com.agent.rag.memory;
 
+import com.agent.rag.embedding.EmbeddingModel;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
@@ -141,6 +142,48 @@ class JdbcMemoryStoreIntegrationTest {
         assertThat(store.findByLexical(
                 new MemoryQuery("repo-a", "user-a", "New", Set.of(MemoryType.BAD_CASE), 10),
                 10)).isEmpty();
+    }
+
+    @Test
+    void capturesDeduplicatesAndRecallsThroughRealStore() {
+        MemoryDraft draft = new MemoryDraft(
+                MemoryType.ARCHITECTURE_RULE,
+                "Patch policy",
+                "Use narrow Unified Diff patches.");
+        MemoryManager manager = new MemoryManager(
+                capture -> List.of(draft),
+                store,
+                new EmbeddingModel() {
+                    @Override
+                    public int dimensions() {
+                        return 8;
+                    }
+
+                    @Override
+                    public float[] embed(String text) {
+                        return text.contains("Unified Diff")
+                                ? new float[]{1, 0, 0, 0, 0, 0, 0, 0}
+                                : new float[]{0, 1, 0, 0, 0, 0, 0, 0};
+                    }
+                },
+                java.time.Clock.fixed(CREATED, java.time.ZoneOffset.UTC),
+                UUID::randomUUID);
+
+        manager.capture(new MemoryCapture("repo-a", "user-a", "confirmed rule"));
+        manager.capture(new MemoryCapture("repo-a", "user-a", "confirmed rule"));
+
+        List<MemoryHit> hits = manager.recall(new MemoryQuery(
+                "repo-a", "user-a", "Unified Diff",
+                Set.of(MemoryType.ARCHITECTURE_RULE), 10));
+        assertThat(hits).singleElement()
+                .extracting(hit -> hit.entry().content())
+                .isEqualTo("Use narrow Unified Diff patches.");
+        assertThat(store.findByLexical(new MemoryQuery(
+                "repo-a", "user-a", "Unified Diff",
+                Set.of(MemoryType.ARCHITECTURE_RULE), 10), 10)).hasSize(1);
+        assertThat(store.findByLexical(new MemoryQuery(
+                "repo-b", "user-a", "Unified Diff",
+                Set.of(MemoryType.ARCHITECTURE_RULE), 10), 10)).isEmpty();
     }
 
     private MemoryEntry entry(

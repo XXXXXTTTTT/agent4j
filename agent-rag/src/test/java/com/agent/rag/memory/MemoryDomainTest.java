@@ -80,4 +80,21 @@ class MemoryDomainTest {
         assertThatThrownBy(() -> new MemoryHit(entry, Double.NaN, 0, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void comparesEntryEmbeddingsByValue() {
+        UUID id = UUID.randomUUID();
+        Instant timestamp = Instant.parse("2026-08-03T10:00:00Z");
+        MemoryEntry first = new MemoryEntry(
+                id, "repo", "user", MemoryType.BAD_CASE,
+                "title", "content", "c".repeat(64),
+                new float[]{1, 2, 3, 4, 5, 6, 7, 8}, timestamp, timestamp);
+        MemoryEntry second = new MemoryEntry(
+                id, "repo", "user", MemoryType.BAD_CASE,
+                "title", "content", "c".repeat(64),
+                new float[]{1, 2, 3, 4, 5, 6, 7, 8}, timestamp, timestamp);
+
+        assertThat(first).isEqualTo(second);
+        assertThat(first.hashCode()).isEqualTo(second.hashCode());
+    }
 }
