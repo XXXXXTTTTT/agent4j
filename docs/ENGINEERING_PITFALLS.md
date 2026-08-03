@@ -1,9 +1,9 @@
 # Agent4j 技术攻关、踩坑复盘与面试表达指南
 
-> 证据基线：Phase 5 Task 9 前端工程里程碑（2026-08-03）。本文依据 Phase 1 至 Phase 5 的 Git
-> 补丁、`docs/superpowers/specs/` 设计文档、生产代码和自动化测试整理。Phase 5
-> 后端闭环已经落地；React 工作台在此基线仅完成依赖清单与构建骨架，Monaco、xterm
-> 和工作台浏览器闭环仍在开发。后续 Phase 5 提交必须同步维护本文。
+> 证据基线：Phase 5 Task 11 Web 工作台里程碑（2026-08-03）。本文依据 Phase 1 至 Phase 5
+> 的 Git 补丁、`docs/superpowers/specs/` 设计文档、生产代码和自动化测试整理。Phase 5
+> 后端闭环、React 工作台、Monaco/xterm/HITL/Reviewer 证据视图和真实浏览器闭环已经落地；
+> Task 12 全量验收结果仍需在最终提交前同步补充。
 
 ## 1. 项目核心攻关与避坑总览
 
@@ -392,7 +392,7 @@ exitCode 和 timedOut 执行严格字符串解析，非法持久化值明确失�
 `RunControllerTest` 对 `ops.command` 与 `ops.Command` 的精确区分、
 `ProductWorkbenchLifecycleIntegrationTest` 的修改批准闭环。
 
-### 2.21 Monaco Diff 与 xterm 的当前实现边界
+### 2.21 Monaco Diff 与 xterm 的生命周期边界
 
 **【问题现象】** Monaco 不能直接把 Unified Diff 当作两份完整源码；xterm 若在后端或
 前端清洗字符串会丢失 ANSI。动态组件若不执行清理，会在重连和卸载后遗留 WebSocket、Terminal、
@@ -401,15 +401,20 @@ exitCode 和 timedOut 执行严格字符串解析，非法持久化值明确失�
 **【根因分析】** Diff 需要按 file/hunk/line type 重建 original/modified；终端需要把
 快照和增量映射到同一字符流；两者都有外部对象生命周期。
 
-**【解决方案/代码级实现】** 已批准的 Task 9-11 设计固定为：用 `parse-diff` 解析每个
+**【解决方案/代码级实现】** 用 `parse-diff` 解析每个
 hunk 的 normal/add/del 行生成两侧文本，解析失败保留原始 diff；xterm 收到快照先清空
 并写 stdout/stderr，收到 LOG 后原样写 `event.text`，用 `FitAddon` 与
 `ResizeObserver` 适配，切换 Run 或卸载时关闭全部资源。DOM 只进入只读 Monaco，禁止
 HTML 注入；截图只接受精确前缀 `data:image/png;base64,`。
 
-在本文证据基线中，这些前端组件尚未落地，因此这里只记录已批准设计和必须验证的失败
-模式，不把它们写成已解决事故。完成相关 TDD 与真实 Playwright 浏览器测试后，应补充
-实际问题、提交和回归测试证据。
+Task 11 进一步采用“编辑器面板首次按需加载、加载后保持挂载”的策略。直接在 Tab 切换时
+卸载 DiffEditor 会触发 `TextModel got disposed before DiffEditorWidget model got reset`；
+保持模型和 Widget 同生命周期后，既保留代码分包，也避免 Monaco 销毁竞态。终端面板始终
+挂载，防止终端快照早于 ref 建立而丢失。
+
+**【验证结果】** `Workbench.test.tsx` 覆盖三 Tab、Diff 文件、ANSI 终端容器、HITL 三条
+路径、证据版本和 DOM 安全；`ProductWorkbenchBrowserTest` 使用真实 Chromium 验证 Monaco
+可视行、xterm ANSI、320 像素宽 PNG、桌面/移动布局和 `pageErrors` 为空。
 
 ### 2.22 Node/jsdom 引擎与前端依赖安全冲突
 
@@ -474,6 +479,58 @@ build 也独立通过。
 **【验证结果】** `useRunWorkbench.test.tsx` 与 `TerminalSession.test.ts` 覆盖创建后两条
 连接、切换/卸载清理、ANSI 原样转发、409 单次重读、终态刷新、跨 Run 帧拒绝和二次 GET
 失败；Task 10 全量前端测试为 4 个文件、16 个测试，TypeScript 与 Vite build 同时通过。
+
+### 2.25 Vite 入口、Monaco CDN 与内部强制分包
+
+**【问题现象】** 初版 `index.html` 未引用 `src/main.tsx`，Vite 只转换两个模块却仍返回
+成功，真实页面没有“图 ID”。补入口后，`@monaco-editor/react` 默认 CDN 在离线测试中
+永久显示 `Loading...`。改成本地 Monaco 后入口 chunk 达到 2.75 MB；进一步按
+`codeSplitting.maxSize` 强拆 Monaco 内部模块，真实 Chromium 又在静态初始化器抛出
+`TypeError: te is not a constructor`。把配置移入异步 chunk 时继续使用裸
+`MonacoEnvironment`，浏览器还会抛 `ReferenceError: MonacoEnvironment is not defined`。
+
+**【根因分析】** Vite 构建成功只证明入口图可生成，不证明入口图包含应用。Monaco loader
+默认走外部 AMD 资源；本地 ESM 版本又具有大量带静态初始化顺序的内部模块，不能为消除
+体积告警而任意强拆。`MonacoEnvironment` 是全局对象属性，在独立异步 chunk 中不能依赖
+裸标识符解析。
+
+**【解决方案/代码级实现】** `index.html` 显式加载 `/src/main.tsx`；`MonacoEditors.tsx`
+从锁定的本地 `monaco-editor@0.53.0` 导入 editor API、Java/HTML contribution 与两个 Worker，
+并按依赖 README 使用 `self.MonacoEnvironment` 后调用 `loader.config({ monaco })`。Code 和
+Review 面板用 `React.lazy` 分离，主入口从 2.75 MB 降到约 222 KB；Monaco 保持单一按需
+vendor chunk，Vite 告警阈值按实测 2523.67 KB 设置为 2600 KB，不再破坏内部执行顺序。
+
+**【验证结果】** `npm run build` 转换 2494 个模块且无警告；真实 Spring Boot 静态资源测试
+实际加载 editor worker 与本地 Monaco chunk，`ProductWorkbenchBrowserTest` 通过并要求
+浏览器 `pageerror` 集合为空。
+
+### 2.26 非重放终端流与权威快照的启动时序
+
+**【问题现象】** 进程内日志总线不重放历史事件；若浏览器在终端 WebSocket 首帧
+`SNAPSHOT` 到达前就批准运行，审批后的短命 Ops 日志可能在订阅尚未建立时被丢弃。反过来，
+只等待界面出现审批框也不能证明终端订阅已经占用。
+
+**【根因分析】** Checkpoint 保存最终 stdout/stderr，但实时分片与连接状态属于另一条时序；
+审批可见和终端可接收不是同一个条件。
+
+**【解决方案/代码级实现】** 终端 Handler 继续先 `openSubscription` 再读 Checkpoint；工作台
+浏览器闭环在批准前条件等待 Trace 区精确显示 `PTY 已连接`，随后才提交修改审批。终态后
+Hook 再并行读取最新 Run 与 history，用 PostgreSQL 权威结果覆盖短暂前端状态。
+
+### 2.27 证据版本跟随与 Monaco 可视文本断言
+
+**【问题现象】** Run 从 version 0 前进到 Reviewer 完成版本后，画廊选择仍可能锁在旧版本，
+页面持续显示“等待 ReviewerNode 截图”。真实 Monaco 把可视空格渲染为 NBSP，直接对整个
+面板 `textContent.includes("Workbench evidence")` 会错误超时，即使 `.view-line` 已显示
+完整 DOM。
+
+**【根因分析】** 证据选择是派生于权威 Run 版本的 UI 状态，不能只在首次挂载初始化；
+Monaco 又是虚拟化编辑器，测试必须读取其可视行语义，不能把普通 DOM 文本假设套在上面。
+
+**【解决方案/代码级实现】** `ReviewEvidencePanel` 在精确 `runId` 或 `version` 变化时跟随最新
+版本，同时仍允许用户手动切换历史；浏览器测试等待 `.view-line`，仅在断言阶段把字符码 160
+规范化为空格，不修改生产 DOM 内容。`Workbench.test.tsx` 的权威版本前进回归测试和真实
+Chromium 测试共同覆盖这两层行为。
 
 ## 3. 面试话术提炼（STAR 法则）
 

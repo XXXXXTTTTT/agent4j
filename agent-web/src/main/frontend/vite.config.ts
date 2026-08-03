@@ -6,6 +6,7 @@ export default defineConfig({
   build: {
     outDir: '../../../target/classes/static',
     emptyOutDir: true,
+    chunkSizeWarningLimit: 2600,
   },
   test: {
     environment: 'jsdom',
