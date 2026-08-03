@@ -22,6 +22,8 @@ import java.util.function.Consumer;
 public final class PtyCommandExecutor {
 
     private static final Duration PROCESS_TERMINATION_TIMEOUT = Duration.ofSeconds(1);
+    private static final boolean WINDOWS =
+            System.getProperty("os.name").startsWith("Windows");
 
     /**
      * 执行 Bash 命令并捕获合并后的 PTY 输出。
@@ -92,7 +94,7 @@ public final class PtyCommandExecutor {
         boolean timedOut = !finished;
         if (timedOut) {
             terminateProcessTree(process);
-            awaitReader(readerThread, processOutput);
+            awaitReader(readerThread);
         } else {
             readerThread.join();
         }
@@ -143,34 +145,15 @@ public final class PtyCommandExecutor {
         process.waitFor(100, TimeUnit.MILLISECONDS);
     }
 
-    private void awaitReader(Thread readerThread, InputStream processOutput)
+    private void awaitReader(Thread readerThread)
             throws InterruptedException {
         readerThread.join(PROCESS_TERMINATION_TIMEOUT.toMillis());
         if (!readerThread.isAlive()) {
             return;
         }
         readerThread.interrupt();
-        CompletableFuture<Void> closeFuture = new CompletableFuture<>();
-        Thread.ofVirtual()
-                .name("pty-output-closer")
-                .start(() -> closeOutput(processOutput, closeFuture));
-        try {
-            closeFuture.get(100, TimeUnit.MILLISECONDS);
-        } catch (TimeoutException exception) {
-            // WinPTY 关闭可能继续等待原生读取锁，不能阻塞命令结果返回。
-        } catch (ExecutionException exception) {
-            throw new SandboxExecutionException("关闭 PTY 输出流失败", exception.getCause());
-        }
+        // Windows reader 使用 available() 轮询，销毁进程后可以在有限时间内退出。
         readerThread.join(100);
-    }
-
-    private void closeOutput(InputStream processOutput, CompletableFuture<Void> closeFuture) {
-        try {
-            processOutput.close();
-            closeFuture.complete(null);
-        } catch (IOException exception) {
-            closeFuture.completeExceptionally(exception);
-        }
     }
 
     private void readOutput(
@@ -184,7 +167,19 @@ public final class PtyCommandExecutor {
                 processOutput, StandardCharsets.UTF_8)) {
             char[] buffer = new char[1024];
             int count;
-            while ((count = reader.read(buffer)) >= 0) {
+            while (true) {
+                int available = WINDOWS ? availableBytes(process, processOutput) : 1;
+                if (WINDOWS && available == 0) {
+                    if (!process.isAlive()) {
+                        break;
+                    }
+                    Thread.sleep(10);
+                    continue;
+                }
+                count = reader.read(buffer);
+                if (count < 0) {
+                    break;
+                }
                 if (count == 0) {
                     continue;
                 }
@@ -200,6 +195,20 @@ public final class PtyCommandExecutor {
             }
         } catch (IOException exception) {
             readFailure.compareAndSet(null, exception);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private int availableBytes(PtyProcess process, InputStream processOutput)
+            throws IOException {
+        try {
+            return processOutput.available();
+        } catch (IOException exception) {
+            if (!process.isAlive()) {
+                return -1;
+            }
+            throw exception;
         }
     }
 }
