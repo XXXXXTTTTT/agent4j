@@ -595,6 +595,33 @@ Monaco worker 构建后的可用资源窗口不足以同时启动 5 个 jsdom wo
 **【证据】** 首次全量失败日志、固定 Node 单 fork `22/22`、最终 `mvn clean verify` 的
 `agent-web` 成功结果；`npm audit --audit-level=low` 返回 `0 vulnerabilities`。
 
+### 2.30 Phase 6.1 Codebase RAG 的向量维度、数组值语义与事务替换
+
+**【问题现象】** 初次接入真实 `pgvector/pgvector:pg16` 时，迁移和 SQL 可以启动，但
+round-trip 断言把数据库返回的 `ChildChunk` 与内存对象判定为不相等；读取
+`pg_attribute.atttypmod - 4` 又把声明的 `vector(8)` 误报为 4 维。向量查询的反方向距离
+还可能让 `1 - distance` 为负数，无法满足命中记录的非负分数约束。
+
+**【根因分析】** Java record 对 `float[]` 使用引用相等，不能表达向量值语义；该镜像的
+vector typmod 直接返回声明维度，不能套用其他 PostgreSQL 扩展的 typmod 偏移假设；余弦
+距离的范围允许大于 1，原始相似度表达式需要显式边界处理。另一个边界是 ingest 必须先
+完成全部 AST 切片和八维 embedding 校验，再调用同一个 `RagStore.replaceRepository`，否则
+失败会产生半套索引。
+
+**【解决方案/代码级实现】** `ChildChunk` 和 `RagQuery` 对数组做构造器/accessor 防御性
+复制，并覆盖 `equals/hashCode` 使用 `Arrays.equals/hashCode`；JDBC 通过精确的
+`atttypmod` 读取维度，SQL 用 `greatest(0.0, 1 - (embedding <=> query))` 保持非负；
+迁移固定 `vector(8)`、GIN `search_vector` 和 HNSW `vector_cosine_ops`，所有 SQL 值都用
+绑定参数。`CodebaseChunker` 使用 JavaParser 发现顶层/嵌套类，再调用既有 `AstService` 保留
+完整限定名、重载 declaration 和起止行号；方法 symbol 固定为
+`<qualifiedClassName>#<MethodInfo.declaration>`，原始声明中的前导空格也不被改写。
+
+**【验证结果】** `JdbcRagStoreIntegrationTest` 在 Docker Engine `27.4.0` 上实际拉取并
+执行 `pgvector/pgvector:pg16`，5 项测试全部通过：扩展/表/GIN/HNSW、向量和词法召回、
+repository 隔离、外键失败回滚、Java fixture 两个重载方法、混合排序与同库 replace。
+`Bm25ScorerTest` 3 项和 `HybridRagRetrieverTest` 3 项在 JDK `21.0.2` 下全部通过；没有
+发生 assumption skip。
+
 ## 3. 面试话术提炼（STAR 法则）
 
 以下话术只陈述仓库已有证据，不使用无法验证的吞吐量或线上故障数字。面试时可以结合
