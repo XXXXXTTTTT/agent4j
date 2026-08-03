@@ -31,6 +31,26 @@ public record RagQuery(
                 : Arrays.copyOf(queryEmbedding, queryEmbedding.length);
     }
 
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof RagQuery that)) {
+            return false;
+        }
+        return limit == that.limit
+                && repositoryId.equals(that.repositoryId)
+                && query.equals(that.query)
+                && Arrays.equals(queryEmbedding, that.queryEmbedding);
+    }
+
+    @Override
+    public int hashCode() {
+        int result = java.util.Objects.hash(repositoryId, query, limit);
+        return 31 * result + Arrays.hashCode(queryEmbedding);
+    }
+
     private static String requireText(String value, String message) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(message);

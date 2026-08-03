@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -219,6 +220,34 @@ class CodebaseChunkerTest {
             this.repositoryId = repositoryId;
             this.parents = List.copyOf(parents);
             this.children = List.copyOf(children);
+        }
+
+        @Override
+        public List<com.agent.rag.store.RetrievalRow> findByVector(
+                String repositoryId, float[] queryEmbedding, int limit) {
+            return List.of();
+        }
+
+        @Override
+        public List<com.agent.rag.store.RetrievalRow> findByLexical(
+                String repositoryId, String query, int limit) {
+            return List.of();
+        }
+
+        @Override
+        public long countChildren(String repositoryId) {
+            return 0;
+        }
+
+        @Override
+        public double averageDocumentLength(String repositoryId) {
+            return 0;
+        }
+
+        @Override
+        public Map<String, Long> documentFrequencies(
+                String repositoryId, List<String> terms) {
+            return Map.of();
         }
     }
 }

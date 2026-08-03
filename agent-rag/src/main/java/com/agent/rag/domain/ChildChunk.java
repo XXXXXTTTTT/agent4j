@@ -47,6 +47,34 @@ public record ChildChunk(
         return Arrays.copyOf(embedding, embedding.length);
     }
 
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof ChildChunk that)) {
+            return false;
+        }
+        return ordinal == that.ordinal
+                && startLine == that.startLine
+                && endLine == that.endLine
+                && Objects.equals(childId, that.childId)
+                && Objects.equals(parentId, that.parentId)
+                && Objects.equals(repositoryId, that.repositoryId)
+                && Objects.equals(path, that.path)
+                && Objects.equals(symbol, that.symbol)
+                && Objects.equals(content, that.content)
+                && Arrays.equals(embedding, that.embedding);
+    }
+
+    @Override
+    public int hashCode() {
+        int result = Objects.hash(
+                childId, parentId, repositoryId, path, symbol,
+                ordinal, content, startLine, endLine);
+        return 31 * result + Arrays.hashCode(embedding);
+    }
+
     private static String requireRelativePath(String value) {
         String path = requireText(value, "path 不能为空");
         if (Path.of(path).isAbsolute() || path.indexOf('\\') >= 0) {
