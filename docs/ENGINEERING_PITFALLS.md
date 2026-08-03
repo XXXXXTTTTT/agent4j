@@ -759,6 +759,15 @@ Git 语义，应用后对返回路径再检查一次。冲突测试验证原文�
 | `ca0b94f` | pgvector vector(8)、GIN/HNSW、事务 replace 与回滚 | `JdbcRagStoreIntegrationTest` 5 项真实容器测试 |
 | `a3eb48f` | BM25 与三路混合稳定排序 | `Bm25ScorerTest` 3 项、`HybridRagRetrieverTest` 3 项 |
 | `bc17890` | Java fixture ingest 到混合检索闭环 | `JdbcRagStoreIntegrationTest` 的重载、隔离和替换断言 |
+| `be48c4e` | 冻结 Phase 6.2 记忆领域、V2 schema 与 Planner 注入边界 | `2026-08-03-phase-6-2-memory-design.md` |
+| `973af85` | 固化 Phase 6.2 TDD 实施任务与验证门禁 | `2026-08-03-phase-6-2-memory.md` |
+| `51c09b3` | 核心记忆上下文构造器注入端口 | `MemoryContextTest` 3 项 |
+| `a2176ce` | 三类记忆协议与严格模型 JSON 提取 | `MemoryDomainTest`、`ModelMemoryExtractorTest` |
+| `fa040f7` | V2 pgvector 记忆表、upsert、GIN/HNSW 与事务回滚 | `JdbcMemoryStoreIntegrationTest` |
+| `33779ec` | MemoryManager hash、embedding、混合召回与上下文适配 | `MemoryManagerTest` 5 项 |
+| `e239294` | PlannerNode 记忆 Prompt 注入与错误堆栈 | `PlannerNodeTest` 3 项 |
+| `7a160b7` | 真实记忆捕获和 Planner-Coder-Ops 图闭环 | `MemoryPlannerGraphTest`、V2 manager 集成断言 |
+| `09e6d72` | 记录 Phase 6.2 技术复盘 | 本节 2.31 与验收证据 |
 
 ### 4.2 持续维护门禁
 
@@ -806,3 +815,25 @@ Phase 5 后续每个里程碑提交前，都要同步检查本文：
   `winpty-agent`、Bash、Playwright 或 Surefire 残留进程；工作区 target、node_modules 和
   `.frontend` 均由 `.gitignore` 排除。首次全量失败的一个旧 Docker 管理容器已按精确 ID
   移除，随后 clean verify 复验通过。
+
+### 4.5 Phase 6.2 最终验收记录
+
+2026-08-03 在隔离分支 `feat/phase-6-2-memory`、显式 JDK `21.0.2`、Maven `3.8.8` 和
+Docker Desktop Engine `27.4.0` 环境执行：
+
+- 模块级 `mvn -pl agent-core,agent-rag -am clean verify` 返回 `BUILD SUCCESS`；根目录
+  `mvn clean verify` 第二次执行返回 `BUILD SUCCESS`，总耗时 `04:37`。
+- Java 测试报告逐模块统计为：`agent-sandbox 37`、`agent-core 91`、`agent-rag 37`、
+  `agent-web 47`，合计 `212`；失败、错误、跳过均为 `0`。新增的真实
+  `JdbcMemoryStoreIntegrationTest` 5 项使用 `pgvector/pgvector:pg16` 实际启动，未发生
+  assumption skip；`MemoryPlannerGraphTest` 验证 `[planner, coder, ops]` 闭环。
+- 前端生命周期执行 Vitest `5` 个文件、`22` 个测试，全部通过；独立执行
+  `npm audit --audit-level=low` 返回 `found 0 vulnerabilities`。
+- 依赖扫描未发现 `langchain4j` 或 `langgraph4j`；`git diff --check` 通过；`.gitignore`
+  继续排除 `target/`、`node_modules/`、`.frontend/`、日志和密钥文件。
+- 首次根目录门禁受到外层 `120` 秒工具超时影响，命令已推进到前端测试但输出未返回；检查
+  进程确认 Maven、Surefire 和 Node 随后自然退出、没有残留。随后用 `600` 秒工具上限重新
+  执行同一 `mvn clean verify`，取得上述明确 `BUILD SUCCESS`。
+- 验收后 `docker ps -a --filter label=com.agent.runtime.managed=true` 无输出，未发现本阶段
+  Maven、WinPTY、Bash 或 Playwright 进程；工作区状态干净。其他项目已有 Docker 容器未纳入
+  本阶段清理范围。
