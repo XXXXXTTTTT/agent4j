@@ -138,7 +138,9 @@ public final class PtyCommandExecutor {
         } finally {
             process.destroyForcibly();
         }
-        process.waitFor();
+        // ProcessHandle 已确认 Bash 及其后代退出；WinPTY 包装进程的 waitFor
+        // 在 Windows 上可能阻塞约 30 秒，因此这里只做有界等待。
+        process.waitFor(100, TimeUnit.MILLISECONDS);
     }
 
     private void awaitReader(Thread readerThread, InputStream processOutput)
@@ -147,15 +149,27 @@ public final class PtyCommandExecutor {
         if (!readerThread.isAlive()) {
             return;
         }
+        readerThread.interrupt();
+        CompletableFuture<Void> closeFuture = new CompletableFuture<>();
+        Thread.ofVirtual()
+                .name("pty-output-closer")
+                .start(() -> closeOutput(processOutput, closeFuture));
+        try {
+            closeFuture.get(100, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException exception) {
+            // WinPTY 关闭可能继续等待原生读取锁，不能阻塞命令结果返回。
+        } catch (ExecutionException exception) {
+            throw new SandboxExecutionException("关闭 PTY 输出流失败", exception.getCause());
+        }
+        readerThread.join(100);
+    }
+
+    private void closeOutput(InputStream processOutput, CompletableFuture<Void> closeFuture) {
         try {
             processOutput.close();
+            closeFuture.complete(null);
         } catch (IOException exception) {
-            throw new SandboxExecutionException("关闭 PTY 输出流失败", exception);
-        }
-        readerThread.interrupt();
-        readerThread.join(PROCESS_TERMINATION_TIMEOUT.toMillis());
-        if (readerThread.isAlive()) {
-            throw new SandboxExecutionException("PTY 输出读取线程未在限定时间内退出");
+            closeFuture.completeExceptionally(exception);
         }
     }
 
