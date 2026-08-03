@@ -4,17 +4,24 @@ import com.pty4j.PtyProcess;
 import com.pty4j.PtyProcessBuilder;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /** 使用 pty4j 执行一次本地 Bash 命令。 */
 public final class PtyCommandExecutor {
+
+    private static final Duration PROCESS_TERMINATION_TIMEOUT = Duration.ofSeconds(1);
 
     /**
      * 执行 Bash 命令并捕获合并后的 PTY 输出。
@@ -69,19 +76,26 @@ public final class PtyCommandExecutor {
         StringBuilder stdout = new StringBuilder();
         AtomicReference<IOException> readFailure = new AtomicReference<>();
         AtomicReference<RuntimeException> consumerFailure = new AtomicReference<>();
+        InputStream processOutput = process.getInputStream();
 
         Thread readerThread = Thread.ofVirtual()
                 .name("pty-output-reader")
                 .start(() -> readOutput(
-                        process, stdout, logConsumer, readFailure, consumerFailure));
+                        process,
+                        processOutput,
+                        stdout,
+                        logConsumer,
+                        readFailure,
+                        consumerFailure));
 
         boolean finished = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
         boolean timedOut = !finished;
         if (timedOut) {
-            process.destroyForcibly();
-            process.waitFor();
+            terminateProcessTree(process);
+            awaitReader(readerThread, processOutput);
+        } else {
+            readerThread.join();
         }
-        readerThread.join();
 
         if (consumerFailure.get() != null) {
             throw new SandboxExecutionException("PTY 日志接收器执行失败", consumerFailure.get());
@@ -94,14 +108,66 @@ public final class PtyCommandExecutor {
         return new CommandResult(exitCode, stdout.toString(), "", timedOut);
     }
 
+    private void terminateProcessTree(PtyProcess process) throws InterruptedException {
+        ProcessHandle root = ProcessHandle.of(process.pid()).orElse(null);
+        List<ProcessHandle> descendants = root == null
+                ? List.of()
+                : root.descendants().toList();
+        descendants.reversed().stream()
+                .filter(ProcessHandle::isAlive)
+                .forEach(ProcessHandle::destroyForcibly);
+        if (root != null && root.isAlive()) {
+            root.destroyForcibly();
+        }
+
+        CompletableFuture<Void> descendantsExited = CompletableFuture.allOf(
+                java.util.stream.Stream.concat(
+                                root == null ? java.util.stream.Stream.empty()
+                                        : java.util.stream.Stream.of(root),
+                                descendants.stream())
+                        .map(ProcessHandle::onExit)
+                        .toArray(CompletableFuture[]::new));
+        try {
+            descendantsExited.get(
+                    PROCESS_TERMINATION_TIMEOUT.toMillis(),
+                    TimeUnit.MILLISECONDS);
+        } catch (ExecutionException exception) {
+            throw new SandboxExecutionException("等待 PTY 子进程退出失败", exception.getCause());
+        } catch (TimeoutException exception) {
+            throw new SandboxExecutionException("PTY 子进程未在限定时间内退出", exception);
+        } finally {
+            process.destroyForcibly();
+        }
+        process.waitFor();
+    }
+
+    private void awaitReader(Thread readerThread, InputStream processOutput)
+            throws InterruptedException {
+        readerThread.join(PROCESS_TERMINATION_TIMEOUT.toMillis());
+        if (!readerThread.isAlive()) {
+            return;
+        }
+        try {
+            processOutput.close();
+        } catch (IOException exception) {
+            throw new SandboxExecutionException("关闭 PTY 输出流失败", exception);
+        }
+        readerThread.interrupt();
+        readerThread.join(PROCESS_TERMINATION_TIMEOUT.toMillis());
+        if (readerThread.isAlive()) {
+            throw new SandboxExecutionException("PTY 输出读取线程未在限定时间内退出");
+        }
+    }
+
     private void readOutput(
             PtyProcess process,
+            InputStream processOutput,
             StringBuilder stdout,
             Consumer<TerminalLog> logConsumer,
             AtomicReference<IOException> readFailure,
             AtomicReference<RuntimeException> consumerFailure) {
         try (Reader reader = new InputStreamReader(
-                process.getInputStream(), StandardCharsets.UTF_8)) {
+                processOutput, StandardCharsets.UTF_8)) {
             char[] buffer = new char[1024];
             int count;
             while ((count = reader.read(buffer)) >= 0) {

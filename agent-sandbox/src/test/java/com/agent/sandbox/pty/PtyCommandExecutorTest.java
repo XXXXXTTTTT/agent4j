@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -98,5 +99,20 @@ class PtyCommandExecutorTest {
         assertThat(result.timedOut()).isTrue();
         assertThat(Duration.ofNanos(System.nanoTime() - startedAt))
                 .isLessThan(Duration.ofSeconds(2));
+    }
+
+    @Test
+    void releasesWorkingDirectoryBeforeReturningFromTimeout() throws IOException {
+        Path timeoutWorkingDirectory = Files.createDirectory(
+                workingDirectory.resolve("timeout-workdir"));
+
+        CommandResult result = executor.execute(
+                new PtyTarget(BASH_EXECUTABLE, timeoutWorkingDirectory),
+                "nohup sleep 5 >/dev/null 2>&1 & wait",
+                Duration.ofMillis(100),
+                ignored -> { });
+
+        assertThat(result.timedOut()).isTrue();
+        assertThat(Files.deleteIfExists(timeoutWorkingDirectory)).isTrue();
     }
 }
