@@ -44,7 +44,10 @@ public interface EmbeddingModel {
 
 `ChildChunk` 是父块内的检索单元，字段为 `childId`、`parentId`、`repositoryId`、`path`、
 `symbol`、`ordinal`、`content`、`startLine`、`endLine`、`embedding`。`ordinal` 从 0 开始，
-同一父块内严格递增。
+同一父块内严格递增。Java 方法子块的 `symbol` 精确为
+`<qualifiedClassName>#<MethodInfo.declaration>`；没有方法的 Java 类子块使用类完整限定名；
+非 Java 子块使用 null。Java 父块的 `metadataJson` 固定为 `{"kind":"JAVA_CLASS"}`，
+非 Java 父块固定为 `{"kind":"TEXT_FILE"}`。
 
 `RagQuery` 字段为 `repositoryId`、`query`、`queryEmbedding`、`limit`。queryEmbedding 为
 null 时由 `EmbeddingModel` 计算；非 null 时仍校验八维协议。limit 范围固定为 1 到 100。
