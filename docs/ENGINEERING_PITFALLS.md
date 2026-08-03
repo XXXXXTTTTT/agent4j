@@ -33,7 +33,7 @@ pty4j、Playwright 与 Resilience4j。这样做的直接价值是：
 | Playwright 线程亲和性 | 在不同异步线程创建和使用 `Page`、`BrowserContext`，触发线程安全问题 | 全生命周期绑定一个专属单线程虚拟线程执行器 | `PlaywrightBrowserService`、Phase 3 规格、真实 Chromium 测试 |
 | AST 与增量补丁边界 | 路径穿越写出仓库、冲突补丁产生部分修改、错误校验顺序掩盖“非 Git 仓库”根因 | JGit `Patch` 预解析、应用前后双重根目录校验、真实 Git 冲突测试 | `73e0baa`、`72a99e0`、`AstServiceDiffTest` |
 | Docker/PTY 超时与资源残留 | PTY 进程超时后继续运行；Docker 容器退出、超时或回调失败后残留 | 强杀进程/容器，Docker 在 `finally` 强制删除，清理错误进入 suppressed | `PtyCommandExecutorTest`、`DockerCommandExecutorTest` |
-| Checkpoint 与实时事件一致性 | 实时事件发布失败反向破坏持久化；并发审批追加两个版本；数据库时间精度导致对象往返不等 | PostgreSQL 唯一权威源、`latest_version` 乐观锁、时间统一到微秒、发布失败不回滚 | `c70fcd5`、`JdbcCheckpointerTest`、`AgentRunServiceTest` |
+| Checkpoint 与实时事件一致性 | 实时事件发布失败反向破坏持久化；中断状态先可见而 `APPROVED` 事件越过 `INTERRUPTED`；并发审批追加两个版本；数据库时间精度导致对象往返不等 | PostgreSQL 唯一权威源、审批前等待当前 Run 的中断事件发布、`latest_version` 乐观锁、时间统一到微秒、发布失败不回滚 | `c70fcd5`、`AgentRunServiceTest`、`JdbcCheckpointerTest` |
 | 快照与实时流竞态 | WebSocket 先读快照再订阅，快照查询期间发布的事件永久丢失；慢客户端拖垮其他连接 | 先占用有界订阅再读快照；每订阅者独立 1024 队列，溢出只关闭自身 | `0ce305c`、`b6174bb`、`2062691` |
 
 ## 2. 各阶段踩坑与技术细节深度复盘
@@ -172,12 +172,16 @@ old/new path 做标准化并验证仍在根目录；之后才把同一字节交�
 
 **【解决方案/代码级实现】** `PtyCommandExecutor` 从 pty4j 明确提供的 `pid()` 构造
 `ProcessHandle`，在关闭 WinPTY 前快照并反向强杀 Bash 后代，使用 `onExit()` 和 1 秒上限
-等待进程树；随后关闭 PTY 输出流并中断虚拟读取线程，读取线程再等待同一上限。超时结果仍
-严格返回 `exitCode=-1`、`timedOut=true`，正常路径继续完整排空输出。新增工作目录释放回归
-测试，并以两次全模块及一次全量 Maven 实测验证。
+等待进程树。不能再调用无界的 `WinPtyProcess.waitFor()`：它等待 WinPTY 原生包装进程时
+可能额外阻塞约 30 秒，因此只做 100ms 有界等待。WinPTY 输入流的原生 `read` 与 `close()`
+共享读取锁，超时路径不能依赖同步关闭；Windows reader 改用 `available()` 轮询，进程销毁
+后在有界 join 内退出，主流程不再创建失控的异步 closer。超时结果仍严格返回
+`exitCode=-1`、`timedOut=true`，正常路径继续完整排空输出。新增工作目录释放回归测试，
+并以 PTY 全类实测验证清理延迟。
 
 **【证据】** `PtyCommandExecutorTest.releasesWorkingDirectoryBeforeReturningFromTimeout`、
-`terminatesProcessAtTimeout`；两次 `mvn -pl agent-sandbox test` 均为 `37/37`。
+`terminatesProcessAtTimeout`；`mvn -pl agent-sandbox -Dtest=PtyCommandExecutorTest test`
+实测 `5/5` 通过，超时用例耗时 `1.66s`，未再出现 30 秒等待。
 
 ### 2.9 Docker 一次性容器的清理必须覆盖所有出口
 
@@ -317,6 +321,25 @@ where run_id = :runId
 
 **【证据】** `JdbcCheckpointerTest` 的两个并发 append 只有一个成功；
 `AgentRunServiceTest.rejectsStaleOrTerminalApprovalAndAllowsOnlyOneConcurrentDecision`。
+
+### 2.15a Trace 事件顺序不能依赖 Checkpoint 观察时机
+
+**【问题现象】** `WAITING_APPROVAL` 追加成功后，调用方可以立即提交审批；如果
+`INTERRUPTED` 还在异步发布，`APPROVED` 或 `REJECTED` 会先到达实时订阅者，前端看到的
+生命周期顺序与 Checkpoint 版本顺序相反。全量验收曾复现
+`[APPROVED, INTERRUPTED, NODE_STARTED, NODE_COMPLETED, COMPLETED]`。
+
+**【根因分析】** Checkpointer 的状态通知和 Trace publisher 是两条独立路径。原实现先
+追加 `WAITING_APPROVAL` 再发布中断事件，`awaitStatus` 只保证持久化可见，不保证发布调用已
+返回；审批入口因此能与中断发布并发。
+
+**【解决方案/代码级实现】** `AgentRunService` 为每个 Run 注册一次性
+`CompletableFuture`，再追加等待快照并发布 `TraceEvent.Interrupted`；审批/拒绝在追加和发布
+自身事件前等待该 Future。Future 在发布调用返回后完成；Checkpoint 追加失败时完成异常并
+移除，因而不倒置 SSOT 与事件的写入顺序，也不把事件总线当作状态存储。
+
+**【证据】** `AgentRunServiceTest.interruptsThenApprovesAndBypassesOnlyTheInterruptedNode`
+验证精确事件顺序；本次修复后的 `agent-core` 测试为 `85/85`。
 
 ### 2.16 HITL 恢复不是简单地“重新跑图”
 
@@ -698,3 +721,7 @@ Phase 5 后续每个里程碑提交前，都要同步检查本文：
 - 资源清理：测试后没有发现本项目命令行、Playwright、Vitest、Surefire 或 WinPTY 残留进程；
   `docker ps -a` 未发现本项目创建的 PostgreSQL 或一次性沙箱容器。工作区中已有的其他
   Docker 容器未纳入本项目清理范围。
+- 复验过程中的两个真实竞态已纳入代码与测试门禁：首次全量运行暴露 WinPTY 超时清理约
+  30 秒阻塞，随后又暴露 `APPROVED` 越过 `INTERRUPTED` 的异步发布顺序；分别采用有界
+  PTY reader 轮询和按 Run 等待中断事件发布修复，最终 `mvn clean verify` 于 `17:43:34`
+  返回 `BUILD SUCCESS`。
