@@ -22,6 +22,8 @@ import java.util.function.Consumer;
 public final class PtyCommandExecutor {
 
     private static final Duration PROCESS_TERMINATION_TIMEOUT = Duration.ofSeconds(1);
+    private static final Duration WINDOWS_OUTPUT_DRAIN_TIMEOUT = Duration.ofMillis(250);
+    private static final Duration WINDOWS_OUTPUT_POLL_INTERVAL = Duration.ofMillis(10);
     private static final boolean WINDOWS =
             System.getProperty("os.name").startsWith("Windows");
 
@@ -167,15 +169,22 @@ public final class PtyCommandExecutor {
                 processOutput, StandardCharsets.UTF_8)) {
             char[] buffer = new char[1024];
             int count;
+            long processExitObservedAt = -1L;
             while (true) {
                 int available = WINDOWS ? availableBytes(process, processOutput) : 1;
                 if (WINDOWS && available == 0) {
-                    if (!process.isAlive()) {
+                    if (process.isAlive()) {
+                        processExitObservedAt = -1L;
+                    } else if (processExitObservedAt < 0L) {
+                        processExitObservedAt = System.nanoTime();
+                    } else if (Duration.ofNanos(System.nanoTime() - processExitObservedAt)
+                            .compareTo(WINDOWS_OUTPUT_DRAIN_TIMEOUT) >= 0) {
                         break;
                     }
-                    Thread.sleep(10);
+                    Thread.sleep(WINDOWS_OUTPUT_POLL_INTERVAL);
                     continue;
                 }
+                processExitObservedAt = -1L;
                 count = reader.read(buffer);
                 if (count < 0) {
                     break;
