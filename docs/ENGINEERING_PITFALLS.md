@@ -882,4 +882,11 @@ Docker Desktop Engine `27.4.0` 环境执行：
 
 ### 6.3.6 证据记录
 
-本阶段提交为 `ba5bc68`、`3d5aa20`、`b87cafd`、`5bdf69e`、`6f41cf0`、`3990763`、`3b998d8` 和 `156718c`；对应协议、上下文、路由、Span、OTLP、发布链、类型门禁和失败归因测试均已执行。根目录全量验收的实际输出将在完成后补充，不把计划内容写成已完成事实。
+本阶段提交为 `ba5bc68`、`3d5aa20`、`b87cafd`、`5bdf69e`、`6f41cf0`、`3990763`、`3b998d8`、`156718c` 和 `22ed013`；对应协议、上下文、路由、Span、OTLP、发布链、类型门禁、失败归因和迁移隔离测试均已执行。
+
+2026-08-04 在显式 JDK `21.0.2` 和 Docker Desktop Engine `27.4.0` 环境执行根目录 `mvn clean verify`，返回退出码 `0`：
+
+- Surefire XML 汇总 `239` 项 Java 测试，失败、错误、跳过均为 `0`；真实 Docker、PTY、Chromium、PostgreSQL 与 pgvector 测试均在本轮执行。
+- Vitest `5` 个文件、`22` 项测试全部通过；`npm audit --audit-level=low` 返回 `found 0 vulnerabilities`。
+- 首轮根构建发现 `agent-rag` 依赖引入两个 `V1` Flyway 迁移，修复为独立 `db/rag-migration` 资源路径后，Web PostgreSQL 集成测试和第二次根构建通过。
+- 禁止依赖扫描未发现 `langchain4j` 或 `langgraph4j`；`git diff --check` 通过；`docker ps -a --filter label=com.agent.runtime.managed=true` 无输出。
