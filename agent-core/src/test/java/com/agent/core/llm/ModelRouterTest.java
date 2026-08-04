@@ -1,5 +1,10 @@
 package com.agent.core.llm;
 
+import com.agent.core.observability.ModelCallSpan;
+import com.agent.core.observability.ModelCallStart;
+import com.agent.core.observability.ModelCallSuccess;
+import com.agent.core.observability.ModelCallObserver;
+import com.agent.core.observability.ModelUsage;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -14,6 +19,7 @@ import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -83,6 +89,105 @@ class ModelRouterTest {
                 "vision-fallback-model",
                 "fallback-result");
         assertThat(primary.circuitBreaker().getMetrics().getNumberOfFailedCalls()).isEqualTo(1);
+    }
+
+    @Test
+    void observesEachEndpointAttemptAndTokenUsage() {
+        EndpointFixture code = endpoint("code-primary", "code-model");
+        EndpointFixture primary = endpoint("vision-primary", "vision-primary-model");
+        EndpointFixture fallback = endpoint("vision-fallback", "vision-fallback-model");
+        EndpointFixture classification = endpoint("classification-primary", "quick-model");
+        expectBadGateway(primary);
+        expectSuccessWithUsage(fallback, "fallback-result", 11, 7, 18);
+        RecordingObserver observer = new RecordingObserver();
+        ModelRouter router = new ModelRouter(Map.of(
+                TaskType.CODE, List.of(code.endpoint()),
+                TaskType.VISION, List.of(primary.endpoint(), fallback.endpoint()),
+                TaskType.QUICK_CLASSIFICATION, List.of(classification.endpoint())), observer);
+
+        RoutedCompletion result = router.complete(TaskType.VISION, request());
+
+        assertRoutedTo(result, "vision-fallback", "vision-fallback-model", "fallback-result");
+        assertThat(observer.starts()).extracting(ModelCallStart::endpointName)
+                .containsExactly("vision-primary", "vision-fallback");
+        assertThat(observer.starts()).extracting(ModelCallStart::requestedModel)
+                .containsExactly("vision-primary-model", "vision-fallback-model");
+        assertThat(observer.failures()).hasSize(1);
+        assertThat(observer.successes()).containsExactly(new ModelCallSuccess(
+                Optional.of("vision-fallback-model"),
+                Optional.of(new ModelUsage(11, 7, 18))));
+        assertThat(observer.closeCount()).isEqualTo(2);
+    }
+
+    @Test
+    void mapsMissingUsageToEmptyOptional() {
+        EndpointFixture code = endpoint("code-primary", "code-model");
+        EndpointFixture vision = endpoint("vision-primary", "vision-model");
+        EndpointFixture classification = endpoint("classification-primary", "quick-model");
+        expectSuccess(code, "code-result");
+        RecordingObserver observer = new RecordingObserver();
+        ModelRouter router = new ModelRouter(Map.of(
+                TaskType.CODE, List.of(code.endpoint()),
+                TaskType.VISION, List.of(vision.endpoint()),
+                TaskType.QUICK_CLASSIFICATION, List.of(classification.endpoint())), observer);
+
+        router.complete(TaskType.CODE, request());
+
+        assertThat(observer.successes()).containsExactly(new ModelCallSuccess(
+                Optional.of("code-model"), Optional.empty()));
+    }
+
+    @Test
+    void isolatesObserverStartFailureFromSuccessfulRouting() {
+        EndpointFixture code = endpoint("code-primary", "code-model");
+        EndpointFixture vision = endpoint("vision-primary", "vision-model");
+        EndpointFixture classification = endpoint("classification-primary", "quick-model");
+        expectSuccess(code, "code-result");
+        ModelCallObserver observer = ignored -> {
+            throw new IllegalStateException("observer start failed");
+        };
+        ModelRouter router = new ModelRouter(Map.of(
+                TaskType.CODE, List.of(code.endpoint()),
+                TaskType.VISION, List.of(vision.endpoint()),
+                TaskType.QUICK_CLASSIFICATION, List.of(classification.endpoint())), observer);
+
+        RoutedCompletion result = router.complete(TaskType.CODE, request());
+
+        assertRoutedTo(result, "code-primary", "code-model", "code-result");
+    }
+
+    @Test
+    void isolatesSpanCallbackFailuresFromFallbackRouting() {
+        EndpointFixture code = endpoint("code-primary", "code-model");
+        EndpointFixture primary = endpoint("vision-primary", "vision-primary-model");
+        EndpointFixture fallback = endpoint("vision-fallback", "vision-fallback-model");
+        EndpointFixture classification = endpoint("classification-primary", "quick-model");
+        expectBadGateway(primary);
+        expectSuccess(fallback, "fallback-result");
+        ModelCallObserver observer = ignored -> new ModelCallSpan() {
+            @Override
+            public void succeed(ModelCallSuccess success) {
+                throw new IllegalStateException("observer success failed");
+            }
+
+            @Override
+            public void fail(Throwable failure) {
+                throw new IllegalStateException("observer failure failed");
+            }
+
+            @Override
+            public void close() {
+                throw new IllegalStateException("observer close failed");
+            }
+        };
+        ModelRouter router = new ModelRouter(Map.of(
+                TaskType.CODE, List.of(code.endpoint()),
+                TaskType.VISION, List.of(primary.endpoint(), fallback.endpoint()),
+                TaskType.QUICK_CLASSIFICATION, List.of(classification.endpoint())), observer);
+
+        RoutedCompletion result = router.complete(TaskType.VISION, request());
+
+        assertRoutedTo(result, "vision-fallback", "vision-fallback-model", "fallback-result");
     }
 
     @Test
@@ -301,6 +406,47 @@ class ModelRouterTest {
                         MediaType.APPLICATION_JSON));
     }
 
+    private void expectSuccessWithUsage(
+            EndpointFixture fixture,
+            String contentText,
+            int promptTokens,
+            int completionTokens,
+            int totalTokens) {
+        fixture.server().expect(once(), requestTo(fixture.baseUrl() + CHAT_COMPLETIONS_PATH))
+                .andExpect(content().json("""
+                        {
+                          "model": "%s",
+                          "messages": [{"role": "user", "content": "route"}],
+                          "tools": [],
+                          "stream": false
+                        }
+                        """.formatted(fixture.endpoint().model()), true))
+                .andRespond(withSuccess("""
+                        {
+                          "id": "response-id",
+                          "object": "chat.completion",
+                          "created": 1720000000,
+                          "model": "%s",
+                          "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "%s"},
+                            "finish_reason": "stop"
+                          }],
+                          "usage": {
+                            "prompt_tokens": %d,
+                            "completion_tokens": %d,
+                            "total_tokens": %d
+                          }
+                        }
+                        """.formatted(
+                                fixture.endpoint().model(),
+                                contentText,
+                                promptTokens,
+                                completionTokens,
+                                totalTokens),
+                        MediaType.APPLICATION_JSON));
+    }
+
     private void expectBadGateway(EndpointFixture fixture) {
         fixture.server().expect(once(), requestTo(fixture.baseUrl() + CHAT_COMPLETIONS_PATH))
                 .andRespond(withStatus(HttpStatus.BAD_GATEWAY)
@@ -339,5 +485,50 @@ class ModelRouterTest {
             MockRestServiceServer server,
             LlmClient client,
             CircuitBreaker circuitBreaker) {
+    }
+
+    private static final class RecordingObserver implements ModelCallObserver {
+
+        private final List<ModelCallStart> starts = new ArrayList<>();
+        private final List<ModelCallSuccess> successes = new ArrayList<>();
+        private final List<Throwable> failures = new ArrayList<>();
+        private int closeCount;
+
+        @Override
+        public ModelCallSpan start(ModelCallStart start) {
+            starts.add(start);
+            return new ModelCallSpan() {
+                @Override
+                public void succeed(ModelCallSuccess success) {
+                    successes.add(success);
+                }
+
+                @Override
+                public void fail(Throwable failure) {
+                    failures.add(failure);
+                }
+
+                @Override
+                public void close() {
+                    closeCount++;
+                }
+            };
+        }
+
+        private List<ModelCallStart> starts() {
+            return starts;
+        }
+
+        private List<ModelCallSuccess> successes() {
+            return successes;
+        }
+
+        private List<Throwable> failures() {
+            return failures;
+        }
+
+        private int closeCount() {
+            return closeCount;
+        }
     }
 }
