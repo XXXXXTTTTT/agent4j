@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -67,6 +68,101 @@ class StateGraphTest {
                     .isEqualTo(new NodeExecutionContext(runId, "work"));
             assertThat(virtualThread).isTrue();
         }
+    }
+
+    @Test
+    void exposesCurrentContextInsideNodeVirtualThread() {
+        UUID runId = UUID.randomUUID();
+        AtomicReference<Optional<NodeExecutionContext>> currentContext =
+                new AtomicReference<>();
+        AtomicBoolean virtualThread = new AtomicBoolean();
+        Node node = new Node() {
+            @Override
+            public AgentState execute(AgentState state) {
+                throw new AssertionError("不应调用无上下文入口");
+            }
+
+            @Override
+            public AgentState execute(NodeExecutionContext context, AgentState state) {
+                currentContext.set(NodeExecutionContext.current());
+                virtualThread.set(Thread.currentThread().isVirtual());
+                return state;
+            }
+        };
+
+        try (StateGraph graph = new StateGraph(1)) {
+            graph.addNode("work", node)
+                    .addEdge("work", StateGraph.END)
+                    .setEntryPoint("work");
+
+            graph.execute(new GraphExecutionRequest(runId, AgentState.empty(), "work", false),
+                    noOpListener());
+        }
+
+        assertThat(currentContext.get())
+                .hasValue(new NodeExecutionContext(runId, "work"));
+        assertThat(virtualThread).isTrue();
+        assertThat(NodeExecutionContext.current()).isEmpty();
+    }
+
+    @Test
+    void clearsCurrentContextWhenNodeFails() {
+        AtomicReference<Optional<NodeExecutionContext>> currentContext =
+                new AtomicReference<>();
+        RuntimeException failure = new RuntimeException("node failed");
+        Node node = new Node() {
+            @Override
+            public AgentState execute(AgentState state) {
+                throw new AssertionError("不应调用无上下文入口");
+            }
+
+            @Override
+            public AgentState execute(NodeExecutionContext context, AgentState state) {
+                currentContext.set(NodeExecutionContext.current());
+                throw failure;
+            }
+        };
+
+        try (StateGraph graph = new StateGraph(1)) {
+            graph.addNode("work", node)
+                    .addEdge("work", StateGraph.END)
+                    .setEntryPoint("work");
+
+            assertThatThrownBy(() -> graph.execute(AgentState.empty()))
+                    .isInstanceOf(GraphExecutionException.class)
+                    .hasCause(failure);
+        }
+
+        assertThat(currentContext.get()).isNotNull();
+        assertThat(currentContext.get()).isPresent();
+        assertThat(NodeExecutionContext.current()).isEmpty();
+    }
+
+    @Test
+    void rejectsNestedContextBinding() {
+        NodeExecutionContext outer = new NodeExecutionContext(UUID.randomUUID(), "outer");
+        NodeExecutionContext inner = new NodeExecutionContext(UUID.randomUUID(), "inner");
+
+        assertThatThrownBy(() -> NodeExecutionContext.callWithin(outer,
+                () -> NodeExecutionContext.callWithin(inner, () -> "nested")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("嵌套");
+        assertThat(NodeExecutionContext.current()).isEmpty();
+    }
+
+    private static GraphExecutionListener noOpListener() {
+        return new GraphExecutionListener() {
+            @Override
+            public void onNodeStarted(String nodeName, AgentState state) {
+            }
+
+            @Override
+            public void onNodeCompleted(
+                    String nodeName,
+                    String nextNode,
+                    AgentState state) {
+            }
+        };
     }
 
     @Test

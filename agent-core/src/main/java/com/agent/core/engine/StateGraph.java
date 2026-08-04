@@ -239,8 +239,9 @@ public final class StateGraph implements AutoCloseable {
             throw new IllegalStateException("节点未注册: " + nodeName);
         }
 
-        Future<AgentState> future = executor.submit(() -> node.execute(
-                new NodeExecutionContext(runId, nodeName), state));
+        NodeExecutionContext context = new NodeExecutionContext(runId, nodeName);
+        Future<AgentState> future = executor.submit(() ->
+                NodeExecutionContext.callWithin(context, () -> node.execute(context, state)));
         try {
             AgentState result = future.get();
             if (result == null) {
