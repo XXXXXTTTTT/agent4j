@@ -15,7 +15,9 @@ Phase 6.4、部署环境或后续产品工作。
 
 `agent-core` 继续保持框架无关：它只定义观测端口和节点执行上下文，不依赖
 OpenTelemetry SDK、Spring 或 Langfuse。OpenTelemetry SDK 与 OTLP 导出适配位于
-`agent-web`，Bad Case 到长期记忆的适配位于 `agent-rag`。
+`agent-web`，Bad Case 到长期记忆的适配位于 `agent-rag`。`agent-web` 增加对
+`agent-rag` 的单向依赖以完成应用组合；依赖方向为 `agent-web -> agent-rag -> agent-core`，
+不形成模块循环。
 
 ## 依赖与官方协议
 
