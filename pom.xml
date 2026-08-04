@@ -38,7 +38,20 @@
         <resilience4j.version>2.4.0</resilience4j.version>
         <httpclient5.version>5.5.1</httpclient5.version>
         <httpcore5.version>5.3.6</httpcore5.version>
+        <opentelemetry.version>1.64.0</opentelemetry.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-bom</artifactId>
+                <version>${opentelemetry.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <build>
         <plugins>
