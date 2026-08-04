@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import com.agent.core.trace.TraceEventPublisher;
 import com.agent.web.observability.OpenTelemetryRunTracePublisher;
+import com.agent.rag.memory.RunBadCaseAttributor;
 
 /** 装配 Harness 的持久化、图注册、Trace 与运行服务。 */
 @Configuration(proxyBeanMethods = false)
@@ -70,10 +71,12 @@ public class HarnessConfiguration {
     RunLifecycleEventPublisher runLifecycleEventPublisher(
             InMemoryTraceEventBus traceEventBus,
             InMemoryRunLogEventBus runLogEventBus,
-            ObjectProvider<OpenTelemetryRunTracePublisher> otelPublisher) {
+            ObjectProvider<OpenTelemetryRunTracePublisher> otelPublisher,
+            ObjectProvider<RunBadCaseAttributor> badCaseAttributor) {
         List<TraceEventPublisher> publishers = new ArrayList<>();
         publishers.add(traceEventBus);
         otelPublisher.ifAvailable(publishers::add);
+        badCaseAttributor.ifAvailable(publishers::add);
         return new RunLifecycleEventPublisher(publishers, runLogEventBus);
     }
 
