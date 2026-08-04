@@ -64,6 +64,48 @@ class MemoryManagerTest {
     }
 
     @Test
+    void rejectsMixedTypesBeforeEmbeddingOrStoreForBadCases() {
+        RecordingStore store = new RecordingStore();
+        AtomicInteger embeddings = new AtomicInteger();
+        MemoryManager manager = new MemoryManager(
+                capture -> List.of(
+                        new MemoryDraft(MemoryType.BAD_CASE, "bad", "detail"),
+                        new MemoryDraft(MemoryType.USER_PREFERENCE, "wrong", "detail")),
+                store,
+                new EmbeddingModel() {
+                    @Override public int dimensions() { return 8; }
+                    @Override public float[] embed(String text) {
+                        embeddings.incrementAndGet();
+                        return new float[8];
+                    }
+                },
+                CLOCK,
+                UUID::randomUUID);
+
+        assertThatThrownBy(() -> manager.captureBadCases(
+                new MemoryCapture("repo", "user", "source")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("BAD_CASE");
+        assertThat(embeddings).hasValue(0);
+        assertThat(store.upsertCalls).isZero();
+    }
+
+    @Test
+    void capturesOnlyBadCasesThroughDedicatedEntryPoint() {
+        RecordingStore store = new RecordingStore();
+        MemoryManager manager = new MemoryManager(
+                capture -> List.of(new MemoryDraft(MemoryType.BAD_CASE, "bad", "detail")),
+                store, embeddingModel(), CLOCK, UUID::randomUUID);
+
+        List<MemoryEntry> saved = manager.captureBadCases(
+                new MemoryCapture("repo", "user", "source"));
+
+        assertThat(saved).hasSize(1);
+        assertThat(saved.getFirst().type()).isEqualTo(MemoryType.BAD_CASE);
+        assertThat(store.upsertCalls).isEqualTo(1);
+    }
+
+    @Test
     void mergesAndNormalizesVectorAndLexicalRowsWithStableOrdering() {
         MemoryEntry alpha = entry("00000000-0000-0000-0000-000000000001", "alpha", NOW);
         MemoryEntry beta = entry("00000000-0000-0000-0000-000000000002", "beta", NOW.plusSeconds(1));

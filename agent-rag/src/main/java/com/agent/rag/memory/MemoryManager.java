@@ -48,6 +48,15 @@ public final class MemoryManager {
 
     /** 提取原始观察并在同一 store 事务中 upsert 全部记忆。 */
     public List<MemoryEntry> capture(MemoryCapture capture) {
+        return capture(capture, null);
+    }
+
+    /** 只捕获 BAD_CASE 记忆，并在整批处理前执行类型门禁。 */
+    public List<MemoryEntry> captureBadCases(MemoryCapture capture) {
+        return capture(capture, MemoryType.BAD_CASE);
+    }
+
+    private List<MemoryEntry> capture(MemoryCapture capture, MemoryType requiredType) {
         Objects.requireNonNull(capture, "capture 不能为空");
         List<MemoryDraft> drafts = Objects.requireNonNull(
                 extractor.extract(capture), "extractor 返回值不能为空");
@@ -57,10 +66,15 @@ public final class MemoryManager {
         if (drafts.isEmpty()) {
             return List.of();
         }
+        for (MemoryDraft draft : drafts) {
+            Objects.requireNonNull(draft, "extractor 不能返回 null 草稿");
+            if (requiredType != null && draft.type() != requiredType) {
+                throw new IllegalArgumentException("captureBadCases 只允许 BAD_CASE 类型");
+            }
+        }
         Instant now = clock.instant();
         List<MemoryEntry> entries = new ArrayList<>(drafts.size());
         for (MemoryDraft draft : drafts) {
-            Objects.requireNonNull(draft, "extractor 不能返回 null 草稿");
             String hash = contentHash(draft);
             float[] embedding = embed(draft.title() + "\n" + draft.content());
             entries.add(new MemoryEntry(
