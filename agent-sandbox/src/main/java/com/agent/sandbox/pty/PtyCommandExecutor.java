@@ -144,7 +144,7 @@ public final class PtyCommandExecutor {
         }
         // ProcessHandle 已确认 Bash 及其后代退出；WinPTY 包装进程的 waitFor
         // 在 Windows 上可能阻塞约 30 秒，因此这里只做有界等待。
-        process.waitFor(100, TimeUnit.MILLISECONDS);
+        process.waitFor(PROCESS_TERMINATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     private void awaitReader(Thread readerThread)
