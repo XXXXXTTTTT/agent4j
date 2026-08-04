@@ -837,3 +837,49 @@ Docker Desktop Engine `27.4.0` 环境执行：
 - 验收后 `docker ps -a --filter label=com.agent.runtime.managed=true` 无输出，未发现本阶段
   Maven、WinPTY、Bash 或 Playwright 进程；工作区状态干净。其他项目已有 Docker 容器未纳入
   本阶段清理范围。
+
+## Phase 6.3：OpenTelemetry、Langfuse 与 Bad Case 归因
+
+### 6.3.1 ThreadLocal 上下文不能依赖线程继承
+
+**【问题现象】** 模型路由在节点虚拟线程中执行，观测器若从隐式线程上下文取当前节点，跨线程调用会找不到父节点，Generation Span 可能脱离 Run 拓扑。
+
+**【根因分析】** `ThreadLocal` 只在明确绑定的执行范围内有效，虚拟线程调度不会自动把业务上下文传播到任意异步任务。
+
+**【解决方案/代码级实现】** `StateGraph` 在节点 callable 内绑定 `NodeExecutionContext`，`finally` 清理；`OpenTelemetryRunTracePublisher` 使用 `Context.root().with(parentSpan)` 显式建立父子关系。工作流测试验证 Run -> Node -> Generation 父子链。
+
+### 6.3.2 Span 生命周期必须和终态、关闭语义分离
+
+**【问题现象】** 节点失败、HITL 中断恢复和 publisher 关闭会留下活动 Span；重复终态事件还可能二次结束同一 Span。
+
+**【根因分析】** Run、Node、Generation 是不同生命周期，恢复会产生新的 Run 段，不能用一个全局 Span 或依赖 exporter 自动结束。
+
+**【解决方案/代码级实现】** 发布器分别维护 Run、Node、Generation 状态；完成、失败、拒绝和中断按事件精确结束，审批后重建恢复段；关闭时清理所有活动对象，重复 Generation 结束明确失败。
+
+### 6.3.3 OTLP Header 和 Token 空值需要保留协议事实
+
+**【问题现象】** Langfuse OTLP 接收端要求原样 endpoint、Authorization 和 ingestion 版本；模型响应缺少 usage 时，强行写入零值会伪造 Token 统计。
+
+**【根因分析】** OTLP HTTP/protobuf 的 Header 是供应商协议边界，usage 在 OpenAI 兼容响应中是可选对象，不存在不等于消耗为零。
+
+**【解决方案/代码级实现】** `OpenTelemetryConfiguration` 原样传递 endpoint 和 Authorization，并固定 `x-langfuse-ingestion-version: 4`；`ModelRouter` 将缺失 usage 映射为 `Optional.empty()`，有 usage 时校验总数等于输入与输出之和。
+
+### 6.3.4 Trace 发布链失败不能破坏权威状态
+
+**【问题现象】** 一个 Trace publisher 抛异常时，后续 publisher 不再收到事件，终态日志清理也可能被跳过。
+
+**【根因分析】** 发布链是多个独立副作用；将其当作单一调用会把一个通道故障扩散到其他通道和 Run 状态。
+
+**【解决方案/代码级实现】** `RunLifecycleEventPublisher` 冻结 publisher 列表，逐项发布；首异常作为主异常，后续异常加入 suppressed，终态事件始终执行日志总线清理。Checkpoint 仍由 PostgreSQL 作为 SSOT。
+
+### 6.3.5 Bad Case 必须有 scope 和类型门禁
+
+**【问题现象】** 失败 Run 的证据可能缺少 repository/user scope，或 extractor 混入 `USER_PREFERENCE`；如果先 embedding 再校验，会产生部分写入。
+
+**【根因分析】** 长期记忆的隔离键和类型是持久化契约，不是可由调用方宽松推断的文本标签。
+
+**【解决方案/代码级实现】** `RunBadCaseAttributor` 只读取固定状态键和 allowlist 证据，`ops.exitCode` 必须是十进制整数；缺少 scope 直接失败。`MemoryManager.captureBadCases` 在生成 ID、hash、embedding 和 upsert 之前校验整批均为 `MemoryType.BAD_CASE`，单字段最多 4,000 个 UTF-16 code unit、完整 source 最多 20,000。
+
+### 6.3.6 证据记录
+
+本阶段提交为 `ba5bc68`、`3d5aa20`、`b87cafd`、`5bdf69e`、`6f41cf0`、`3990763`、`3b998d8` 和 `156718c`；对应协议、上下文、路由、Span、OTLP、发布链、类型门禁和失败归因测试均已执行。根目录全量验收的实际输出将在完成后补充，不把计划内容写成已完成事实。
