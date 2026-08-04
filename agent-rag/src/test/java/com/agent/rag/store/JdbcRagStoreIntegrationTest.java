@@ -75,7 +75,7 @@ class JdbcRagStoreIntegrationTest {
         dataSource = new DriverManagerDataSource(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
         new ResourceDatabasePopulator(
-                new ClassPathResource("db/migration/V1__create_rag_tables.sql"))
+                new ClassPathResource("db/rag-migration/V1__create_rag_tables.sql"))
                 .execute(dataSource);
         store = new JdbcRagStore(dataSource, CLOCK);
         store.replaceRepository("repo-a", List.of(), List.of());

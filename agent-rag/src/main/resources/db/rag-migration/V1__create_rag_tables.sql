@@ -29,9 +29,6 @@ create table if not exists rag_child_chunks (
     unique (parent_id, ordinal)
 );
 
-create index if not exists idx_rag_child_repository
-    on rag_child_chunks(repository_id);
-create index if not exists idx_rag_child_search_vector
-    on rag_child_chunks using gin(search_vector);
-create index if not exists idx_rag_child_embedding
-    on rag_child_chunks using hnsw (embedding vector_cosine_ops);
+create index if not exists idx_rag_child_repository on rag_child_chunks(repository_id);
+create index if not exists idx_rag_child_search_vector on rag_child_chunks using gin(search_vector);
+create index if not exists idx_rag_child_embedding on rag_child_chunks using hnsw (embedding vector_cosine_ops);

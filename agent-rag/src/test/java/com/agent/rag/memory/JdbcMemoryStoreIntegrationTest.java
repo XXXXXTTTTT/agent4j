@@ -59,8 +59,8 @@ class JdbcMemoryStoreIntegrationTest {
         dataSource = new DriverManagerDataSource(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
         new ResourceDatabasePopulator(
-                new ClassPathResource("db/migration/V1__create_rag_tables.sql"),
-                new ClassPathResource("db/migration/V2__create_memory_table.sql"))
+                new ClassPathResource("db/rag-migration/V1__create_rag_tables.sql"),
+                new ClassPathResource("db/rag-migration/V2__create_memory_table.sql"))
                 .execute(dataSource);
         new JdbcTemplate(dataSource).update("delete from rag_memories");
         store = new JdbcMemoryStore(dataSource);
