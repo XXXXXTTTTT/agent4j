@@ -60,4 +60,49 @@ class RunLifecycleEventPublisherTest {
             StepVerifier.create(subscription.events()).verifyComplete();
         }
     }
+
+    @Test
+    void publishesToEveryDelegateAndAggregatesFailuresInOrder() {
+        try (InMemoryRunLogEventBus logBus = new InMemoryRunLogEventBus()) {
+            List<TraceEvent> delivered = new ArrayList<>();
+            TraceEventPublisher first = event -> {
+                throw new IllegalStateException("first failure");
+            };
+            TraceEventPublisher second = event -> {
+                throw new IllegalArgumentException("second failure");
+            };
+            TraceEventPublisher third = delivered::add;
+            RunLifecycleEventPublisher publisher = new RunLifecycleEventPublisher(
+                    List.of(first, second, third), logBus);
+            TraceEvent event = new TraceEvent.NodeStarted(
+                    UUID.randomUUID(), RUN_ID, 1, OCCURRED_AT, "coder");
+
+            assertThatThrownBy(() -> publisher.publish(event))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("first failure")
+                    .satisfies(failure -> assertThat(failure.getSuppressed())
+                            .singleElement()
+                            .isInstanceOfSatisfying(IllegalArgumentException.class, suppressed ->
+                                    assertThat(suppressed).hasMessage("second failure")));
+            assertThat(delivered).containsExactly(event);
+        }
+    }
+
+    @Test
+    void completesLogsWhenEveryTerminalDelegateFails() {
+        try (InMemoryRunLogEventBus logBus = new InMemoryRunLogEventBus()) {
+            RunLogSubscription subscription = logBus.openSubscription(RUN_ID);
+            RunLifecycleEventPublisher publisher = new RunLifecycleEventPublisher(
+                    List.of(
+                            event -> { throw new IllegalStateException("first"); },
+                            event -> { throw new IllegalArgumentException("second"); }),
+                    logBus);
+            TraceEvent terminal = new TraceEvent.Completed(
+                    UUID.randomUUID(), RUN_ID, 1, OCCURRED_AT);
+
+            assertThatThrownBy(() -> publisher.publish(terminal))
+                    .isInstanceOf(IllegalStateException.class);
+            StepVerifier.create(subscription.events()).verifyComplete();
+        }
+    }
 }

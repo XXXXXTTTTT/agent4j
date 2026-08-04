@@ -11,12 +11,17 @@ import com.agent.web.trace.RunLifecycleEventPublisher;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import com.agent.core.trace.TraceEventPublisher;
+import com.agent.web.observability.OpenTelemetryRunTracePublisher;
 
 /** 装配 Harness 的持久化、图注册、Trace 与运行服务。 */
 @Configuration(proxyBeanMethods = false)
@@ -64,8 +69,12 @@ public class HarnessConfiguration {
     @Bean
     RunLifecycleEventPublisher runLifecycleEventPublisher(
             InMemoryTraceEventBus traceEventBus,
-            InMemoryRunLogEventBus runLogEventBus) {
-        return new RunLifecycleEventPublisher(traceEventBus, runLogEventBus);
+            InMemoryRunLogEventBus runLogEventBus,
+            ObjectProvider<OpenTelemetryRunTracePublisher> otelPublisher) {
+        List<TraceEventPublisher> publishers = new ArrayList<>();
+        publishers.add(traceEventBus);
+        otelPublisher.ifAvailable(publishers::add);
+        return new RunLifecycleEventPublisher(publishers, runLogEventBus);
     }
 
     /** 创建基于虚拟线程的 Agent Run 服务。 */
