@@ -50,7 +50,7 @@
 
 - [ ] Step 1: 写 `k=1`、`k=3`、缺失重复、失败结果、TTFT 平均/p50/p95/max 和非法时间戳测试。
 - [ ] Step 2: 运行 `mvn -pl agent-eval -am "-Dtest=BenchmarkMetricsTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`，确认聚合 API 不存在而失败。
-- [ ] Step 3: 实现按任务 ID 聚合的 `passK = all repetitions passed / task count`；缺少任一重复结果抛出异常；TTFT 只统计有首 Token 的结果，p50/p95 使用确定性的线性插值；结果按任务 ID和重复序号排序。
+- [ ] Step 3: 实现按任务 ID 聚合的 `passK = all repetitions passed / task count`；缺少任一重复结果抛出异常；TTFT 只统计有首 Token 的结果，p50/p95 使用确定性的线性插值；结果按任务 ID 和重复序号排序。
 - [ ] Step 4: 运行指标测试，确认所有 double 有限且非负。
 - [ ] Step 5: 提交 `feat(eval): calculate pass-k and TTFT metrics`。
 
