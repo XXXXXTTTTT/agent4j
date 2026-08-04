@@ -890,3 +890,66 @@ Docker Desktop Engine `27.4.0` 环境执行：
 - Vitest `5` 个文件、`22` 项测试全部通过；`npm audit --audit-level=low` 返回 `found 0 vulnerabilities`。
 - 首轮根构建发现 `agent-rag` 依赖引入两个 `V1` Flyway 迁移，修复为独立 `db/rag-migration` 资源路径后，Web PostgreSQL 集成测试和第二次根构建通过。
 - 禁止依赖扫描未发现 `langchain4j` 或 `langgraph4j`；`git diff --check` 通过；`docker ps -a --filter label=com.agent.runtime.managed=true` 无输出。
+
+## Phase 6.4：Benchmark、pass^k 与 TTFT
+
+### 6.4.1 版本化任务集必须是严格数据契约
+
+**【问题现象】** 评测任务如果依赖宽松 JSON 映射，未知字段、空行、重复 ID 或 metadata 类型
+错误会被吞掉，最终报告无法复现。测试夹具还曾用多处字符串替换构造非法 JSON，错误信息因此
+落在“非法 JSON”而不是“未知字段”。
+
+**【根因分析】** JSONL 每行是独立协议对象；字符串替换不能保证只修改目标对象，Jackson 默认
+映射也不会替调用方执行字段集合和类型门禁。任务集又要求至少 50 项，任何缺失任务都应在
+读取阶段失败。
+
+**【解决方案/代码级实现】** `BenchmarkTaskSetReader` 使用 Jackson 树逐行校验精确字段集合、
+文本字段、字符串 metadata、空行、非法 JSON 和重复 ID，再交给不可变 `BenchmarkTaskSet`
+执行至少 50 项校验。资源文件固定为 58 条 UTF-8 JSONL，类别覆盖 `CODE`、`OPS`、`RAG`、
+`TRACE`、`WEB`；未知字段测试使用明确合法 JSON 样本。
+
+### 6.4.2 pass^k 不能静默忽略缺失重复
+
+**【问题现象】** 只统计已返回结果会把中断、调度丢失或执行器异常误算成通过率，尤其在
+`k=3` 时会掩盖某个任务只执行一次的事实。
+
+**【根因分析】** 任务 ID 和重复序号是两个独立维度；集合大小正确也不能证明序号 `1..k`
+完整，重复提交还可能覆盖原结果。
+
+**【解决方案/代码级实现】** `BenchmarkMetrics` 对任务 ID、重复序号范围、重复唯一性和每项
+`1..k` 完整性逐项校验；任一任务缺失重复立即抛出异常。`passK` 只在每个任务恰好 `k` 次
+且全部 `passed` 时计入，结果最终按任务 ID和重复序号稳定排序。
+
+### 6.4.3 TTFT 时钟边界与 Runner 并发隔离
+
+**【问题现象】** 首 Token 缺失的失败执行被错误加入延迟分布，纳秒时间线换算还可能产生
+负数或非有限值；无界提交会让配置的最大并发失效。
+
+**【根因分析】** `firstTokenAt` 是可选事件，不等于零延迟；`startedAt`、`firstTokenAt`、
+`finishedAt` 必须共享单调顺序。虚拟线程执行器本身不限制同时进入工具调用的任务数。
+
+**【解决方案/代码级实现】** `BenchmarkTaskResult` 在构造器中拒绝越界时间线，`BenchmarkMetrics`
+只把存在首 Token 的结果转换为毫秒，并以确定性的线性插值计算 p50/p95。`BenchmarkRunner`
+使用 Java 21 虚拟线程配合 `Semaphore` 实施请求级最大并发，执行器异常转换为包含完整堆栈
+的失败结果，关闭后拒绝新运行。
+
+### 6.4.4 真实 Agent 工作流不能用自由文本裁判
+
+**【问题现象】** 将任务 prompt 或模型输出文本与 success criteria 做模糊匹配，会把格式
+变化当作成功，也无法证明 Run 真的到达终态或首事件确实产生。
+
+**【根因分析】** 业务成功条件属于调用方领域，`agent-eval` 不应猜测状态键、模型文本或
+不同节点的语义；`AgentRunService` 的权威事实是 `RunCheckpoint` 与强类型 `TraceEvent`。
+
+**【解决方案/代码级实现】** `AgentRunBenchmarkExecutor` 通过构造器注入
+`BenchmarkSuccessEvaluator` 和首事件时间源，初始状态使用精确声明的
+`benchmark.taskId`、`benchmark.category`、`benchmark.prompt`、`benchmark.successCriteria`
+变量，终态由 `AgentRunService.get` 读取。成功只由评估器结合 `RunCheckpoint` 判定，首事件
+时间由 `TraceEvent` 端口提供；任何超时或异常均保留完整堆栈。
+
+### 6.4.5 证据记录
+
+Task 2、3、4 已分别提交为 `8a432a6`、`92f4854`、`b55f462`；真实工作流测试在显式 JDK
+21 下读取 58 条任务，覆盖 `CODE`、`OPS`、`RAG`、`TRACE`，所有 Run 到达 `COMPLETED`，
+首事件时间存在且报告 `passK=1.0`。最终验收完成后在此补充根目录 Maven、前端测试、依赖
+扫描和 Docker 资源检查的实际结果。
