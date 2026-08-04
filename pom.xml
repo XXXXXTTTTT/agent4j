@@ -24,6 +24,7 @@
         <module>agent-rag</module>
         <module>agent-sandbox</module>
         <module>agent-web</module>
+        <module>agent-eval</module>
     </modules>
 
     <properties>
