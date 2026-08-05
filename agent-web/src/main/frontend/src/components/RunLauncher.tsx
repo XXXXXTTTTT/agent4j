@@ -1,4 +1,4 @@
-import { Play, RefreshCw } from 'lucide-react'
+import { ChevronDown, Play, RefreshCw } from 'lucide-react'
 import { type FormEvent, useState } from 'react'
 
 import { decodeAgentState } from '../api/runApi'
@@ -8,12 +8,15 @@ interface RunLauncherProps {
   controller: UseRunWorkbenchResult
 }
 
+const DEFAULT_TASK = '请检查当前工作区，完成一次代码修改、测试和质量审查。'
 const DEFAULT_STATE = '{"messages":[],"variables":{},"trace":[]}'
 
 /** 收集图标识与初始状态，并在浏览器侧执行严格协议校验。 */
 export function RunLauncher({ controller }: RunLauncherProps) {
-  const [graphId, setGraphId] = useState('')
+  const [task, setTask] = useState(DEFAULT_TASK)
+  const [graphId, setGraphId] = useState('demo-agent')
   const [initialStateJson, setInitialStateJson] = useState(DEFAULT_STATE)
+  const [advanced, setAdvanced] = useState(false)
   const [inputError, setInputError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
 
@@ -22,8 +25,20 @@ export function RunLauncher({ controller }: RunLauncherProps) {
     setInputError(null)
     setStarting(true)
     try {
-      const parsed = JSON.parse(initialStateJson) as unknown
-      await controller.start(graphId, decodeAgentState(parsed, 'initialState'))
+      if (task.trim().length === 0) throw new Error('任务描述不能为空')
+      if (advanced) {
+        const parsed = JSON.parse(initialStateJson) as unknown
+        await controller.start(graphId, decodeAgentState(parsed, 'initialState'))
+      } else {
+        await controller.start('demo-agent', decodeAgentState({
+          messages: [],
+          variables: {
+            'demo.task': task.trim(),
+            'demo.workspace': '当前工作区',
+          },
+          trace: [],
+        }, 'initialState'))
+      }
     } catch (error) {
       setInputError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -52,29 +67,57 @@ export function RunLauncher({ controller }: RunLauncherProps) {
       </div>
 
       <form onSubmit={(event) => void submit(event)}>
-        <label className="field-label" htmlFor="graph-id">图 ID</label>
-        <input
-          id="graph-id"
-          value={graphId}
-          onChange={(event) => setGraphId(event.target.value)}
-          autoComplete="off"
+        <label className="field-label" htmlFor="task-description">任务描述</label>
+        <textarea
+          id="task-description"
+          value={task}
+          onChange={(event) => setTask(event.target.value)}
+          rows={5}
+          placeholder="例如：修复登录超时问题并运行测试"
           required
         />
 
-        <label className="field-label" htmlFor="initial-state">初始状态 JSON</label>
-        <textarea
-          id="initial-state"
-          value={initialStateJson}
-          onChange={(event) => setInitialStateJson(event.target.value)}
-          rows={8}
-          spellCheck={false}
-          required
-        />
+        <div className="workspace-context">
+          <span>工作区</span>
+          <strong>当前工作区</strong>
+        </div>
+
+        <button
+          className="advanced-toggle"
+          type="button"
+          aria-expanded={advanced}
+          onClick={() => setAdvanced((value) => !value)}
+        >
+          <ChevronDown aria-hidden="true" size={15} />
+          高级运行参数
+        </button>
+        {advanced ? (
+          <div className="advanced-fields">
+            <label className="field-label" htmlFor="graph-id">图 ID</label>
+            <input
+              id="graph-id"
+              value={graphId}
+              onChange={(event) => setGraphId(event.target.value)}
+              autoComplete="off"
+              required
+            />
+
+            <label className="field-label" htmlFor="initial-state">初始状态 JSON</label>
+            <textarea
+              id="initial-state"
+              value={initialStateJson}
+              onChange={(event) => setInitialStateJson(event.target.value)}
+              rows={8}
+              spellCheck={false}
+              required
+            />
+          </div>
+        ) : null}
 
         {inputError === null ? null : <p className="inline-error" role="alert">{inputError}</p>}
         <button className="primary-command" type="submit" disabled={starting}>
           <Play aria-hidden="true" size={17} fill="currentColor" />
-          {starting ? '正在启动' : '启动 Run'}
+          {starting ? '正在启动' : '运行 Agent'}
         </button>
       </form>
 

@@ -125,6 +125,13 @@ textarea { font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; l
   white-space: nowrap;
 }
 .primary-command { background: #17634e; color: #f4fff8; margin-top: 14px; width: 100%; }
+.workspace-context { align-items: center; background: #edf5f0; border: 1px solid #d1e2d8; border-radius: 4px; display: flex; justify-content: space-between; margin-top: 10px; padding: 8px 10px; }
+.workspace-context span { color: #73847c; font-size: 10px; }
+.workspace-context strong { color: #17634e; font-family: "Cascadia Mono", Consolas, monospace; font-size: 10px; }
+.advanced-toggle { align-items: center; background: transparent; border: 0; color: #62746c; display: flex; font-size: 11px; gap: 5px; margin-top: 12px; padding: 3px 0; }
+.advanced-toggle svg { transition: transform .15s ease; }
+.advanced-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+.advanced-fields { border-top: 1px solid #d9e2dd; margin-top: 7px; padding-top: 1px; }
 .icon-button { align-items: center; background: transparent; border: 1px solid #c1d0c8; border-radius: 4px; color: #315d4e; display: inline-flex; height: 33px; justify-content: center; width: 33px; }
 .run-readout { align-items: baseline; border-top: 1px solid #d9e2dd; display: flex; gap: 9px; justify-content: space-between; margin-top: 17px; padding-top: 14px; }
 .run-readout span { color: #73847c; font-family: "Cascadia Mono", Consolas, monospace; font-size: 10px; }
@@ -149,6 +156,12 @@ textarea { font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; l
 .reject-command { background: #a9444c; color: white; }
 
 .workspace-tabs, .evidence-tabs { border-bottom: 1px solid #ccd9d2; display: flex; gap: 3px; padding: 0 18px; }
+.agent-task-card { align-items: center; background: #eef6f1; border-bottom: 1px solid #d2e1d8; display: flex; gap: 20px; justify-content: space-between; padding: 13px 18px; }
+.agent-task-card strong { display: block; font-size: 13px; font-weight: 650; max-width: 620px; overflow-wrap: anywhere; }
+.agent-stage-list { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+.agent-stage-list span { border: 1px solid #c5d7cc; border-radius: 999px; color: #789087; font-family: "Cascadia Mono", Consolas, monospace; font-size: 9px; padding: 5px 7px; white-space: nowrap; }
+.agent-stage-list span.is-done { background: #dbece2; border-color: #8fbea5; color: #17634e; }
+.agent-stage-list span.is-current { background: #17634e; border-color: #17634e; color: #f4fff8; }
 .workspace-tabs button, .evidence-tabs button {
   align-items: center;
   background: transparent;

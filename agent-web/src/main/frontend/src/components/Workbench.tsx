@@ -21,6 +21,13 @@ interface WorkbenchProps {
 
 type WorkbenchTab = 'code' | 'terminal' | 'review'
 
+const STAGE_LABELS: Record<string, string> = {
+  planner: '规划',
+  coder: '修改代码',
+  ops: '运行测试',
+  reviewer: '质量审查',
+}
+
 const TABS: Array<{ id: WorkbenchTab; label: string; icon: typeof Code2 }> = [
   { id: 'code', label: '代码', icon: Code2 },
   { id: 'terminal', label: '终端', icon: Terminal },
@@ -32,6 +39,8 @@ export function Workbench({ controller, onTerminalReady }: WorkbenchProps) {
   const [activeTab, setActiveTab] = useState<WorkbenchTab>('code')
   const [reviewOpened, setReviewOpened] = useState(false)
   const diff = controller.run?.state.variables['coder.unifiedDiff']
+  const task = controller.run?.state.variables['demo.task']
+  const currentStage = controller.run?.state.trace.at(-1) ?? controller.run?.nextNode ?? null
 
   return (
     <div className="workbench-shell" data-testid="workbench-shell">
@@ -64,6 +73,22 @@ export function Workbench({ controller, onTerminalReady }: WorkbenchProps) {
               {controller.run === null ? '未选择 Run' : `Checkpoint v${controller.run.version}`}
             </span>
           </div>
+          <section className="agent-task-card" aria-label="Agent 任务进度">
+            <div>
+              <p className="section-kicker">AGENT TASK</p>
+              <strong>{task ?? '输入任务后，Agent 将在这里展示执行进度'}</strong>
+            </div>
+            <div className="agent-stage-list" aria-label="Agent 阶段">
+              {['planner', 'coder', 'ops', 'reviewer'].map((stage) => (
+                <span
+                  key={stage}
+                  className={currentStage === stage ? 'is-current' : controller.run?.state.trace.includes(stage) ? 'is-done' : ''}
+                >
+                  {STAGE_LABELS[stage]}
+                </span>
+              ))}
+            </div>
+          </section>
           <div className="workspace-tabs" role="tablist" aria-label="工作区视图">
             {TABS.map(({ id, label, icon: Icon }) => (
               <button

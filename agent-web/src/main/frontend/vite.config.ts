@@ -8,6 +8,15 @@ export default defineConfig({
     emptyOutDir: true,
     chunkSizeWarningLimit: 2600,
   },
+  server: {
+    proxy: {
+      '/api': 'http://127.0.0.1:8080',
+      '/ws': {
+        target: 'ws://127.0.0.1:8080',
+        ws: true,
+      },
+    },
+  },
   test: {
     environment: 'jsdom',
     pool: 'forks',

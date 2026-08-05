@@ -81,23 +81,22 @@ function traceEvents(): TraceEvent[] {
 }
 
 describe('Workbench', () => {
-  it('按精确 graphId 和 initialState JSON 启动 Run', async () => {
+  it('按自然语言任务启动 demo-agent Run', async () => {
     const user = userEvent.setup()
     const state = controller()
     render(<Workbench controller={state} onTerminalReady={() => undefined} />)
 
-    await user.type(screen.getByLabelText('图 ID'), 'product-workbench-flow')
-    const input = screen.getByLabelText('初始状态 JSON')
-    await user.clear(input)
-    await user.click(input)
-    await user.paste(
-      '{"messages":[],"variables":{"ops.command":"mvn test"},"trace":[]}',
-    )
-    await user.click(screen.getByRole('button', { name: '启动 Run' }))
+    const task = screen.getByLabelText('任务描述')
+    await user.clear(task)
+    await user.type(task, '修复登录超时')
+    await user.click(screen.getByRole('button', { name: '运行 Agent' }))
 
-    expect(state.start).toHaveBeenCalledWith('product-workbench-flow', {
+    expect(state.start).toHaveBeenCalledWith('demo-agent', {
       messages: [],
-      variables: { 'ops.command': 'mvn test' },
+      variables: {
+        'demo.task': '修复登录超时',
+        'demo.workspace': '当前工作区',
+      },
       trace: [],
     })
   })
