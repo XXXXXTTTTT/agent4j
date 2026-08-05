@@ -1,7 +1,10 @@
 package com.agent.web.controller;
 
 import com.agent.core.engine.AgentRunService;
+import com.agent.core.engine.AgentState;
+import com.agent.web.config.ProductionAgentProperties;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -13,6 +16,8 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /** 提供 Agent Run 生命周期 REST API。 */
 @RestController
@@ -20,16 +25,47 @@ import java.util.UUID;
 public final class RunController {
 
     private final AgentRunService runService;
+    private final ObjectProvider<ProductionAgentProperties> productionProperties;
 
     /** 创建 Run Controller。 */
-    public RunController(AgentRunService runService) {
+    public RunController(
+            AgentRunService runService,
+            ObjectProvider<ProductionAgentProperties> productionProperties) {
         this.runService = Objects.requireNonNull(runService, "runService 不能为空");
+        this.productionProperties = Objects.requireNonNull(
+                productionProperties, "productionProperties 不能为空");
     }
 
     /** 创建并异步启动 Run。 */
     @PostMapping
     public ResponseEntity<RunView> start(@Valid @RequestBody StartRunRequest request) {
         RunView view = RunView.from(runService.start(request.graphId(), request.initialState()));
+        return ResponseEntity.accepted().body(view);
+    }
+
+    /** 创建使用生产 Graph 的任务优先 Run。 */
+    @PostMapping("/code-agent")
+    public ResponseEntity<RunView> startCodeAgent(
+            @Valid @RequestBody CodeAgentStartRequest request) {
+        ProductionAgentProperties properties = productionProperties.getIfAvailable();
+        if (properties == null || !properties.enabled()) {
+            throw new IllegalStateException("生产 Code Agent 未启用");
+        }
+        AgentState state = AgentState.empty()
+                .withVariable("planner.task", request.task().trim())
+                .withVariable("planner.repositoryId", choose(
+                        request.repositoryId(), properties.repositoryId()))
+                .withVariable("planner.userId", choose(
+                        request.userId(), properties.userId()))
+                .withVariable("coder.workspacePath", validatedWorkspace(
+                        choose(request.workspacePath(), properties.workspace().toString()),
+                        properties.workspace()));
+        String reviewerUrl = choose(request.reviewerUrl(), properties.reviewerUrl());
+        if (!reviewerUrl.isBlank()) {
+            validateReviewerUrl(reviewerUrl);
+            state = state.withVariable("reviewer.url", reviewerUrl);
+        }
+        RunView view = RunView.from(runService.start("code-agent", state));
         return ResponseEntity.accepted().body(view);
     }
 
@@ -54,5 +90,33 @@ public final class RunController {
             @Valid @RequestBody ApprovalRequest request) {
         RunView view = RunView.from(runService.decide(runId, request.toCommand()));
         return ResponseEntity.accepted().body(view);
+    }
+
+    private String choose(String requested, String configured) {
+        if (requested != null && !requested.isBlank()) {
+            return requested.trim();
+        }
+        return configured == null ? "" : configured.trim();
+    }
+
+    private String validatedWorkspace(String requested, Path configuredRoot) {
+        try {
+            Path root = configuredRoot.toRealPath();
+            Path workspace = Path.of(requested).toRealPath();
+            if (!Files.isDirectory(workspace) || !workspace.startsWith(root)) {
+                throw new IllegalArgumentException("workspacePath 必须位于配置工作区内");
+            }
+            return workspace.toString();
+        } catch (java.io.IOException exception) {
+            throw new IllegalArgumentException("workspacePath 必须是现有目录", exception);
+        }
+    }
+
+    private void validateReviewerUrl(String value) {
+        java.net.URI uri = java.net.URI.create(value);
+        String scheme = uri.getScheme();
+        if (!uri.isAbsolute() || !("http".equals(scheme) || "https".equals(scheme))) {
+            throw new IllegalArgumentException("reviewerUrl 必须是绝对 HTTP/HTTPS URI");
+        }
     }
 }
