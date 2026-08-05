@@ -91,15 +91,31 @@
 ### Task 6: End-to-end verification and environment docs
 
 **Files:**
+- Modify: `agent-sandbox/src/main/java/com/agent/sandbox/ast/WorkspaceSnapshotService.java`
+- Modify: `agent-sandbox/src/main/java/com/agent/sandbox/pty/DockerTarget.java`
+- Modify: `agent-sandbox/src/main/java/com/agent/sandbox/docker/DockerCommandExecutor.java`
+- Modify: `agent-web/src/main/java/com/agent/web/config/ProductionAgentProperties.java`
+- Modify: `agent-web/src/main/java/com/agent/web/config/ProductionGraphConfiguration.java`
+- Modify: `agent-web/src/main/resources/application.properties`
+- Modify: `docker-compose.local.yml`
+- Modify: `docker-compose.yml`
 - Modify: `.env.example`
 - Modify: `README.md`
 - Modify: `docs/ENGINEERING_PITFALLS.md`
+- Test: `agent-sandbox/src/test/java/com/agent/sandbox/ast/WorkspaceSnapshotServiceTest.java`
+- Test: `agent-sandbox/src/test/java/com/agent/sandbox/docker/DockerCommandExecutorTest.java`
+- Test: `agent-sandbox/src/test/java/com/agent/sandbox/pty/TerminalModelTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/config/ProductionGraphConfigurationTest.java`
 - Test: production Graph integration tests and browser test fixtures
 
+- [ ] Add failing snapshot tests proving `.env`, `*.pem` and `*.key` never enter model context.
+- [ ] Add failing target/resolver tests for direct host bind and exact source-container mount resolution, including missing, duplicate, read-only and named-volume rejection.
+- [ ] Extend `DockerTarget` with strong `HostWorkspaceSource` and `ContainerWorkspaceSource` variants while retaining the existing three-argument constructor.
+- [ ] Resolve only the unique writable bind source returned by `inspectContainerCmd`; never use `volumes-from`.
+- [ ] Bind the project to `/agent-workspace` in both Compose files and pass the exact source container name into Spring configuration.
 - [ ] Add integration coverage with a mock OpenAI-compatible endpoint for Planner, Coder and Reviewer.
 - [ ] Run Java 21 Maven tests for all modules and frontend tests/build.
 - [ ] Start local Compose using the existing `.env` workflow; verify PostgreSQL, backend and frontend ports from the actual compose files.
 - [ ] Verify a real browser task submission shows model requests, Diff, command logs, review evidence and final output; run Docker integration where Engine is available.
 - [ ] Update README and pitfalls document with exact setup, state keys and known operational boundaries.
 - [ ] Review `git status`, ensure only scoped files are staged, and commit `test(agent): verify production execution loop`.
-

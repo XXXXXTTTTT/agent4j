@@ -51,12 +51,22 @@ Reviewer 在 `reviewer.url` 非空时使用 Playwright 获取最终 URL、DOM �
 
 生产图只接受现有目录，并要求 `AstService.applyDiff` 的 Git 工作树校验通过。快照服务只读取工作树内的受限文件集合，跳过 `.git`、`target`、`node_modules`、构建缓存和二进制文件，并限制文件数量和总字节数。Diff 仍由 JGit 应用，并保留路径越界和冲突错误。
 
+快照还必须精确排除 `.env`、以 `.pem` 结尾和以 `.key` 结尾的文件，防止本地模型密钥、私钥和证书材料进入 Coder 请求。该排除在读取文件内容之前执行，不依赖文件是否被 Git 跟踪。
+
+## Compose 中的 Docker 工作区
+
+宿主机直接启动 `agent-web` 时，`DockerTarget` 继续把本机工作区直接绑定到一次性沙箱。Compose 启动时，应用看到的是 `/agent-workspace`，而 Docker-Java 连接的是宿主 Docker Engine，二者不能共用同一个 bind source 字符串。
+
+Compose 因此向 `DockerTarget` 提供精确的工作区源容器名。Docker 后端 inspect 该容器，只接受 destination 与 `/agent-workspace` 完全相等、可读写、source 非空且没有 named-volume 名称的唯一 mount；随后仅把该 source 绑定到一次性沙箱的 `/workspace`。找不到、重复、只读或 named-volume mount 都必须在创建沙箱前失败。禁止使用 `volumes-from`，避免把 `/var/run/docker.sock` 和 Web 容器的其他挂载暴露给执行命令。
+
+两套 Compose 文件都将项目根目录读写绑定到 `/agent-workspace`，并分别传入精确容器名 `agent4j-web-local` 和 `agent4j-web`。宿主直跑路径使用无源容器的 `DockerTarget`，保持 Phase 2 行为。
+
 ## Spring 装配
 
 - `ModelGatewayConfiguration` 提供已启用的 `ModelRouter`；新增生产 Graph 配置使用构造器注入，不在 Core 读取 Spring 环境。
 - 新增无 RAG 时的空 `MemoryContextProvider`，使记忆是可选能力而非启动前置条件。
 - 新增 `SandboxTerminalService` 和 `PlaywrightBrowserService` Bean，并在 Spring 生命周期结束时关闭。
-- `agent.production.enabled` 默认开启；`agent.llm.enabled=false` 时 `code-agent` 仍注册，但执行节点写出明确配置错误，绝不生成演示结果。
+- 应用默认关闭 `agent.production.enabled`；两套 Compose 文件将其默认值设为 `true`。只有 `agent.production.enabled=true` 且 `agent.llm.enabled=true` 创建了 `ModelRouter` 时才注册 `code-agent`，模型端点或模型名缺失时启动明确失败，绝不生成演示结果。
 - `.env.example` 提供生产图所需的 `AGENT_CODE_WORKSPACE`, `AGENT_CODE_REPOSITORY_ID`, `AGENT_CODE_USER_ID`, `AGENT_CODE_REVIEWER_URL` 和模型配置。
 
 ## Web 交互
@@ -76,4 +86,4 @@ Reviewer 在 `reviewer.url` 非空时使用 Playwright 获取最终 URL、DOM �
 3. Web 创建 `code-agent` Run 的请求与默认状态。
 4. 前端默认 graph、节点证据渲染和错误展示。
 5. Java 21 Maven 全量测试、前端 Vitest/build、Docker Compose 启动和真实浏览器回归。
-
+6. 敏感文件快照排除，以及 Compose 容器 mount source 解析、只读/重复/缺失边界。
