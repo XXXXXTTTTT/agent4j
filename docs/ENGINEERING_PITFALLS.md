@@ -170,9 +170,10 @@ old/new path 做标准化并验证仍在根目录；之后才把同一字节交�
 仅调用 `InputStream.close()` 不能保证立即唤醒 Windows 原生 read，未加边界的 `join()` 会
 把 100ms 命令拖到 30 秒。
 
-**【解决方案/代码级实现】** `PtyCommandExecutor` 从 pty4j 明确提供的 `pid()` 构造
-`ProcessHandle`，在关闭 WinPTY 前快照并反向强杀 Bash 后代，使用 `onExit()` 和 1 秒上限
-等待进程树。不能再调用无界的 `WinPtyProcess.waitFor()`：它等待 WinPTY 原生包装进程时
+**【解决方案/代码级实现】** `PtyCommandExecutor` 从 pty4j 明确提供的 `pid()` 和
+`WinPtyProcess.getChildProcessId()` 同时构造包装进程与真实 Bash 子进程的双根
+`ProcessHandle` 快照，再反向强杀全部后代，使用 `onExit()` 和 1 秒上限等待进程树。
+不能再调用无界的 `WinPtyProcess.waitFor()`：它等待 WinPTY 原生包装进程时
 可能额外阻塞约 30 秒，因此只做 1 秒有界等待。WinPTY 输入流的原生 `read` 与 `close()`
 共享读取锁，超时路径不能依赖同步关闭；Windows reader 改用 `available()` 轮询，进程销毁
 后在有界 join 内退出，主流程不再创建失控的异步 closer。超时结果仍严格返回
