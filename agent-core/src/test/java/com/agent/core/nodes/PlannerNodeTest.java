@@ -77,6 +77,9 @@ class PlannerNodeTest {
         assertThat(result.variables())
                 .containsEntry(PlannerNode.MEMORY_CONTEXT_KEY, "[ BAD_CASE ] 清理\n必须删除容器")
                 .containsEntry(PlannerNode.PLAN_KEY, "step 1: clean containers")
+                .containsEntry(PlannerNode.REQUEST_KEY,
+                        "任务:\n修复超时清理\n\n长期记忆上下文:\n[ BAD_CASE ] 清理\n必须删除容器")
+                .containsEntry(PlannerNode.RESPONSE_KEY, "step 1: clean containers")
                 .containsEntry(PlannerNode.MODEL_KEY, "planner-model")
                 .doesNotContainKey(PlannerNode.ERROR_KEY);
         assertThat(result.trace()).containsExactly("planner");

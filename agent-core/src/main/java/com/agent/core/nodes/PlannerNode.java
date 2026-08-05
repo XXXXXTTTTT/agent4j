@@ -25,6 +25,8 @@ public final class PlannerNode implements Node {
     public static final String MEMORY_CONTEXT_KEY = "planner.memoryContext";
     public static final String PLAN_KEY = "planner.plan";
     public static final String MODEL_KEY = "planner.model";
+    public static final String REQUEST_KEY = "planner.request";
+    public static final String RESPONSE_KEY = "planner.response";
     public static final String ERROR_KEY = "planner.error";
 
     private static final String SYSTEM_INSTRUCTION = """
@@ -63,11 +65,14 @@ public final class PlannerNode implements Node {
                     memoryContextProvider.recall(
                             new MemoryContextRequest(repositoryId, userId, task, memoryLimit)),
                     "记忆上下文不能为空");
-            output = state.withVariable(MEMORY_CONTEXT_KEY, context.prompt());
+            String requestText = buildUserPrompt(task, context);
+            output = state
+                    .withVariable(MEMORY_CONTEXT_KEY, context.prompt())
+                    .withVariable(REQUEST_KEY, requestText);
             ModelRequest request = new ModelRequest(
                     List.of(
                             ChatMessage.system(SYSTEM_INSTRUCTION),
-                            ChatMessage.user(buildUserPrompt(task, context))),
+                            ChatMessage.user(requestText)),
                     List.of(),
                     null,
                     0.0);
@@ -78,6 +83,7 @@ public final class PlannerNode implements Node {
             }
             return output
                     .withVariable(PLAN_KEY, textContent.text())
+                    .withVariable(RESPONSE_KEY, textContent.text())
                     .withVariable(MODEL_KEY, completion.model())
                     .withTraceEntry("planner");
         } catch (Exception exception) {
