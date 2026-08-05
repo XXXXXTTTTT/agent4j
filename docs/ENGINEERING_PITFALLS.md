@@ -939,15 +939,42 @@ Docker Desktop Engine `27.4.0` 环境执行：
 变化当作成功，也无法证明 Run 真的到达终态或首事件确实产生。
 
 **【根因分析】** 业务成功条件属于调用方领域，`agent-eval` 不应猜测状态键、模型文本或
-不同节点的语义；`AgentRunService` 的权威事实是 `RunCheckpoint` 与强类型 `TraceEvent`。
+不同节点的语义；`AgentRunService` 的权威终态事实是 `RunCheckpoint`，首 Token 由调用方
+接入实际的 `RunLogEvent` 日志总线提供。`TraceEvent.NodeStarted` 只是节点生命周期事件，
+不代表模型或终端已经产生首个可见字节。
 
 **【解决方案/代码级实现】** `AgentRunBenchmarkExecutor` 通过构造器注入
 `BenchmarkSuccessEvaluator` 和首事件时间源，初始状态使用精确声明的
 `benchmark.taskId`、`benchmark.category`、`benchmark.prompt`、`benchmark.successCriteria`
 变量，终态由 `AgentRunService.get` 读取。成功只由评估器结合 `RunCheckpoint` 判定，首事件
-时间由 `TraceEvent` 端口提供；任何超时或异常均保留完整堆栈。
+时间由 `RunLogEvent` 保留器通过构造器注入；任何超时或异常均保留完整堆栈。
 
-### 6.4.5 证据记录
+### 6.4.5 审查暴露的协议与生命周期门禁
+
+**【问题现象】** 首轮实现允许 Jackson 接受重复字段和尾随 JSON 根对象，报告调用方可以
+直接构造与原始结果不一致的聚合字段，Writer 还会关闭调用方提供的输出流。Benchmark
+超时只返回失败结果而不取消底层 Agent Run，导致超时后仍继续占用并发槽位；并发发布的
+异步日志用非线程安全的快照读取，重复执行会出现不稳定的 `passK`。
+
+**【根因分析】** 默认 JSON 映射器和 record 构造器只验证语法，不验证事件协议和聚合不变量；
+评测超时边界与 AgentRunService 的实际生命周期没有连接。非重放日志总线也不能在发布前
+假定首事件已可查询。
+
+**【解决方案/代码级实现】** `BenchmarkTaskSetReader` 对注入映射器做副本配置，开启
+`STRICT_DUPLICATE_DETECTION` 和 `FAIL_ON_TRAILING_TOKENS`。`BenchmarkReport` 校验结果数量、
+任务/重复序号完备性、逐任务 `TaskMetrics`、失败堆栈与 TTFT 计数的聚合一致性；
+`BenchmarkReportWriter` 禁用 `AUTO_CLOSE_TARGET`，保留调用方流所有权。`AgentRunService.cancel`
+先以乐观版本追加 `FAILED` 取消快照，再中断该 Run 的全部活动 Future；`StateGraph` 在外层
+等待被中断时取消当前节点 Future，异常路径读取最新权威快照，避免覆盖取消结果。
+真实工作流测试发布并记录 `RunLogEvent`，成功标准显式允许业务定义的非 `RUNNING` 终态，
+并用门闩确认进入节点后再验证超时取消。
+
+**【证据】** `BenchmarkTaskSetReaderTest` 的重复字段/尾随根对象测试、
+`BenchmarkMetricsTest` 的逐任务报告门禁、`BenchmarkRunnerTest` 的输出流所有权测试、
+`AgentRunServiceTest.cancelsRunningRunAndInterruptsNode` 和
+`AgentRunBenchmarkWorkflowTest` 的等待审批/超时场景均通过。
+
+### 6.4.6 证据记录
 
 Task 2、3、4、5 已分别提交为 `8a432a6`、`92f4854`、`b55f462`、`96283f4`；真实工作流
 测试读取 58 条任务，覆盖 `CODE`、`OPS`、`RAG`、`TRACE`，所有 Run 到达 `COMPLETED`，
