@@ -981,12 +981,12 @@ Task 2、3、4、5 已分别提交为 `8a432a6`、`92f4854`、`b55f462`、`96283
 测试读取 58 条任务，覆盖 `CODE`、`OPS`、`RAG`、`TRACE`，所有 Run 到达 `COMPLETED`，
 首事件时间存在且报告 `passK=1.0`。
 
-2026-08-05 在显式 JDK `21.0.2` 和 Docker Desktop Engine 环境执行根目录
-`mvn clean verify`，退出码为 `0`、总耗时 `05:34`：
+2026-08-05 在显式 JDK `21.0.2` 和 Docker Desktop Engine `27.4.0` 环境执行根目录
+`mvn clean verify`，退出码为 `0`：
 
-- Surefire XML 汇总 `255` 项 Java 测试，失败、错误、跳过均为 `0`；真实 Docker、PTY、
+- Surefire XML 汇总 `261` 项 Java 测试，失败、错误、跳过均为 `0`；真实 Docker、PTY、
   Chromium、PostgreSQL 和 pgvector 测试均在本轮执行。
 - 独立前端 Vitest 为 `5` 个文件、`22` 项测试全部通过；
   `npm audit --audit-level=low` 返回 `found 0 vulnerabilities`。
 - `git diff --check` 通过；精确模块路径扫描未发现 `langchain4j` 或 `langgraph4j`；
-  `docker ps -a --filter label=com.agent.runtime.managed=true` 无输出。
+  `docker ps -a --filter label=com.agent.runtime.managed=true` 返回 0 个容器。
