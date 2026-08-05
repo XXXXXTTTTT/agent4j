@@ -111,6 +111,15 @@ export function AgentConversation({ run, currentNode }: AgentConversationProps) 
   const messages = run.state.messages
   const task = variables['demo.task'] ?? variables['planner.task']
   const plan = variables['planner.plan']
+  const plannerRequest = variables['planner.request']
+  const plannerResponse = variables['planner.response']
+  const plannerModel = variables['planner.model']
+  const plannerError = variables['planner.error']
+  const coderRequest = variables['coder.request']
+  const coderResponse = variables['coder.response']
+  const coderModel = variables['coder.model']
+  const coderSummary = variables['coder.summary']
+  const coderError = variables['coder.error']
   const updatedFiles = variables['coder.updatedFiles']
   const command = variables['ops.command']
   const exitCode = variables['ops.exitCode']
@@ -123,7 +132,7 @@ export function AgentConversation({ run, currentNode }: AgentConversationProps) 
   const reviewFeedback = variables['reviewer.feedback']
   const reviewerError = variables['reviewer.error']
   const approved = variables['reviewer.approved']
-  const executionErrors = [opsError, opsLogError, reviewerError].filter(
+  const executionErrors = [plannerError, coderError, opsError, opsLogError, reviewerError].filter(
     (value): value is string => value !== undefined && value.length > 0,
   )
   const hasFailureEvidence = timedOut === 'true' || executionErrors.length > 0 || run.error !== null
@@ -151,6 +160,14 @@ export function AgentConversation({ run, currentNode }: AgentConversationProps) 
           ) : (
             <div className="plan-block"><strong>执行计划</strong><p>{plan}</p></div>
           )}
+          {plannerRequest === undefined && plannerResponse === undefined ? null : (
+            <details className="evidence-details" open>
+              <summary>Planner 模型调用 {plannerModel === undefined ? '' : `· ${plannerModel}`}</summary>
+              {plannerRequest === undefined ? null : <pre>{plannerRequest}</pre>}
+              {plannerResponse === undefined ? null : <pre>{plannerResponse}</pre>}
+              {plannerError === undefined ? null : <pre className="run-error-detail">{plannerError}</pre>}
+            </details>
+          )}
           <ol className="execution-stages" aria-label="执行阶段">
             {STAGES.map((stage) => {
               const state = stageState(run, currentNode, stage.id)
@@ -171,6 +188,22 @@ export function AgentConversation({ run, currentNode }: AgentConversationProps) 
           <div className="message-body">
             <span className="message-author">代码变更</span>
             <pre className="artifact-list">{updatedFiles}</pre>
+          </div>
+        </article>
+      )}
+
+      {coderRequest === undefined && coderResponse === undefined && coderError === undefined ? null : (
+        <article className="conversation-message event-message">
+          <span className="message-avatar"><Code2 aria-hidden="true" size={16} /></span>
+          <div className="message-body">
+            <div className="event-heading">
+              <span className="message-author">Coder 模型与工具</span>
+              {coderModel === undefined ? null : <code>{coderModel}</code>}
+            </div>
+            {coderSummary === undefined ? null : <p>{coderSummary}</p>}
+            {coderRequest === undefined ? null : <details className="evidence-details" open><summary>模型请求</summary><pre>{coderRequest}</pre></details>}
+            {coderResponse === undefined ? null : <details className="evidence-details"><summary>模型响应</summary><pre>{coderResponse}</pre></details>}
+            {coderError === undefined ? null : <pre className="run-error-detail">{coderError}</pre>}
           </div>
         </article>
       )}

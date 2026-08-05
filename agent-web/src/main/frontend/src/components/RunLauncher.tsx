@@ -14,7 +14,7 @@ const DEFAULT_STATE = '{"messages":[],"variables":{},"trace":[]}'
 /** 在会话底部收集自然语言任务，并保留可展开的底层运行参数。 */
 export function RunLauncher({ controller }: RunLauncherProps) {
   const [task, setTask] = useState(DEFAULT_TASK)
-  const [graphId, setGraphId] = useState('demo-agent')
+  const [graphId, setGraphId] = useState('code-agent')
   const [initialStateJson, setInitialStateJson] = useState(DEFAULT_STATE)
   const [advanced, setAdvanced] = useState(false)
   const [inputError, setInputError] = useState<string | null>(null)
@@ -30,14 +30,7 @@ export function RunLauncher({ controller }: RunLauncherProps) {
         const parsed = JSON.parse(initialStateJson) as unknown
         await controller.start(graphId, decodeAgentState(parsed, 'initialState'))
       } else {
-        await controller.start('demo-agent', decodeAgentState({
-          messages: [],
-          variables: {
-            'demo.task': task.trim(),
-            'demo.workspace': '当前工作区',
-          },
-          trace: [],
-        }, 'initialState'))
+        await controller.startTask(task.trim())
       }
     } catch (error) {
       setInputError(error instanceof Error ? error.message : String(error))

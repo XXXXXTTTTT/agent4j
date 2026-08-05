@@ -9,6 +9,7 @@ import type {
 import {
   RunApiError,
   createRun,
+  createCodeAgentRun,
   decideRun,
   decodeTraceFrame,
   getRun,
@@ -40,6 +41,7 @@ export interface UseRunWorkbenchResult {
   connectionState: WorkbenchConnectionState
   error: Error | null
   start(graphId: string, initialState: AgentState): Promise<void>
+  startTask(task: string): Promise<void>
   reload(): Promise<void>
   decide(command: ApprovalCommand): Promise<void>
 }
@@ -186,6 +188,28 @@ export function useRunWorkbench(
     [connect, fetcher],
   )
 
+  const startTask = useCallback(
+    async (task: string): Promise<void> => {
+      const operation = ++operationRef.current
+      setError(null)
+      try {
+        const created = await createCodeAgentRun({ task }, fetcher())
+        const loadedHistory = await getRunHistory(created.runId, fetcher())
+        if (!mountedRef.current || operation !== operationRef.current) return
+        setRun(created)
+        runRef.current = created
+        setHistory(loadedHistory)
+        connect(created.runId)
+      } catch (failure) {
+        if (mountedRef.current && operation === operationRef.current) {
+          setError(asError(failure))
+        }
+        throw failure
+      }
+    },
+    [connect, fetcher],
+  )
+
   const reload = useCallback(async (): Promise<void> => {
     const current = runRef.current
     if (current === null) throw new Error('当前没有 Run')
@@ -250,6 +274,7 @@ export function useRunWorkbench(
     connectionState,
     error,
     start,
+    startTask,
     reload,
     decide,
   }

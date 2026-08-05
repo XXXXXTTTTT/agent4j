@@ -196,6 +196,11 @@ code, pre { font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
 .result-title { display: block; font-size: 15px; margin: 2px 0 5px; }
 .run-error-detail { background: #fff1f2; border: 1px solid #f0cbd0; border-radius: 5px; color: #8f303a; max-height: 180px; padding: 10px; }
 
+.evidence-details { margin-top: 8px; border: 1px solid #dfe7e2; border-radius: 5px; background: #fbfdfb; }
+.evidence-details summary { cursor: pointer; padding: 7px 9px; color: #43534a; font-size: 12px; font-weight: 700; }
+.evidence-details pre { margin: 0; padding: 9px; max-height: 180px; overflow: auto; border-top: 1px solid #e7ede9; color: #29332e; font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-call-details { margin: 10px 12px; }
+
 .run-launcher {
   background: linear-gradient(to top, #fff 78%, rgba(255,255,255,0));
   padding: 16px 28px 22px;

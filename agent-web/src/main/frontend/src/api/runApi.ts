@@ -513,6 +513,46 @@ export async function createRun(
   )
 }
 
+export interface CodeAgentStartCommand {
+  task: string
+  workspacePath?: string
+  repositoryId?: string
+  userId?: string
+  reviewerUrl?: string
+}
+
+/** 通过任务优先接口启动真实 code-agent Run。 */
+export async function createCodeAgentRun(
+  command: CodeAgentStartCommand,
+  fetcher: typeof fetch = globalThis.fetch,
+): Promise<RunView> {
+  const task = nonBlankStringAt(command.task, 'task')
+  const body: Record<string, string> = { task }
+  if (command.workspacePath !== undefined && command.workspacePath.trim().length > 0) {
+    body.workspacePath = command.workspacePath.trim()
+  }
+  if (command.repositoryId !== undefined && command.repositoryId.trim().length > 0) {
+    body.repositoryId = command.repositoryId.trim()
+  }
+  if (command.userId !== undefined && command.userId.trim().length > 0) {
+    body.userId = command.userId.trim()
+  }
+  if (command.reviewerUrl !== undefined && command.reviewerUrl.trim().length > 0) {
+    body.reviewerUrl = command.reviewerUrl.trim()
+  }
+  return decodeRunView(
+    await requestJson(
+      '/api/runs/code-agent',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+      fetcher,
+    ),
+  )
+}
+
 export async function getRun(
   runId: string,
   fetcher: typeof fetch = globalThis.fetch,

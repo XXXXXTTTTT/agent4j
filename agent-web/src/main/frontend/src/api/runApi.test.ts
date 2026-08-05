@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   createRun,
+  createCodeAgentRun,
   decodeRunView,
   decodeTerminalFrame,
   decodeTraceFrame,
@@ -120,6 +121,32 @@ describe('Run API 协议解码', () => {
 })
 
 describe('Run API HTTP 请求', () => {
+  it('通过任务优先路径创建真实 code-agent Run', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      ...waitingRun(),
+      graphId: 'code-agent',
+    }, 202))
+
+    const run = await createCodeAgentRun({
+      task: '修复登录超时并运行测试',
+      repositoryId: 'repo-1',
+      userId: 'user-1',
+      reviewerUrl: 'https://application.test',
+    }, fetcher)
+
+    expect(run.graphId).toBe('code-agent')
+    expect(fetcher).toHaveBeenCalledWith('/api/runs/code-agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        task: '修复登录超时并运行测试',
+        repositoryId: 'repo-1',
+        userId: 'user-1',
+        reviewerUrl: 'https://application.test',
+      }),
+    })
+  })
+
   it('使用精确路径和 JSON 创建 Run', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(waitingRun(), 202))
 

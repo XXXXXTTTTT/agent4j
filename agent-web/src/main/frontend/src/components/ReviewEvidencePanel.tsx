@@ -42,6 +42,8 @@ export function ReviewEvidencePanel({ run, history }: ReviewEvidencePanelProps) 
   const feedback = variables['reviewer.feedback']
   const model = variables['reviewer.model']
   const reviewerError = variables['reviewer.error']
+  const reviewerRequest = variables['reviewer.request']
+  const reviewerResponse = variables['reviewer.response']
   const validScreenshot = screenshot !== undefined && PNG_DATA_URL.test(screenshot)
 
   return (
@@ -91,6 +93,13 @@ export function ReviewEvidencePanel({ run, history }: ReviewEvidencePanelProps) 
         </div>
       )}
       {finalUrl === undefined ? null : <p className="evidence-url">{finalUrl}</p>}
+      {reviewerRequest === undefined && reviewerResponse === undefined ? null : (
+        <details className="evidence-details review-call-details" open>
+          <summary>Reviewer 模型调用</summary>
+          {reviewerRequest === undefined ? null : <pre>{reviewerRequest}</pre>}
+          {reviewerResponse === undefined ? null : <pre>{reviewerResponse}</pre>}
+        </details>
+      )}
       <div className="evidence-content">
         {tab === 'screenshot' ? (
           validScreenshot ? (

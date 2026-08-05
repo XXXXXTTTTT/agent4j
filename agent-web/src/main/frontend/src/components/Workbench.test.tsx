@@ -46,6 +46,7 @@ function controller(
     connectionState: { trace: null, terminal: null },
     error: null,
     start: vi.fn(async () => undefined),
+    startTask: vi.fn(async () => undefined),
     reload: vi.fn(async () => undefined),
     decide: vi.fn(async () => undefined),
     ...overrides,
@@ -92,6 +93,13 @@ describe('Workbench', () => {
               variables: {
                 'demo.task': '修复登录超时并运行测试',
                 'planner.plan': '先定位超时配置，再修改代码并验证回归测试。',
+                'planner.request': '用户任务：修复登录超时并运行测试',
+                'planner.response': '先定位超时配置，再修改代码并验证回归测试。',
+                'planner.model': 'code-model',
+                'coder.request': '生成登录超时修复 Diff',
+                'coder.response': '{"summary":"修复超时","command":"mvn test"}',
+                'coder.model': 'code-model',
+                'coder.summary': '修复超时配置',
                 'coder.updatedFiles': 'src/LoginService.java',
                 'ops.command': 'mvn test',
                 'ops.exitCode': '0',
@@ -99,6 +107,8 @@ describe('Workbench', () => {
                 'reviewer.approved': 'true',
                 'reviewer.summary': '任务链路已完成',
                 'reviewer.feedback': '代码变更与测试结果通过审查',
+                'reviewer.request': '代码与 Ops 证据',
+                'reviewer.response': '{"approved":true}',
               },
               trace: ['planner', 'coder', 'ops', 'reviewer'],
             },
@@ -110,11 +120,14 @@ describe('Workbench', () => {
 
     const conversation = screen.getByLabelText('Agent 会话')
     expect(within(conversation).getByText('修复登录超时并运行测试')).toBeVisible()
-    expect(within(conversation).getByText('先定位超时配置，再修改代码并验证回归测试。')).toBeVisible()
+    expect(within(conversation).getAllByText('先定位超时配置，再修改代码并验证回归测试。')).toHaveLength(2)
     expect(within(conversation).getByText('src/LoginService.java')).toBeVisible()
     expect(within(conversation).getByText('mvn test')).toBeVisible()
     expect(within(conversation).getByText('任务链路已完成')).toBeVisible()
     expect(within(conversation).getByText('代码变更与测试结果通过审查')).toBeVisible()
+    expect(within(conversation).getByText('用户任务：修复登录超时并运行测试')).toBeVisible()
+    expect(within(conversation).getByText('生成登录超时修复 Diff')).toBeVisible()
+    expect(within(conversation).getByText('{"summary":"修复超时","command":"mvn test"}')).toBeInTheDocument()
   })
 
   it('呈现持久化消息与 Ops 失败证据，而不是只显示成功摘要', () => {
@@ -204,7 +217,7 @@ describe('Workbench', () => {
     expect(within(timeline).getByText('coder')).toBeVisible()
   })
 
-  it('按自然语言任务启动 demo-agent Run', async () => {
+  it('按自然语言任务启动 production code-agent Run', async () => {
     const user = userEvent.setup()
     const state = controller()
     render(<Workbench controller={state} onTerminalReady={() => undefined} />)
@@ -214,14 +227,7 @@ describe('Workbench', () => {
     await user.type(task, '修复登录超时')
     await user.click(screen.getByRole('button', { name: '运行 Agent' }))
 
-    expect(state.start).toHaveBeenCalledWith('demo-agent', {
-      messages: [],
-      variables: {
-        'demo.task': '修复登录超时',
-        'demo.workspace': '当前工作区',
-      },
-      trace: [],
-    })
+    expect(state.startTask).toHaveBeenCalledWith('修复登录超时')
   })
 
   it('在三个 Tab 间切换并按精确路径选择 Diff 文件', async () => {
