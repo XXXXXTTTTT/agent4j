@@ -1,7 +1,8 @@
-import { Code2, Eye, Terminal } from 'lucide-react'
+import { Activity, Code2, Globe2, RefreshCw, Terminal } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
 
 import type { UseRunWorkbenchResult } from '../hooks/useRunWorkbench'
+import { AgentConversation } from './AgentConversation'
 import { ApprovalDialog } from './ApprovalDialog'
 import { RunLauncher } from './RunLauncher'
 import { TerminalPanel, type TerminalPanelHandle } from './TerminalPanel'
@@ -19,77 +20,71 @@ interface WorkbenchProps {
   onTerminalReady(terminal: TerminalPanelHandle | null): void
 }
 
-type WorkbenchTab = 'code' | 'terminal' | 'review'
-
-const STAGE_LABELS: Record<string, string> = {
-  planner: '规划',
-  coder: '修改代码',
-  ops: '运行测试',
-  reviewer: '质量审查',
-}
+type WorkbenchTab = 'code' | 'terminal' | 'review' | 'trace'
 
 const TABS: Array<{ id: WorkbenchTab; label: string; icon: typeof Code2 }> = [
-  { id: 'code', label: '代码', icon: Code2 },
+  { id: 'code', label: '代码变更', icon: Code2 },
   { id: 'terminal', label: '终端', icon: Terminal },
-  { id: 'review', label: '审查', icon: Eye },
+  { id: 'review', label: '浏览器', icon: Globe2 },
+  { id: 'trace', label: 'Trace', icon: Activity },
 ]
 
-/** 编排启动、执行证据和状态信号三个工作区列。 */
+/** 编排对话式任务流与执行证据检查器。 */
 export function Workbench({ controller, onTerminalReady }: WorkbenchProps) {
   const [activeTab, setActiveTab] = useState<WorkbenchTab>('code')
   const [reviewOpened, setReviewOpened] = useState(false)
   const diff = controller.run?.state.variables['coder.unifiedDiff']
-  const task = controller.run?.state.variables['demo.task']
-  const currentStage = controller.run?.state.trace.at(-1) ?? controller.run?.nextNode ?? null
+  const latestTrace = controller.traceEvents.at(-1)
+  const currentNode = latestTrace?.type === 'NODE_STARTED'
+    ? latestTrace.nodeName
+    : controller.run?.nextNode ?? null
+  const run = controller.run
 
   return (
     <div className="workbench-shell" data-testid="workbench-shell">
       <header className="workbench-header">
         <div className="brand-lockup">
           <span className="brand-mark">A4J</span>
-          <div><p className="section-kicker">AGENT RUNTIME SYSTEM</p><h1>Workstation</h1></div>
+          <div><h1>Agent4J</h1><p>Code Agent</p></div>
         </div>
-        <div className="header-run-state">
-          <span className="header-dot" aria-hidden="true" />
-          {controller.run?.graphId ?? '等待图任务'}
+        <div className="header-run-state" aria-live="polite">
+          {run === null ? <span>新任务</span> : (
+            <>
+              <span className={`header-dot status-${run.status.toLowerCase()}`} aria-hidden="true" />
+              <span>{run.graphId}</span>
+              <code>v{run.version}</code>
+              <button
+                className="icon-button"
+                type="button"
+                title="刷新任务"
+                aria-label="刷新任务"
+                onClick={() => void controller.reload().catch(() => undefined)}
+              >
+                <RefreshCw aria-hidden="true" size={16} />
+              </button>
+            </>
+          )}
         </div>
       </header>
 
-      <div className="workbench-grid">
-        <aside className="left-rail">
-          <RunLauncher controller={controller} />
-          {controller.run === null ? null : (
-            <ApprovalDialog run={controller.run} decide={controller.decide} />
-          )}
-        </aside>
-
-        <main className="workspace-main" data-testid="workspace-main">
-          <div className="workspace-heading">
-            <div>
-              <p className="section-kicker">EXECUTION SURFACE</p>
-              <h2>工作区</h2>
-            </div>
-            <span className="checkpoint-label">
-              {controller.run === null ? '未选择 Run' : `Checkpoint v${controller.run.version}`}
-            </span>
+      <div className="agent-layout">
+        <main className="conversation-column" data-testid="workspace-main">
+          <div className="conversation-scroll">
+            <AgentConversation run={run} currentNode={currentNode} />
+            {run === null ? null : <ApprovalDialog run={run} decide={controller.decide} />}
           </div>
-          <section className="agent-task-card" aria-label="Agent 任务进度">
+          <RunLauncher controller={controller} />
+        </main>
+
+        <aside className="execution-inspector" aria-label="执行检查器">
+          <div className="inspector-heading">
             <div>
-              <p className="section-kicker">AGENT TASK</p>
-              <strong>{task ?? '输入任务后，Agent 将在这里展示执行进度'}</strong>
+              <p className="section-kicker">RUN EVIDENCE</p>
+              <h2>执行详情</h2>
             </div>
-            <div className="agent-stage-list" aria-label="Agent 阶段">
-              {['planner', 'coder', 'ops', 'reviewer'].map((stage) => (
-                <span
-                  key={stage}
-                  className={currentStage === stage ? 'is-current' : controller.run?.state.trace.includes(stage) ? 'is-done' : ''}
-                >
-                  {STAGE_LABELS[stage]}
-                </span>
-              ))}
-            </div>
-          </section>
-          <div className="workspace-tabs" role="tablist" aria-label="工作区视图">
+            <span className="checkpoint-label">{run === null ? '尚未运行' : `Checkpoint ${run.version}`}</span>
+          </div>
+          <div className="workspace-tabs" role="tablist" aria-label="检查器视图">
             {TABS.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
@@ -123,10 +118,15 @@ export function Workbench({ controller, onTerminalReady }: WorkbenchProps) {
                 </Suspense>
               ) : null}
             </div>
+            <div id="trace-view" role="tabpanel" hidden={activeTab !== 'trace'}>
+              <TraceTimeline
+                events={controller.traceEvents}
+                connectionState={controller.connectionState}
+                persistedNodes={run?.state.trace ?? []}
+              />
+            </div>
           </div>
-        </main>
-
-        <TraceTimeline events={controller.traceEvents} connectionState={controller.connectionState} />
+        </aside>
       </div>
       {controller.error === null ? null : <p className="global-error" role="alert">{controller.error.message}</p>}
     </div>

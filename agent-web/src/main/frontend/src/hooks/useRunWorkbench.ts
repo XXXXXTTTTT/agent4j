@@ -232,10 +232,13 @@ export function useRunWorkbench(
   )
 
   useEffect(
-    () => () => {
-      mountedRef.current = false
-      operationRef.current += 1
-      closeConnections()
+    () => {
+      mountedRef.current = true
+      return () => {
+        mountedRef.current = false
+        operationRef.current += 1
+        closeConnections()
+      }
     },
     [closeConnections],
   )

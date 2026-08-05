@@ -81,6 +81,129 @@ function traceEvents(): TraceEvent[] {
 }
 
 describe('Workbench', () => {
+  it('将任务、计划、执行结果和审查结论呈现为连续 Agent 会话', () => {
+    render(
+      <Workbench
+        controller={controller({
+          run: runView({
+            graphId: 'demo-agent',
+            state: {
+              messages: [],
+              variables: {
+                'demo.task': '修复登录超时并运行测试',
+                'planner.plan': '先定位超时配置，再修改代码并验证回归测试。',
+                'coder.updatedFiles': 'src/LoginService.java',
+                'ops.command': 'mvn test',
+                'ops.exitCode': '0',
+                'ops.stdout': 'Tests run: 12, Failures: 0',
+                'reviewer.approved': 'true',
+                'reviewer.summary': '任务链路已完成',
+                'reviewer.feedback': '代码变更与测试结果通过审查',
+              },
+              trace: ['planner', 'coder', 'ops', 'reviewer'],
+            },
+          }),
+        })}
+        onTerminalReady={() => undefined}
+      />,
+    )
+
+    const conversation = screen.getByLabelText('Agent 会话')
+    expect(within(conversation).getByText('修复登录超时并运行测试')).toBeVisible()
+    expect(within(conversation).getByText('先定位超时配置，再修改代码并验证回归测试。')).toBeVisible()
+    expect(within(conversation).getByText('src/LoginService.java')).toBeVisible()
+    expect(within(conversation).getByText('mvn test')).toBeVisible()
+    expect(within(conversation).getByText('任务链路已完成')).toBeVisible()
+    expect(within(conversation).getByText('代码变更与测试结果通过审查')).toBeVisible()
+  })
+
+  it('呈现持久化消息与 Ops 失败证据，而不是只显示成功摘要', () => {
+    render(
+      <Workbench
+        controller={controller({
+          run: runView({
+            status: 'COMPLETED',
+            state: {
+              messages: [
+                { role: 'user', content: '请运行回归测试' },
+                { role: 'assistant', content: '我正在执行测试。' },
+                {
+                  role: 'tool',
+                  content: '命令返回失败',
+                  name: 'ops',
+                  tool_call_id: 'tool-1',
+                },
+              ],
+              variables: {
+                'ops.command': 'mvn test',
+                'ops.stderr': '编译失败',
+                'ops.timedOut': 'true',
+                'ops.error': 'java.lang.IllegalStateException: test failed',
+                'ops.logError': '日志发布失败',
+                'reviewer.error': '审查未执行',
+              },
+              trace: ['ops'],
+            },
+          }),
+        })}
+        onTerminalReady={() => undefined}
+      />,
+    )
+
+    const conversation = screen.getByLabelText('Agent 会话')
+    expect(within(conversation).getByText('请运行回归测试')).toBeVisible()
+    expect(within(conversation).getByText('我正在执行测试。')).toBeVisible()
+    expect(within(conversation).getByText('编译失败')).toBeVisible()
+    expect(within(conversation).getByText('命令超时')).toBeVisible()
+    expect(within(conversation).getByText(/java\.lang\.IllegalStateException: test failed/)).toBeVisible()
+    expect(within(conversation).getByText('日志发布失败')).toBeVisible()
+    expect(within(conversation).getByText('审查未执行')).toBeVisible()
+  })
+
+  it('空闲时将自然语言输入作为页面主操作', () => {
+    render(<Workbench controller={controller()} onTerminalReady={() => undefined} />)
+
+    expect(screen.getByRole('heading', { name: '今天要让 Agent 完成什么？' })).toBeVisible()
+    expect(screen.getByLabelText('任务描述')).toBeVisible()
+    expect(screen.getByRole('button', { name: '运行 Agent' })).toBeEnabled()
+  })
+
+  it('通过四个检查器视图访问代码、终端、审查和 Trace', async () => {
+    const user = userEvent.setup()
+    render(
+      <Workbench
+        controller={controller({ run: runView(), traceEvents: traceEvents() })}
+        onTerminalReady={() => undefined}
+      />,
+    )
+
+    const inspector = screen.getByLabelText('执行检查器')
+    for (const label of ['代码变更', '终端', '浏览器', 'Trace']) {
+      expect(within(inspector).getByRole('tab', { name: label })).toBeVisible()
+    }
+    await user.click(within(inspector).getByRole('tab', { name: 'Trace' }))
+    expect(screen.getByTestId('trace-timeline')).toBeVisible()
+  })
+
+  it('没有实时事件时从权威 state.trace 恢复阶段轨迹', async () => {
+    const user = userEvent.setup()
+    render(
+      <Workbench
+        controller={controller({
+          run: runView({ state: { messages: [], variables: {}, trace: ['planner', 'coder'] } }),
+          traceEvents: [],
+        })}
+        onTerminalReady={() => undefined}
+      />,
+    )
+
+    await user.click(screen.getByRole('tab', { name: 'Trace' }))
+    const timeline = screen.getByTestId('trace-timeline')
+    expect(within(timeline).getByText('已保存节点轨迹')).toBeVisible()
+    expect(within(timeline).getByText('planner')).toBeVisible()
+    expect(within(timeline).getByText('coder')).toBeVisible()
+  })
+
   it('按自然语言任务启动 demo-agent Run', async () => {
     const user = userEvent.setup()
     const state = controller()
@@ -131,7 +254,7 @@ diff --git a/src/Service.java b/src/Service.java
       />,
     )
 
-    expect(screen.getByRole('tab', { name: '代码' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: '代码变更' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.queryByTestId('review-panel')).not.toBeInTheDocument()
     await user.selectOptions(await screen.findByLabelText('Diff 文件'), 'src/Service.java')
     expect(screen.getByTestId('monaco-diff')).toHaveAttribute('data-modified', 'after\n')
@@ -139,11 +262,42 @@ diff --git a/src/Service.java b/src/Service.java
     await user.click(screen.getByRole('tab', { name: '终端' }))
     expect(screen.getByTestId('terminal-panel')).toBeVisible()
     expect(screen.getByTestId('monaco-diff')).toBeInTheDocument()
-    await user.click(screen.getByRole('tab', { name: '审查' }))
+    await user.click(screen.getByRole('tab', { name: '浏览器' }))
     expect(await screen.findByTestId('review-panel')).toBeVisible()
   })
 
-  it('渲染七种 Trace 事件', () => {
+  it('在浏览器证据中呈现 Reviewer 摘要、反馈、模型和错误', async () => {
+    const user = userEvent.setup()
+    render(
+      <Workbench
+        controller={controller({
+          run: runView({
+            state: {
+              messages: [],
+              variables: {
+                'reviewer.summary': '截图存在布局问题',
+                'reviewer.feedback': '需要调整移动端布局',
+                'reviewer.model': 'vision-model',
+                'reviewer.error': '浏览器审查异常',
+              },
+              trace: [],
+            },
+          }),
+        })}
+        onTerminalReady={() => undefined}
+      />,
+    )
+
+    await user.click(screen.getByRole('tab', { name: '浏览器' }))
+    const panel = await screen.findByTestId('review-panel')
+    expect(within(panel).getByText('截图存在布局问题')).toBeVisible()
+    expect(within(panel).getByText('需要调整移动端布局')).toBeVisible()
+    expect(within(panel).getByText('vision-model')).toBeVisible()
+    expect(within(panel).getByText('浏览器审查异常')).toBeVisible()
+  })
+
+  it('渲染七种 Trace 事件', async () => {
+    const user = userEvent.setup()
     render(
       <Workbench
         controller={controller({ run: runView(), traceEvents: traceEvents() })}
@@ -151,6 +305,7 @@ diff --git a/src/Service.java b/src/Service.java
       />,
     )
 
+    await user.click(screen.getByRole('tab', { name: 'Trace' }))
     const timeline = screen.getByTestId('trace-timeline')
     for (const label of ['节点开始', '节点完成', '已挂起', '已批准', '已拒绝', '失败', '完成']) {
       expect(within(timeline).getByText(label)).toBeVisible()
@@ -248,7 +403,7 @@ diff --git a/src/Service.java b/src/Service.java
         onTerminalReady={() => undefined}
       />,
     )
-    await user.click(screen.getByRole('tab', { name: '审查' }))
+    await user.click(screen.getByRole('tab', { name: '浏览器' }))
     await user.click(await screen.findByRole('button', { name: '版本 3' }))
 
     expect(screen.getByRole('img', { name: '版本 3 审查截图' })).toHaveAttribute(
@@ -300,7 +455,7 @@ diff --git a/src/Service.java b/src/Service.java
         onTerminalReady={() => undefined}
       />,
     )
-    await user.click(screen.getByRole('tab', { name: '审查' }))
+    await user.click(screen.getByRole('tab', { name: '浏览器' }))
     expect(screen.getByText('等待 ReviewerNode 截图')).toBeVisible()
 
     rerender(

@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { AgentState, ApprovalCommand, RunView } from '../api/contracts'
@@ -93,6 +94,31 @@ function socketHarness() {
 }
 
 describe('useRunWorkbench', () => {
+  it('在 StrictMode 生命周期重放后仍保存启动结果并建立连接', async () => {
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/runs') return jsonResponse(runningRun(RUN_ID_1), 202)
+      if (url.endsWith('/history')) return jsonResponse([runningRun(RUN_ID_1)])
+      throw new Error(`未处理请求: ${url}`)
+    })
+    const { sockets, factory } = socketHarness()
+    const { result } = renderHook(
+      () =>
+        useRunWorkbench({
+          fetcher: fetchSpy as typeof fetch,
+          webSocketFactory: factory,
+          onTerminalReset: vi.fn(),
+          onTerminalData: vi.fn(),
+        }),
+      { wrapper: StrictMode },
+    )
+
+    await act(() => result.current.start('coder-ops', INITIAL_STATE))
+
+    expect(result.current.run?.runId).toBe(RUN_ID_1)
+    expect(sockets).toHaveLength(2)
+  })
+
   it('启动后读取历史并打开两条连接，切换 Run 和卸载时清理旧连接', async () => {
     let startCount = 0
     const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

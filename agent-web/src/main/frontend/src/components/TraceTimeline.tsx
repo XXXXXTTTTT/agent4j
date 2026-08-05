@@ -19,6 +19,7 @@ import type { WorkbenchConnectionState } from '../hooks/useRunWorkbench'
 interface TraceTimelineProps {
   events: TraceEvent[]
   connectionState: WorkbenchConnectionState
+  persistedNodes: string[]
 }
 
 interface TracePresentation {
@@ -56,7 +57,7 @@ function socketLabel(value: number | null): string {
 }
 
 /** 将图执行事件呈现为右侧状态机信号轨。 */
-export function TraceTimeline({ events, connectionState }: TraceTimelineProps) {
+export function TraceTimeline({ events, connectionState, persistedNodes }: TraceTimelineProps) {
   const connected = connectionState.trace === WebSocket.OPEN
     && connectionState.terminal === WebSocket.OPEN
   return (
@@ -73,7 +74,27 @@ export function TraceTimeline({ events, connectionState }: TraceTimelineProps) {
         <span>Trace {socketLabel(connectionState.trace)}</span>
         <span>PTY {socketLabel(connectionState.terminal)}</span>
       </div>
-      {events.length === 0 ? (
+      {events.length === 0 && persistedNodes.length > 0 ? (
+        <>
+          <div className="trace-empty is-persisted">
+            <CheckCircle2 aria-hidden="true" size={18} />
+            <span>已恢复阶段</span>
+            <span className="trace-source">已保存节点轨迹</span>
+          </div>
+          <ol className="signal-rail">
+            {persistedNodes.map((nodeName, index) => (
+              <li key={`persisted-${nodeName}-${index}`} className="trace-event is-success">
+                <span className="trace-marker" aria-hidden="true"><CircleCheck size={17} /></span>
+                <div>
+                  <strong>节点记录</strong>
+                  <p>{nodeName}</p>
+                  <time>state.trace[{index}]</time>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </>
+      ) : events.length === 0 ? (
         <div className="trace-empty"><CircleAlert aria-hidden="true" size={18} />等待执行事件</div>
       ) : (
         <ol className="signal-rail">
