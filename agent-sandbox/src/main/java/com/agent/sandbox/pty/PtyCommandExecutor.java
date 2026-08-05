@@ -113,6 +113,8 @@ public final class PtyCommandExecutor {
     }
 
     private void terminateProcessTree(PtyProcess process) throws InterruptedException {
+        // 先让 pty4j 关闭 WinPTY 控制台进程组，避免在子进程树快照窗口内漏掉新建子进程。
+        process.destroyForcibly();
         ProcessHandle root = ProcessHandle.of(process.pid()).orElse(null);
         List<ProcessHandle> descendants = root == null
                 ? List.of()
