@@ -1,0 +1,13 @@
+.git
+.github/modernize
+.worktrees
+tmp
+target
+**/target
+node_modules
+**/node_modules
+.frontend
+**/.frontend
+.env
+*.log
+*.out
