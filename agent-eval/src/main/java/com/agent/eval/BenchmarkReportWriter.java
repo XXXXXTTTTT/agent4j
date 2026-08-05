@@ -1,5 +1,6 @@
 package com.agent.eval;
 
+import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
@@ -22,8 +23,10 @@ public final class BenchmarkReportWriter {
 
     public BenchmarkReportWriter(ObjectMapper objectMapper) {
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空")
+                .copy()
                 .registerModule(new JavaTimeModule())
                 .registerModule(new Jdk8Module())
+                .disable(JsonGenerator.Feature.AUTO_CLOSE_TARGET)
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     }
 

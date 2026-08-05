@@ -25,6 +25,19 @@ class BenchmarkMetricsTest {
         assertThat(report.passK()).isEqualTo(49.0 / 50.0);
         assertThat(report.passedTaskCount()).isEqualTo(49);
         assertThat(report.failedExecutionCount()).isEqualTo(1);
+        assertThat(report.taskMetrics()).first().satisfies(metric -> {
+            assertThat(metric.taskId()).isEqualTo("one");
+            assertThat(metric.passedCount()).isEqualTo(1);
+            assertThat(metric.failedCount()).isZero();
+            assertThat(metric.failureStacks()).isEmpty();
+        });
+        assertThat(report.taskMetrics()).element(49).satisfies(metric -> {
+            assertThat(metric.taskId()).isEqualTo("two");
+            assertThat(metric.passedCount()).isZero();
+            assertThat(metric.failedCount()).isEqualTo(1);
+            assertThat(metric.failureStacks()).singleElement()
+                    .asString().contains("IllegalStateException");
+        });
     }
 
     @Test
@@ -87,6 +100,23 @@ class BenchmarkMetricsTest {
                 BASE.plusSeconds(1), null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("时间线");
+    }
+
+    @Test
+    void reportRejectsIncompleteOrInconsistentAggregateFields() {
+        BenchmarkReport.TtftMetrics emptyTtft =
+                new BenchmarkReport.TtftMetrics(0, 0, 0, 0, 0);
+        assertThatThrownBy(() -> new BenchmarkReport(
+                List.of(), List.of(), 1, 1, 0, 0, 0, emptyTtft, BASE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("结果");
+        BenchmarkTaskResult passed = result("one", 1, true, 0, null, null);
+        assertThatThrownBy(() -> new BenchmarkReport(
+                List.of(passed),
+                List.of(new BenchmarkReport.TaskMetrics("one", 1, 0, List.of())),
+                1, 1, 0, 0, 1, emptyTtft, BASE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("聚合");
     }
 
     private BenchmarkTaskSet tasks(String... ids) {

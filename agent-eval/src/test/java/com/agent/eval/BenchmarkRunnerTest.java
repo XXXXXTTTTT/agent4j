@@ -104,10 +104,38 @@ class BenchmarkRunnerTest {
         }
     }
 
+    @Test
+    void reportWriterDoesNotCloseCallerOutputStream() throws Exception {
+        BenchmarkTaskSet taskSet = tasks();
+        try (BenchmarkRunner runner = new BenchmarkRunner((task, repetition, timeout) ->
+                new BenchmarkTaskResult(task.id(), repetition, true, BASE,
+                        java.util.Optional.empty(), BASE.plusMillis(1), null))) {
+            BenchmarkReport report = runner.run(new BenchmarkRunRequest(
+                    taskSet, 1, 2, Duration.ofSeconds(1)));
+            CloseTrackingOutputStream output = new CloseTrackingOutputStream();
+
+            new BenchmarkReportWriter().write(report, output);
+
+            assertThat(output.closed).isFalse();
+            output.write('x');
+        }
+    }
+
     private BenchmarkTaskSet tasks() {
         return new BenchmarkTaskSet(java.util.stream.IntStream.range(0, 50)
                 .mapToObj(index -> new BenchmarkTask(
                         "task-%02d".formatted(index), "CODE", "prompt", "criteria", Map.of()))
                 .toList());
+    }
+
+    private static final class CloseTrackingOutputStream extends ByteArrayOutputStream {
+
+        private boolean closed;
+
+        @Override
+        public void close() throws java.io.IOException {
+            closed = true;
+            super.close();
+        }
     }
 }

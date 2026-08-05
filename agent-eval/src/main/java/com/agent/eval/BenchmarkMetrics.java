@@ -72,6 +72,7 @@ public final class BenchmarkMetrics {
         }
         return new BenchmarkReport(
                 results,
+                calculateTaskMetrics(results),
                 repetitions,
                 taskSet.tasks().size(),
                 passedTaskCount,
@@ -79,6 +80,28 @@ public final class BenchmarkMetrics {
                 failedExecutionCount,
                 calculateTtft(results),
                 Instant.now());
+    }
+
+    private static List<BenchmarkReport.TaskMetrics> calculateTaskMetrics(
+            List<BenchmarkTaskResult> results) {
+        Map<String, List<BenchmarkTaskResult>> byTask = results.stream()
+                .collect(java.util.stream.Collectors.groupingBy(
+                        BenchmarkTaskResult::taskId,
+                        java.util.TreeMap::new,
+                        java.util.stream.Collectors.toList()));
+        return byTask.entrySet().stream()
+                .map(entry -> {
+                    int passedCount = (int) entry.getValue().stream()
+                            .filter(BenchmarkTaskResult::passed)
+                            .count();
+                    List<String> failures = entry.getValue().stream()
+                            .filter(result -> !result.passed())
+                            .map(BenchmarkTaskResult::failureStack)
+                            .toList();
+                    return new BenchmarkReport.TaskMetrics(
+                            entry.getKey(), passedCount, failures.size(), failures);
+                })
+                .toList();
     }
 
     /** 与 calculate 同义，便于调用方按聚合语义命名。 */

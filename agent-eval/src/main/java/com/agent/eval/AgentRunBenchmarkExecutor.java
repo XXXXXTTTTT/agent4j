@@ -62,16 +62,29 @@ public final class AgentRunBenchmarkExecutor implements BenchmarkTaskExecutor {
         }
         Instant startedAt = Instant.now();
         try {
+            long timeoutNanos;
+            try {
+                timeoutNanos = timeout.toNanos();
+            } catch (ArithmeticException exception) {
+                throw new IllegalArgumentException("timeout 超出可计算范围", exception);
+            }
+            long deadline = System.nanoTime() + timeoutNanos;
             AgentState initialState = AgentState.empty()
                     .withVariable(TASK_ID_VARIABLE, task.id())
                     .withVariable(CATEGORY_VARIABLE, task.category())
                     .withVariable(PROMPT_VARIABLE, task.prompt())
                     .withVariable(SUCCESS_CRITERIA_VARIABLE, task.successCriteria());
             RunCheckpoint created = runService.start(graphId, initialState);
-            RunCheckpoint terminal = awaitTerminal(created.runId(), timeout);
+            RunCheckpoint terminal;
+            try {
+                terminal = awaitTerminal(created.runId(), deadline);
+            } catch (BenchmarkRunTimeoutException exception) {
+                terminal = runService.cancel(
+                        created.runId(), "Benchmark 执行超时: " + task.id());
+            }
             Instant finishedAt = terminal.createdAt();
             Optional<Instant> firstTokenAt = firstTokenSource.apply(created.runId());
-            boolean passed = terminal.status() == RunStatus.COMPLETED
+            boolean passed = terminal.status() != RunStatus.RUNNING
                     && successEvaluator.passed(task, terminal);
             if (!passed) {
                 String failure = terminal.error();
@@ -93,26 +106,27 @@ public final class AgentRunBenchmarkExecutor implements BenchmarkTaskExecutor {
         }
     }
 
-    private RunCheckpoint awaitTerminal(UUID runId, Duration timeout) {
-        long timeoutNanos;
-        try {
-            timeoutNanos = timeout.toNanos();
-        } catch (ArithmeticException exception) {
-            throw new IllegalArgumentException("timeout 超出可计算范围", exception);
-        }
-        long deadline = System.nanoTime() + timeoutNanos;
+    private RunCheckpoint awaitTerminal(UUID runId, long deadline) {
         while (true) {
             RunCheckpoint checkpoint = runService.get(runId);
             if (checkpoint.status() != RunStatus.RUNNING) {
                 return checkpoint;
             }
-            if (System.nanoTime() - deadline >= 0) {
-                throw new IllegalStateException("Agent Run 等待终态超时: " + runId);
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                throw new BenchmarkRunTimeoutException(runId);
             }
-            LockSupport.parkNanos(Math.min(Duration.ofMillis(5).toNanos(), timeoutNanos));
+            LockSupport.parkNanos(Math.min(Duration.ofMillis(5).toNanos(), remaining));
             if (Thread.currentThread().isInterrupted()) {
                 throw new IllegalStateException("Agent Run 等待终态时被中断");
             }
+        }
+    }
+
+    private static final class BenchmarkRunTimeoutException extends RuntimeException {
+
+        private BenchmarkRunTimeoutException(UUID runId) {
+            super("Agent Run 等待终态超时: " + runId);
         }
     }
 

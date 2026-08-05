@@ -13,11 +13,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -34,6 +37,8 @@ public final class AgentRunService implements AutoCloseable {
     private final TraceEventPublisher tracePublisher;
     private final ExecutorService executor;
     private final ConcurrentMap<UUID, CompletableFuture<Void>> interruptPublications =
+            new ConcurrentHashMap<>();
+    private final ConcurrentMap<UUID, ConcurrentMap<Future<?>, Boolean>> activeExecutions =
             new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -105,6 +110,46 @@ public final class AgentRunService implements AutoCloseable {
             throw new RunNotFoundException(runId);
         }
         return List.copyOf(history);
+    }
+
+    /**
+     * 取消仍在运行的 Run，并以完整取消堆栈写入权威失败快照。
+     *
+     * @param runId Run 标识
+     * @param reason 取消原因
+     * @return 取消后的失败快照，或已存在的非运行快照
+     */
+    public RunCheckpoint cancel(UUID runId, String reason) {
+        ensureOpen();
+        Objects.requireNonNull(runId, "runId 不能为空");
+        requireText(reason, "reason");
+        CancellationException cancellation = new CancellationException(reason);
+        String error = stackTrace(cancellation);
+        while (true) {
+            RunCheckpoint current = get(runId);
+            if (current.status() != RunStatus.RUNNING) {
+                return current;
+            }
+            final RunCheckpoint failed;
+            try {
+                failed = checkpointer.append(new CheckpointAppend(
+                        runId,
+                        current.version(),
+                        RunStatus.FAILED,
+                        current.state(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        error));
+            } catch (CheckpointConflictException exception) {
+                continue;
+            }
+            cancelActiveExecutions(runId);
+            publish(new TraceEvent.Failed(
+                    UUID.randomUUID(), runId, failed.version(), Instant.now(), error));
+            return failed;
+        }
     }
 
     /**
@@ -213,12 +258,41 @@ public final class AgentRunService implements AutoCloseable {
             RunCheckpoint checkpoint,
             boolean bypassInterruptAtStart,
             StateGraph graph) {
+        FutureTask<Void> task = new FutureTask<>(() -> {
+            executeCheckpoint(checkpoint, bypassInterruptAtStart, graph);
+            return null;
+        }) {
+            @Override
+            protected void done() {
+                removeActiveExecution(checkpoint.runId(), this);
+            }
+        };
+        activeExecutions.computeIfAbsent(
+                checkpoint.runId(), ignored -> new ConcurrentHashMap<>())
+                .put(task, Boolean.TRUE);
         try {
-            executor.submit(() -> executeCheckpoint(
-                    checkpoint, bypassInterruptAtStart, graph));
+            executor.execute(task);
         } catch (RejectedExecutionException exception) {
+            removeActiveExecution(checkpoint.runId(), task);
             graph.close();
             storeFailure(checkpoint, exception);
+        }
+    }
+
+    private void cancelActiveExecutions(UUID runId) {
+        ConcurrentMap<Future<?>, Boolean> executions = activeExecutions.remove(runId);
+        if (executions != null) {
+            executions.keySet().forEach(execution -> execution.cancel(true));
+        }
+    }
+
+    private void removeActiveExecution(UUID runId, Future<?> execution) {
+        ConcurrentMap<Future<?>, Boolean> executions = activeExecutions.get(runId);
+        if (executions != null) {
+            executions.remove(execution);
+            if (executions.isEmpty()) {
+                activeExecutions.remove(runId, executions);
+            }
         }
     }
 
@@ -347,12 +421,16 @@ public final class AgentRunService implements AutoCloseable {
 
     private void storeFailure(RunCheckpoint current, RuntimeException exception) {
         String error = stackTrace(exception);
+        RunCheckpoint latest = checkpointer.loadLatest(current.runId()).orElse(current);
+        if (latest.status() != RunStatus.RUNNING) {
+            return;
+        }
         try {
             RunCheckpoint failed = checkpointer.append(new CheckpointAppend(
-                    current.runId(),
-                    current.version(),
+                    latest.runId(),
+                    latest.version(),
                     RunStatus.FAILED,
-                    current.state(),
+                    latest.state(),
                     null,
                     null,
                     null,
@@ -365,6 +443,10 @@ public final class AgentRunService implements AutoCloseable {
                     Instant.now(),
                     error));
         } catch (RuntimeException persistenceFailure) {
+            RunCheckpoint concurrent = checkpointer.loadLatest(current.runId()).orElse(current);
+            if (concurrent.status() != RunStatus.RUNNING) {
+                return;
+            }
             persistenceFailure.addSuppressed(exception);
             LOGGER.log(Level.ERROR, "无法保存 Run 失败 Checkpoint", persistenceFailure);
         }

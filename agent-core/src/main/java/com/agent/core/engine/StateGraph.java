@@ -249,6 +249,7 @@ public final class StateGraph implements AutoCloseable {
             }
             return result;
         } catch (InterruptedException exception) {
+            future.cancel(true);
             Thread.currentThread().interrupt();
             throw new GraphExecutionException(nodeName, exception);
         } catch (ExecutionException exception) {

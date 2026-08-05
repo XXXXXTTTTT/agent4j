@@ -1,7 +1,9 @@
 package com.agent.eval;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonParser;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -31,7 +33,10 @@ public final class BenchmarkTaskSetReader {
 
     /** 注入 Jackson 映射器。 */
     public BenchmarkTaskSetReader(ObjectMapper objectMapper) {
-        this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
+        this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空")
+                .copy()
+                .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+                .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     }
 
     /** 以 UTF-8 读取所有非空 JSONL 行。 */

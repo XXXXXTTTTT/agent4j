@@ -64,6 +64,24 @@ class BenchmarkTaskSetReaderTest {
                 .hasMessageContaining("50");
     }
 
+    @Test
+    void rejectsDuplicateFieldsAndTrailingRootValues() {
+        BenchmarkTaskSetReader reader = new BenchmarkTaskSetReader();
+        String duplicateField = "{\"id\":\"one\",\"id\":\"two\","
+                + "\"category\":\"CODE\",\"prompt\":\"p\","
+                + "\"successCriteria\":\"s\",\"metadata\":{}}\n";
+        String trailingRoot = "{\"id\":\"one\",\"category\":\"CODE\","
+                + "\"prompt\":\"p\",\"successCriteria\":\"s\","
+                + "\"metadata\":{}} {\"unexpected\":true}\n";
+
+        assertThatThrownBy(() -> reader.read(stream(duplicateField)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("JSON");
+        assertThatThrownBy(() -> reader.read(stream(trailingRoot)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("JSON");
+    }
+
     private InputStream stream(String content) {
         return new ByteArrayInputStream(content.getBytes(StandardCharsets.UTF_8));
     }

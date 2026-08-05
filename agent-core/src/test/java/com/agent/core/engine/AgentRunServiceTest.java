@@ -15,12 +15,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -399,6 +401,47 @@ class AgentRunServiceTest {
             assertThatThrownBy(() -> service.history(missing))
                     .isInstanceOfSatisfying(RunNotFoundException.class, exception ->
                             assertThat(exception.runId()).isEqualTo(missing));
+        }
+    }
+
+    @Test
+    void cancelsRunningRunAndInterruptsNode() throws Exception {
+        InMemoryCheckpointer checkpointer = new InMemoryCheckpointer();
+        CountDownLatch entered = new CountDownLatch(1);
+        AtomicBoolean interrupted = new AtomicBoolean();
+        GraphRegistry registry = new GraphRegistry(Map.of("slow", () ->
+                new StateGraph(1)
+                        .addNode("wait", state -> {
+                            entered.countDown();
+                            try {
+                                Thread.sleep(Duration.ofSeconds(30));
+                                return state;
+                            } catch (InterruptedException exception) {
+                                interrupted.set(true);
+                                Thread.currentThread().interrupt();
+                                throw exception;
+                            }
+                        })
+                        .addEdge("wait", StateGraph.END)
+                        .setEntryPoint("wait")));
+        List<TraceEvent> events = new CopyOnWriteArrayList<>();
+
+        try (AgentRunService service = new AgentRunService(checkpointer, registry, events::add)) {
+            RunCheckpoint started = service.start("slow", AgentState.empty());
+            assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
+
+            RunCheckpoint cancelled = service.cancel(started.runId(), "Benchmark 执行超时");
+
+            assertThat(cancelled.status()).isEqualTo(RunStatus.FAILED);
+            assertThat(cancelled.error())
+                    .contains("CancellationException")
+                    .contains("Benchmark 执行超时");
+            long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            while (!interrupted.get() && System.nanoTime() - deadline < 0) {
+                Thread.onSpinWait();
+            }
+            assertThat(interrupted).isTrue();
+            assertThat(events).anyMatch(event -> event instanceof TraceEvent.Failed);
         }
     }
 
