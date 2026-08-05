@@ -27,23 +27,42 @@ Showcase: 将真实截图保存为 docs/assets/workbench-showcase.png 后，取�
 
 ## Quick Start: Docker
 
-只需要 Docker Desktop。数据库、pgvector 和 Web 工作台由 Compose 一起启动，参数统一从 `.env` 注入。
+只需要 Docker Desktop。项目提供两套明确的 Compose 启动方式：本地开发调试使用已经编译好的 Jar，启动快；上线构建使用多阶段 Dockerfile，在容器内完成 Maven 和前端构建，更严格但耗时更长。两套方式都从 `.env` 注入配置。
+
+### 本地开发调试（快速启动）
+
+本地模式先在宿主机编译 `agent-web`，再由 `Dockerfile.local` 启动已生成的 Jar，并挂载 Docker Socket 供沙箱调用：
 
 ```powershell
 Copy-Item .env.example .env
-docker compose --env-file .env up --build
+mvn -pl agent-web -am package -DskipTests
+docker compose -f docker-compose.local.yml --env-file .env up -d --build
 ```
 
-打开 <http://localhost:8080>，在 **图 ID** 中输入 `sample`，提交默认状态即可验证 REST、Checkpoint、Trace 和工作台连接。`sample` 图是确定性演示图，不会替代真实 Coder/Ops/Reviewer 图的代码修改、沙箱执行或终端日志。停止服务：
+打开 <http://localhost:8080>，输入任务描述并点击 **运行 Agent**，即可观察 `Planner -> Coder -> Ops -> Reviewer` 链路。停止本地服务：
 
 ```powershell
-docker compose --env-file .env down
+docker compose -f docker-compose.local.yml --env-file .env down
+```
+
+### 上线构建（严谨启动）
+
+上线模式使用根目录 `Dockerfile`，在构建容器中完成完整 Maven/前端打包，再启动最小运行镜像：
+
+```powershell
+docker compose -f docker-compose.yml --env-file .env up -d --build
+```
+
+停止上线服务：
+
+```powershell
+docker compose -f docker-compose.yml --env-file .env down
 ```
 
 清理本地数据库卷（会删除 Compose 创建的运行数据）：
 
 ```powershell
-docker compose --env-file .env down -v
+docker compose -f docker-compose.yml --env-file .env down -v
 ```
 
 ### 接入 OpenAI 兼容模型
@@ -127,7 +146,7 @@ Create a Run with the exact state shape:
 }
 ```
 
-Production graph IDs are the exact names of registered `GraphFactory` beans. The Docker quick start registers only the deterministic `sample` graph; real Coder/Ops/Reviewer graphs are assembled by the host application with constructor-injected capabilities.
+Production graph IDs are the exact names of registered `GraphFactory` beans. The Docker quick start exposes the deterministic `demo-agent` graph for task-first product demonstration; production Coder/Ops/Reviewer graphs are assembled by the host application with constructor-injected capabilities.
 
 ## Configuration
 
