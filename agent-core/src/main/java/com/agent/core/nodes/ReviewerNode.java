@@ -34,6 +34,8 @@ public final class ReviewerNode implements Node {
     public static final String SUMMARY_KEY = "reviewer.summary";
     public static final String FEEDBACK_KEY = "reviewer.feedback";
     public static final String MODEL_KEY = "reviewer.model";
+    public static final String REQUEST_KEY = "reviewer.request";
+    public static final String RESPONSE_KEY = "reviewer.response";
     public static final String ERROR_KEY = "reviewer.error";
     public static final String FINAL_URL_KEY = "reviewer.finalUrl";
     public static final String DOM_KEY = "reviewer.dom";
@@ -90,38 +92,54 @@ public final class ReviewerNode implements Node {
         Objects.requireNonNull(state, "state 不能为空");
         AgentState evidenceState = state;
         try {
-            URI requestedUri = URI.create(requireUrl(state));
             validateOpsEvidence(state.variables());
-            NavigationResult navigation = await(
-                    browserAutomation.navigate(requestedUri, browserTimeout));
-            String dom = await(browserAutomation.extractDom());
-            BrowserScreenshot screenshot = await(
-                    browserAutomation.screenshot(browserTimeout));
-            String evidence = buildEvidence(
-                    Objects.requireNonNull(navigation, "导航结果不能为空"),
-                    Objects.requireNonNull(dom, "DOM 不能为空"),
-                    state.variables());
-            String imageUrl = "data:image/png;base64,"
-                    + Base64.getEncoder().encodeToString(
-                            Objects.requireNonNull(screenshot, "截图不能为空").pngBytes());
-            evidenceState = state
-                    .withVariable(FINAL_URL_KEY, navigation.finalUrl().toString())
-                    .withVariable(DOM_KEY, dom)
-                    .withVariable(SCREENSHOT_DATA_URL_KEY, imageUrl);
+            String configuredUrl = state.variables().get(URL_KEY);
+            String evidence;
+            String imageUrl = null;
+            if (configuredUrl == null || configuredUrl.isBlank()) {
+                evidence = buildCodeEvidence(state.variables());
+            } else {
+                URI requestedUri = URI.create(configuredUrl);
+                NavigationResult navigation = await(
+                        browserAutomation.navigate(requestedUri, browserTimeout));
+                String dom = await(browserAutomation.extractDom());
+                BrowserScreenshot screenshot = await(
+                        browserAutomation.screenshot(browserTimeout));
+                evidence = buildEvidence(
+                        Objects.requireNonNull(navigation, "导航结果不能为空"),
+                        Objects.requireNonNull(dom, "DOM 不能为空"),
+                        state.variables());
+                imageUrl = "data:image/png;base64,"
+                        + Base64.getEncoder().encodeToString(
+                                Objects.requireNonNull(screenshot, "截图不能为空").pngBytes());
+                evidenceState = evidenceState
+                        .withVariable(FINAL_URL_KEY, navigation.finalUrl().toString())
+                        .withVariable(DOM_KEY, dom)
+                        .withVariable(SCREENSHOT_DATA_URL_KEY, imageUrl);
+            }
+            evidenceState = evidenceState.withVariable(REQUEST_KEY, evidence);
+            ChatMessage userMessage = imageUrl == null
+                    ? ChatMessage.user(evidence)
+                    : ChatMessage.userMultimodal(List.of(
+                            new ChatMessage.TextPart(evidence),
+                            new ChatMessage.ImageUrlPart(new ChatMessage.ImageUrl(
+                                    imageUrl,
+                                    ChatMessage.ImageDetail.HIGH))));
             ModelRequest request = new ModelRequest(
                     List.of(
                             ChatMessage.system(SYSTEM_INSTRUCTION),
-                            ChatMessage.userMultimodal(List.of(
-                                    new ChatMessage.TextPart(evidence),
-                                    new ChatMessage.ImageUrlPart(new ChatMessage.ImageUrl(
-                                            imageUrl,
-                                            ChatMessage.ImageDetail.HIGH))))),
+                            userMessage),
                     List.of(),
                     null,
                     null);
             RoutedCompletion completion = modelRouter.complete(TaskType.VISION, request);
             ReviewerDecision decision = parseDecision(completion);
+            ChatMessage message = completion.response().choices().getFirst().message();
+            if (!(message.content() instanceof ChatMessage.TextContent textContent)) {
+                throw new IllegalStateException("审查模型响应 content 必须是 TextContent");
+            }
             return evidenceState
+                    .withVariable(RESPONSE_KEY, textContent.text())
                     .withVariable(APPROVED_KEY, Boolean.toString(decision.approved()))
                     .withVariable(SUMMARY_KEY, decision.summary())
                     .withVariable(FEEDBACK_KEY, decision.feedback())
@@ -185,6 +203,21 @@ public final class ReviewerNode implements Node {
         return evidence.toString();
     }
 
+    private String buildCodeEvidence(Map<String, String> variables) {
+        StringBuilder evidence = new StringBuilder("代码与 Ops 证据:\n");
+        appendIfPresent(evidence, variables, CoderNode.UNIFIED_DIFF_KEY);
+        appendIfPresent(evidence, variables, CoderNode.UPDATED_FILES_KEY);
+        appendIfPresent(evidence, variables, CoderNode.COMMAND_KEY);
+        appendIfPresent(evidence, variables, OpsNode.COMMAND_KEY);
+        appendIfPresent(evidence, variables, OpsNode.EXIT_CODE_KEY);
+        appendIfPresent(evidence, variables, OpsNode.STDOUT_KEY);
+        appendIfPresent(evidence, variables, OpsNode.STDERR_KEY);
+        appendIfPresent(evidence, variables, OpsNode.TIMED_OUT_KEY);
+        appendIfPresent(evidence, variables, OpsNode.ERROR_KEY);
+        appendIfPresent(evidence, variables, CoderNode.ERROR_KEY);
+        return evidence.toString();
+    }
+
     private void appendIfPresent(
             StringBuilder evidence,
             Map<String, String> variables,
@@ -207,14 +240,6 @@ public final class ReviewerNode implements Node {
         if (!hasCompleteResult && !hasError) {
             throw new IllegalArgumentException("缺少完整 Ops 结果或非空 ops.error");
         }
-    }
-
-    private String requireUrl(AgentState state) {
-        String url = state.variables().get(URL_KEY);
-        if (url == null || url.isBlank()) {
-            throw new IllegalArgumentException("缺少状态变量: " + URL_KEY);
-        }
-        return url;
     }
 
     private <T> T await(CompletableFuture<T> future)

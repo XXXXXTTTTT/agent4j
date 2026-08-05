@@ -129,6 +129,34 @@ class ReviewerNodeTest {
     }
 
     @Test
+    void reviewsCodeAndOpsEvidenceWithoutBrowserUrl() throws Exception {
+        ReviewerNode node = reviewerNode();
+        expectModelResponse(
+                textContent("{\"approved\":true,\"summary\":\"代码测试通过\",\"feedback\":\"无需修改\"}"),
+                OpsNode.EXIT_CODE_KEY,
+                OpsNode.STDOUT_KEY,
+                "cat value.txt");
+
+        AgentState result = node.execute(AgentState.empty()
+                .withVariable(OpsNode.EXIT_CODE_KEY, "0")
+                .withVariable(OpsNode.STDOUT_KEY, "after")
+                .withVariable(OpsNode.STDERR_KEY, "")
+                .withVariable(OpsNode.TIMED_OUT_KEY, "false")
+                .withVariable(CoderNode.UNIFIED_DIFF_KEY, "diff --git a/value.txt b/value.txt")
+                .withVariable(OpsNode.COMMAND_KEY, "cat value.txt"));
+
+        assertThat(browser.navigatedUri).isNull();
+        assertThat(result.variables())
+                .containsEntry(ReviewerNode.APPROVED_KEY, "true")
+                .containsEntry(ReviewerNode.SUMMARY_KEY, "代码测试通过")
+                .containsEntry(ReviewerNode.RESPONSE_KEY,
+                        "{\"approved\":true,\"summary\":\"代码测试通过\",\"feedback\":\"无需修改\"}")
+                .containsKey(ReviewerNode.REQUEST_KEY)
+                .doesNotContainKey(ReviewerNode.ERROR_KEY);
+        assertThat(result.trace()).containsExactly("reviewer");
+    }
+
+    @Test
     void recordsMissingOpsEvidenceAndRelativeUrlAsFullStacks() {
         ReviewerNode missingOpsNode = reviewerNode();
 
