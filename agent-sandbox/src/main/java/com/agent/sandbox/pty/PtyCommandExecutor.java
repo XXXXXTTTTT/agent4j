@@ -2,6 +2,7 @@ package com.agent.sandbox.pty;
 
 import com.pty4j.PtyProcess;
 import com.pty4j.PtyProcessBuilder;
+import com.pty4j.windows.winpty.WinPtyProcess;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -113,24 +114,29 @@ public final class PtyCommandExecutor {
     }
 
     private void terminateProcessTree(PtyProcess process) throws InterruptedException {
-        // 先让 pty4j 关闭 WinPTY 控制台进程组，避免在子进程树快照窗口内漏掉新建子进程。
-        process.destroyForcibly();
-        ProcessHandle root = ProcessHandle.of(process.pid()).orElse(null);
-        List<ProcessHandle> descendants = root == null
-                ? List.of()
-                : root.descendants().toList();
+        List<ProcessHandle> roots = new java.util.ArrayList<>();
+        ProcessHandle wrapper = ProcessHandle.of(process.pid()).orElse(null);
+        if (wrapper != null) {
+            roots.add(wrapper);
+        }
+        if (process instanceof WinPtyProcess winPtyProcess) {
+            int childPid = winPtyProcess.getChildProcessId();
+            if (childPid > 0) {
+                ProcessHandle.of(childPid).ifPresent(roots::add);
+            }
+        }
+        List<ProcessHandle> descendants = roots.stream()
+                .flatMap(root -> java.util.stream.Stream.concat(
+                        java.util.stream.Stream.of(root), root.descendants()))
+                .distinct()
+                .toList();
         descendants.reversed().stream()
                 .filter(ProcessHandle::isAlive)
                 .forEach(ProcessHandle::destroyForcibly);
-        if (root != null && root.isAlive()) {
-            root.destroyForcibly();
-        }
+        process.destroyForcibly();
 
         CompletableFuture<Void> descendantsExited = CompletableFuture.allOf(
-                java.util.stream.Stream.concat(
-                                root == null ? java.util.stream.Stream.empty()
-                                        : java.util.stream.Stream.of(root),
-                                descendants.stream())
+                descendants.stream()
                         .map(ProcessHandle::onExit)
                         .toArray(CompletableFuture[]::new));
         try {
