@@ -33,6 +33,7 @@ public final class CoderNode implements Node {
     public static final String MODEL_KEY = "coder.model";
     public static final String SUMMARY_KEY = "coder.summary";
     public static final String COMMAND_KEY = "coder.command";
+    public static final String ATTEMPT_KEY = "coder.attempt";
     public static final String ERROR_KEY = "coder.error";
 
     private final AstService astService;
@@ -101,6 +102,8 @@ public final class CoderNode implements Node {
     private AgentState generateAndApply(AgentState state) {
         AgentState output = state;
         try {
+            int attempt = parseAttempt(state) + 1;
+            output = output.withVariable(ATTEMPT_KEY, Integer.toString(attempt));
             Path workspace = workspace(state);
             String task = requireVariable(state, PlannerNode.TASK_KEY);
             String plan = requireVariable(state, PlannerNode.PLAN_KEY);
@@ -182,6 +185,18 @@ public final class CoderNode implements Node {
         if (value != null && !value.isBlank()) {
             request.append("\n").append(key).append(":\n").append(value).append('\n');
         }
+    }
+
+    private int parseAttempt(AgentState state) {
+        String value = state.variables().get(ATTEMPT_KEY);
+        if (value == null) {
+            return 0;
+        }
+        int attempt = Integer.parseInt(value);
+        if (attempt < 0) {
+            throw new IllegalArgumentException(ATTEMPT_KEY + " 不能为负数");
+        }
+        return attempt;
     }
 
     private String requireVariable(AgentState state, String key) {
