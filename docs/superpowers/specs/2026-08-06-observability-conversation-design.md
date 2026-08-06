@@ -33,12 +33,13 @@ SSE 端点，发送同一套快照/事件帧，供轻量客户端和前端回退
 
 ### 问答与代码路由
 
-`PlannerNode` 首先执行本地确定性分流：包含代码修改/运行/测试/文件等明确动作词的任务走 `code`；
-明确的自然语言问题且不含代码动作词走 `answer`。`answer` 分支使用 `TaskType.QUICK_CLASSIFICATION`
-端点生成直接回答，写入 `final_response`、`planner.response` 和 `planner.route=answer`。
-代码分支保持现有规划输出并写入 `planner.route=code`。
+`PlannerNode` 首先执行分层意图识别。第一层只处理高置信快路径：明确的自然语言问题且不含代码动作词
+进入 `chat`；包含代码修改/运行/测试/文件等明确动作词进入 `agent`。未命中快路径时才调用模型做语义
+分流，避免把复杂表达误判为闲聊。`chat` 模式只调用 `TaskType.QUICK_CLASSIFICATION` 一轮生成回答，
+写入 `final_response`、`planner.response` 和 `planner.route=chat`；`agent` 模式保持现有规划输出并写入
+`planner.route=agent`，然后进入工具闭环。
 
-生产图增加条件边：`answer -> END`、`code -> coder`、`planner.error -> END`。
+生产图增加条件边：`chat -> END`、`agent -> coder`、`planner.error -> END`。
 Coder 失败后不再进入 Ops；生产图将 `coder.error` 路由到终点，`AgentRunService` 根据终态状态中的错误
 变量持久化为 `FAILED`，避免产生“Ops 缺少 ops.command”的二次噪声。
 

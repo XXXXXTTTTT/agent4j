@@ -49,7 +49,7 @@
 **Files:** `PlannerNode.java`, `ProductionGraphConfiguration.java`, `AgentRunService.java`
 
 - [ ] 先写“你是什么模型”直达 `final_response`、代码任务进入 Coder、Coder 失败不进入 Ops 的测试。
-- [ ] 实现 `planner.route` 与 `final_response`，问答使用 QUICK_CLASSIFICATION，代码保持 CODE 规划。
+- [ ] 实现分层意图识别的 `chat`/`agent` 路由与 `final_response`，问答使用 QUICK_CLASSIFICATION，代码保持 CODE 规划；未命中快路径时再由模型做语义分流。
 - [ ] 增加生产图条件边和错误终态判定。
 
 ### Task 6: SSE 与前端过程体验
