@@ -333,6 +333,33 @@ public final class JdbcConversationRepository implements WorkspaceRepository, Co
         }));
     }
 
+    /** 在成员权限范围内更新会话标题。 */
+    @Override
+    public ConversationRecord renameConversation(
+            UUID conversationId,
+            String userId,
+            String title,
+            Instant now) {
+        Objects.requireNonNull(conversationId, "conversationId 不能为空");
+        requireText(userId, "userId");
+        requireText(title, "title");
+        Objects.requireNonNull(now, "now 不能为空");
+        return requireResult(transactionTemplate.execute(status -> {
+            findConversationForUpdate(conversationId, userId)
+                    .orElseThrow(() -> new ConversationNotFoundException(conversationId));
+            jdbcClient.sql("""
+                    update agent_conversations
+                    set title = :title, updated_at = :updatedAt
+                    where conversation_id = :conversationId
+                    """)
+                    .param("title", title)
+                    .param("updatedAt", timestamp(now))
+                    .param("conversationId", conversationId)
+                    .update();
+            return findConversation(conversationId, userId).orElseThrow();
+        }));
+    }
+
     /** 锁定会话并分配下一个轮次；活动轮次存在时返回冲突。 */
     @Override
     public ConversationTurnRecord createPendingTurn(
@@ -419,6 +446,18 @@ public final class JdbcConversationRepository implements WorkspaceRepository, Co
                 """)
                 .param("runId", runId)
                 .param("userId", userId)
+                .query(this::mapTurn)
+                .optional();
+    }
+
+    /** 按唯一 Run 标识反查轮次，供终态投影器在服务端使用。 */
+    @Override
+    public Optional<ConversationTurnRecord> findTurnByRunId(UUID runId) {
+        Objects.requireNonNull(runId, "runId 不能为空");
+        return jdbcClient.sql(turnSelect() + """
+                where turn.run_id = :runId
+                """)
+                .param("runId", runId)
                 .query(this::mapTurn)
                 .optional();
     }

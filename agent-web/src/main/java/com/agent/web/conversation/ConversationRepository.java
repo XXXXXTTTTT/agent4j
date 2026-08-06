@@ -31,6 +31,15 @@ public interface ConversationRepository {
         throw unsupported("archiveConversation");
     }
 
+    /** 更新会话展示标题。 */
+    default ConversationRecord renameConversation(
+            UUID conversationId,
+            String userId,
+            String title,
+            Instant now) {
+        throw unsupported("renameConversation");
+    }
+
     default ConversationTurnRecord createPendingTurn(
             UUID conversationId,
             String userId,
@@ -44,6 +53,11 @@ public interface ConversationRepository {
     }
 
     default Optional<ConversationTurnRecord> findTurnByRunId(UUID runId, String userId) {
+        throw unsupported("findTurnByRunId");
+    }
+
+    /** 按 Run 反查轮次，供终态投影器使用；授权已在 Run 创建边界完成。 */
+    default Optional<ConversationTurnRecord> findTurnByRunId(UUID runId) {
         throw unsupported("findTurnByRunId");
     }
 
