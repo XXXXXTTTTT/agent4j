@@ -10,6 +10,7 @@ import com.agent.core.engine.InterruptRequest;
 import com.agent.core.engine.RunCheckpoint;
 import com.agent.core.engine.RunNotFoundException;
 import com.agent.core.engine.RunStatus;
+import com.agent.web.identity.ActorResolver;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
@@ -39,6 +40,9 @@ class RunControllerTest {
 
     @MockBean
     private AgentRunService runService;
+
+    @MockBean
+    private ActorResolver actorResolver;
 
     @Test
     void startsRunAndReturnsAcceptedView() {

@@ -20,6 +20,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -41,6 +42,13 @@ public class HarnessConfiguration {
     @Bean
     Clock harnessClock() {
         return Clock.systemUTC();
+    }
+
+    /** 非生产测试与本地只读页面使用的默认单机身份。 */
+    @Bean
+    @ConditionalOnMissingBean(ActorResolver.class)
+    ActorResolver defaultActorResolver() {
+        return new ConfiguredActorResolver("local", "本地用户");
     }
 
     /** 创建 PostgreSQL Checkpointer 适配器。 */

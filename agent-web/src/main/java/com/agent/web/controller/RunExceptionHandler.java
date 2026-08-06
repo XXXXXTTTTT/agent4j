@@ -3,6 +3,9 @@ package com.agent.web.controller;
 import com.agent.core.engine.CheckpointConflictException;
 import com.agent.core.engine.GraphNotFoundException;
 import com.agent.core.engine.RunNotFoundException;
+import com.agent.web.persistence.JdbcConversationRepository;
+import com.agent.web.conversation.ConversationService;
+import com.agent.web.workspace.WorkspaceAccessService;
 import org.springframework.core.codec.DecodingException;
 import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
@@ -41,10 +44,39 @@ public final class RunExceptionHandler {
         return problem(HttpStatus.NOT_FOUND, exception.getMessage(), exchange);
     }
 
+    /** 映射工作区或会话不可见。 */
+    @ExceptionHandler({
+            WorkspaceAccessService.WorkspaceNotFoundException.class,
+            JdbcConversationRepository.ConversationNotFoundException.class,
+            JdbcConversationRepository.ConversationTurnNotFoundException.class,
+            ConversationService.ConversationNotFoundException.class
+    })
+    public ResponseEntity<ProblemDetail> resourceNotFound(
+            RuntimeException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.NOT_FOUND, exception.getMessage(), exchange);
+    }
+
+    /** 映射成员权限不足。 */
+    @ExceptionHandler(WorkspaceAccessService.WorkspaceAccessDeniedException.class)
+    public ResponseEntity<ProblemDetail> accessDenied(
+            RuntimeException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.FORBIDDEN, exception.getMessage(), exchange);
+    }
+
     /** 映射 Checkpoint 版本或状态冲突。 */
     @ExceptionHandler(CheckpointConflictException.class)
     public ResponseEntity<ProblemDetail> conflict(
             CheckpointConflictException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);
+    }
+
+    /** 映射会话归档和活动轮次冲突。 */
+    @ExceptionHandler(JdbcConversationRepository.ConversationConflictException.class)
+    public ResponseEntity<ProblemDetail> conversationConflict(
+            RuntimeException exception,
             ServerWebExchange exchange) {
         return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);
     }

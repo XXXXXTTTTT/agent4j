@@ -5,6 +5,8 @@ import com.agent.core.engine.AgentState;
 import com.agent.core.engine.RunCheckpoint;
 import com.agent.core.engine.RunStatus;
 import com.agent.web.config.ProductionAgentProperties;
+import com.agent.web.identity.Actor;
+import com.agent.web.identity.ActorResolver;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
@@ -39,6 +41,9 @@ class CodeAgentRunControllerTest {
     @MockBean
     private ProductionAgentProperties properties;
 
+    @MockBean
+    private ActorResolver actorResolver;
+
     @Test
     void startsCodeAgentWithExactTaskStateKeys() throws Exception {
         Path workspace = Path.of(".").toAbsolutePath().normalize();
@@ -46,6 +51,7 @@ class CodeAgentRunControllerTest {
         when(properties.workspace()).thenReturn(workspace);
         when(properties.repositoryId()).thenReturn("configured-repo");
         when(properties.userId()).thenReturn("configured-user");
+        when(actorResolver.current()).thenReturn(new Actor("resolved-user", "Resolved"));
         when(runService.start(eq("code-agent"), any(AgentState.class)))
                 .thenReturn(new RunCheckpoint(
                         RUN_ID,
@@ -67,7 +73,6 @@ class CodeAgentRunControllerTest {
                         {
                           "task": "修复登录超时并运行测试",
                           "repositoryId": "request-repo",
-                          "userId": "request-user",
                           "reviewerUrl": "https://application.test"
                         }
                         """)
@@ -81,7 +86,7 @@ class CodeAgentRunControllerTest {
         org.assertj.core.api.Assertions.assertThat(stateCaptor.getValue().variables())
                 .containsEntry("planner.task", "修复登录超时并运行测试")
                 .containsEntry("planner.repositoryId", "request-repo")
-                .containsEntry("planner.userId", "request-user")
+                .containsEntry("planner.userId", "resolved-user")
                 .containsEntry("coder.workspacePath", workspace.toRealPath().toString())
                 .containsEntry("reviewer.url", "https://application.test");
     }

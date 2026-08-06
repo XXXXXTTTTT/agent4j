@@ -3,6 +3,7 @@ package com.agent.web.controller;
 import com.agent.core.engine.AgentRunService;
 import com.agent.core.engine.AgentState;
 import com.agent.web.config.ProductionAgentProperties;
+import com.agent.web.identity.ActorResolver;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.ResponseEntity;
@@ -26,14 +27,17 @@ public final class RunController {
 
     private final AgentRunService runService;
     private final ObjectProvider<ProductionAgentProperties> productionProperties;
+    private final ActorResolver actorResolver;
 
     /** 创建 Run Controller。 */
     public RunController(
             AgentRunService runService,
-            ObjectProvider<ProductionAgentProperties> productionProperties) {
+            ObjectProvider<ProductionAgentProperties> productionProperties,
+            ActorResolver actorResolver) {
         this.runService = Objects.requireNonNull(runService, "runService 不能为空");
         this.productionProperties = Objects.requireNonNull(
                 productionProperties, "productionProperties 不能为空");
+        this.actorResolver = Objects.requireNonNull(actorResolver, "actorResolver 不能为空");
     }
 
     /** 创建并异步启动 Run。 */
@@ -55,8 +59,7 @@ public final class RunController {
                 .withVariable("planner.task", request.task().trim())
                 .withVariable("planner.repositoryId", choose(
                         request.repositoryId(), properties.repositoryId()))
-                .withVariable("planner.userId", choose(
-                        request.userId(), properties.userId()))
+                .withVariable("planner.userId", actorResolver.current().userId())
                 .withVariable("coder.workspacePath", validatedWorkspace(
                         choose(request.workspacePath(), properties.workspace().toString()),
                         properties.workspace()));
