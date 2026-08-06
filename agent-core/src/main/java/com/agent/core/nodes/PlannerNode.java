@@ -16,6 +16,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.List;
 import java.util.Locale;
+import java.util.ArrayList;
 import java.util.Objects;
 
 /** 在规划 Prompt 中注入长期记忆并生成执行计划的节点。 */
@@ -32,6 +33,11 @@ public final class PlannerNode implements Node {
     public static final String ROUTE_KEY = "planner.route";
     public static final String ERROR_KEY = "planner.error";
     public static final String FINAL_RESPONSE_KEY = "final_response";
+
+    /** 当前 Run 关联的会话标识。 */
+    public static final String CONVERSATION_ID_KEY = "conversation.id";
+    /** 当前 Run 关联的会话轮次标识。 */
+    public static final String CONVERSATION_TURN_ID_KEY = "conversation.turnId";
 
     public static final String CHAT_ROUTE = "chat";
     public static final String AGENT_ROUTE = "agent";
@@ -88,7 +94,7 @@ public final class PlannerNode implements Node {
                 return answerChat(state, task);
             }
             if (routeHint == RouteHint.UNKNOWN
-                    && CHAT_ROUTE.equals(classifySemantically(task))) {
+                    && CHAT_ROUTE.equals(classifySemantically(state, task))) {
                 return answerChat(state, task);
             }
             String repositoryId = requireVariable(state, REPOSITORY_ID_KEY);
@@ -103,9 +109,7 @@ public final class PlannerNode implements Node {
                     .withVariable(MEMORY_CONTEXT_KEY, context.prompt())
                     .withVariable(REQUEST_KEY, requestText);
             ModelRequest request = new ModelRequest(
-                    List.of(
-                            ChatMessage.system(SYSTEM_INSTRUCTION),
-                            ChatMessage.user(requestText)),
+                    conversationMessages(state, SYSTEM_INSTRUCTION, requestText),
                     List.of(),
                     null,
                     0.0);
@@ -116,6 +120,8 @@ public final class PlannerNode implements Node {
                 throw new IllegalStateException("规划模型响应 content 必须是 TextContent");
             }
             return output
+                    .withMessage(ChatMessage.user(task))
+                    .withMessage(ChatMessage.assistant(textContent.text()))
                     .withVariable(PLAN_KEY, textContent.text())
                     .withVariable(RESPONSE_KEY, textContent.text())
                     .withVariable(MODEL_KEY, completion.model())
@@ -136,9 +142,7 @@ public final class PlannerNode implements Node {
     private AgentState answerChat(AgentState state, String task) {
         NodeExecutionContext.progress("已识别为快速问答，跳过代码工具链");
         ModelRequest request = new ModelRequest(
-                List.of(
-                        ChatMessage.system(CHAT_SYSTEM_INSTRUCTION),
-                        ChatMessage.user(task)),
+                conversationMessages(state, CHAT_SYSTEM_INSTRUCTION, task),
                 List.of(),
                 null,
                 0.0);
@@ -154,6 +158,8 @@ public final class PlannerNode implements Node {
         }
         NodeExecutionContext.progress("快速问答已生成最终回答");
         return state
+                .withMessage(ChatMessage.user(task))
+                .withMessage(ChatMessage.assistant(response))
                 .withVariable(RESPONSE_KEY, response)
                 .withVariable(FINAL_RESPONSE_KEY, response)
                 .withVariable(MODEL_KEY, completion.model())
@@ -161,12 +167,10 @@ public final class PlannerNode implements Node {
                 .withTraceEntry("planner");
     }
 
-    private String classifySemantically(String task) {
+    private String classifySemantically(AgentState state, String task) {
         NodeExecutionContext.progress("正在进行语义任务分流");
         ModelRequest request = new ModelRequest(
-                List.of(
-                        ChatMessage.system(ROUTE_SYSTEM_INSTRUCTION),
-                        ChatMessage.user(task)),
+                conversationMessages(state, ROUTE_SYSTEM_INSTRUCTION, task),
                 List.of(),
                 null,
                 0.0);
@@ -182,6 +186,17 @@ public final class PlannerNode implements Node {
         }
         NodeExecutionContext.progress("语义任务分流完成: " + route);
         return route;
+    }
+
+    private List<ChatMessage> conversationMessages(
+            AgentState state,
+            String systemInstruction,
+            String currentUserMessage) {
+        List<ChatMessage> messages = new ArrayList<>(state.messages().size() + 2);
+        messages.add(ChatMessage.system(systemInstruction));
+        messages.addAll(state.messages());
+        messages.add(ChatMessage.user(currentUserMessage));
+        return List.copyOf(messages);
     }
 
     private RouteHint classifyFast(String task) {

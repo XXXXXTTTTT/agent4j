@@ -123,6 +123,44 @@ class PlannerNodeTest {
     }
 
     @Test
+    void includesPreviousMessagesInChatContextAndAppendsCurrentExchange() {
+        Endpoint endpoint = endpoint();
+        endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
+                .andExpect(content().json("""
+                        {
+                          "model":"planner-model",
+                          "messages":[
+                            {"role":"system"},
+                            {"role":"user","content":"我住在南昌"},
+                            {"role":"assistant","content":"已记住"},
+                            {"role":"user","content":"我住在哪里？"}
+                          ],
+                          "tools":[],"temperature":0.0,"stream":false
+                        }
+                        """, false))
+                .andRespond(withSuccess("""
+                        {"id":"answer-response","object":"chat.completion","created":1,
+                         "model":"planner-model","choices":[{"index":0,
+                         "message":{"role":"assistant","content":"你住在南昌。"},
+                         "finish_reason":"stop"}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        PlannerNode node = new PlannerNode(
+                router(endpoint), request -> {
+                    throw new AssertionError("快速问答不应召回代码仓库记忆");
+                }, 7);
+
+        AgentState result = node.execute(new AgentState(
+                List.of(ChatMessage.user("我住在南昌"), ChatMessage.assistant("已记住")),
+                Map.of(PlannerNode.TASK_KEY, "我住在哪里？"),
+                List.of()));
+
+        assertThat(result.messages())
+                .extracting(message -> ((ChatMessage.TextContent) message.content()).text())
+                .containsExactly("我住在南昌", "已记住", "我住在哪里？", "你住在南昌。");
+    }
+
+    @Test
     void routesExplicitModifyRequestDirectlyToCodePlanning() {
         Endpoint endpoint = endpoint();
         endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
