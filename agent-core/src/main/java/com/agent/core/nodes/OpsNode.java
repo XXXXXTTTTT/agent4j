@@ -104,6 +104,7 @@ public final class OpsNode implements Node {
         AgentState result;
         try {
             String command = requireCommand(state);
+            NodeExecutionContext.progress("开始执行终端命令: " + command);
             CommandResult commandResult = executor.execute(
                             new CommandRequest(target, command, timeout),
                             logConsumer)
@@ -114,6 +115,7 @@ public final class OpsNode implements Node {
                     .withVariable(STDERR_KEY, commandResult.stderr())
                     .withVariable(TIMED_OUT_KEY, Boolean.toString(commandResult.timedOut()))
                     .withTraceEntry("ops");
+            NodeExecutionContext.progress("终端命令已结束，退出码 " + commandResult.exitCode());
         } catch (Exception exception) {
             if (exception instanceof InterruptedException) {
                 Thread.currentThread().interrupt();

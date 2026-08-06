@@ -36,6 +36,15 @@ public final class WorkspaceSnapshotService {
 
     /** 捕获 Git 工作树中的 UTF-8 文本文件。 */
     public WorkspaceSnapshot capture(Path workspace) {
+        return capture(workspace, false);
+    }
+
+    /** 捕获供模型 Prompt 使用的有界视图，超出预算的文件按稳定顺序跳过。 */
+    public WorkspaceSnapshot captureForPrompt(Path workspace) {
+        return capture(workspace, true);
+    }
+
+    private WorkspaceSnapshot capture(Path workspace, boolean boundedView) {
         if (workspace == null) {
             throw new NullPointerException("workspace 不能为空");
         }
@@ -57,11 +66,17 @@ public final class WorkspaceSnapshotService {
                             continue;
                         }
                         if (files.size() >= maxFiles) {
+                            if (boundedView) {
+                                break;
+                            }
                             throw new AstServiceException("工作区快照超过文件数量上限: " + maxFiles);
                         }
                         String content = Files.readString(path, StandardCharsets.UTF_8);
                         long bytes = content.getBytes(StandardCharsets.UTF_8).length;
                         if (totalBytes + bytes > maxBytes) {
+                            if (boundedView) {
+                                continue;
+                            }
                             throw new AstServiceException("工作区快照超过字节上限: " + maxBytes);
                         }
                         files.add(new WorkspaceFile(

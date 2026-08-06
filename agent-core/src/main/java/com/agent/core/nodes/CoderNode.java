@@ -2,6 +2,7 @@ package com.agent.core.nodes;
 
 import com.agent.core.engine.AgentState;
 import com.agent.core.engine.Node;
+import com.agent.core.engine.NodeExecutionContext;
 import com.agent.core.llm.ChatMessage;
 import com.agent.core.llm.ModelRequest;
 import com.agent.core.llm.ModelRouter;
@@ -101,11 +102,13 @@ public final class CoderNode implements Node {
         AgentState output = state;
         try {
             int attempt = parseAttempt(state) + 1;
+            NodeExecutionContext.progress("正在准备第 " + attempt + " 次代码修改");
             output = output.withVariable(ATTEMPT_KEY, Integer.toString(attempt));
             Path workspace = workspace(state);
             String task = requireVariable(state, PlannerNode.TASK_KEY);
             String plan = requireVariable(state, PlannerNode.PLAN_KEY);
-            WorkspaceSnapshot snapshot = snapshotService.capture(workspace);
+            WorkspaceSnapshot snapshot = snapshotService.captureForPrompt(workspace);
+            NodeExecutionContext.progress("工作区快照已就绪，共 " + snapshot.files().size() + " 个文件");
             String requestText = buildRequest(task, plan, snapshot, state);
             output = output.withVariable(REQUEST_KEY, requestText);
             ModelRequest request = new ModelRequest(
@@ -116,6 +119,7 @@ public final class CoderNode implements Node {
                     null,
                     0.0);
             RoutedCompletion completion = modelRouter.complete(TaskType.CODE, request);
+            NodeExecutionContext.progress("代码模型已返回变更方案");
             ChatMessage message = completion.response().choices().getFirst().message();
             if (!(message.content() instanceof ChatMessage.TextContent textContent)) {
                 throw new IllegalStateException("代码模型响应 content 必须是 TextContent");
@@ -166,7 +170,7 @@ public final class CoderNode implements Node {
         StringBuilder request = new StringBuilder()
                 .append("用户任务:\n").append(task)
                 .append("\n\n执行计划:\n").append(plan)
-                .append("\n\n工作区文件:\n");
+                .append("\n\n工作区文件（受文件数和字节预算限制的部分视图）:\n");
         for (WorkspaceFile file : snapshot.files()) {
             request.append("--- ").append(file.relativePath()).append(" ---\n")
                     .append(file.content()).append('\n');

@@ -30,6 +30,8 @@ class TraceEventTest {
                 Map.of("command", "mvn verify"));
         List<TraceEvent> events = List.of(
                 new TraceEvent.NodeStarted(EVENT_ID, RUN_ID, 0, OCCURRED_AT, "coder"),
+                new TraceEvent.NodeProgress(
+                        EVENT_ID, RUN_ID, 0, OCCURRED_AT, "coder", "正在读取工作区"),
                 new TraceEvent.NodeCompleted(
                         EVENT_ID, RUN_ID, 1, OCCURRED_AT, "coder", "ops"),
                 new TraceEvent.Interrupted(
@@ -77,6 +79,9 @@ class TraceEventTest {
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new TraceEvent.NodeStarted(
                 EVENT_ID, RUN_ID, 0, OCCURRED_AT, " "))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new TraceEvent.NodeProgress(
+                EVENT_ID, RUN_ID, 0, OCCURRED_AT, "coder", " "))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new TraceEvent.NodeCompleted(
                 EVENT_ID, RUN_ID, 0, OCCURRED_AT, "coder", " "))

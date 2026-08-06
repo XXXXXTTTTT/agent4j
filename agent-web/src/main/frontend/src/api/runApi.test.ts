@@ -118,6 +118,25 @@ describe('Run API 协议解码', () => {
       }),
     ).toThrow('stream')
   })
+
+  it('解码节点执行中的进度摘要', () => {
+    const frame = decodeTraceFrame({
+      kind: 'EVENT',
+      event: {
+        type: 'NODE_PROGRESS',
+        eventId: EVENT_ID,
+        runId: RUN_ID,
+        checkpointVersion: 2,
+        occurredAt: '2026-08-06T10:15:31Z',
+        nodeName: 'planner',
+        summary: '正在识别任务意图',
+      },
+    })
+
+    expect(frame.kind === 'EVENT' && frame.event.type === 'NODE_PROGRESS'
+      ? frame.event.summary
+      : null).toBe('正在识别任务意图')
+  })
 })
 
 describe('Run API HTTP 请求', () => {

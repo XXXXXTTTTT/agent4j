@@ -38,6 +38,9 @@ class OpenTelemetryRunTracePublisherTest {
             UUID runId = UUID.randomUUID();
             publisher.publish(new TraceEvent.NodeStarted(
                     UUID.randomUUID(), runId, 7, START, "coder"));
+            publisher.publish(new TraceEvent.NodeProgress(
+                    UUID.randomUUID(), runId, 7, START.plusMillis(100),
+                    "coder", "正在准备工作区快照"));
 
             ModelCallSpan generation = publisher.start(new ModelCallStart(
                     Optional.of(new NodeExecutionContext(runId, "coder")),
@@ -80,6 +83,13 @@ class OpenTelemetryRunTracePublisherTest {
             assertThat(node.getAttributes().get(
                     io.opentelemetry.api.common.AttributeKey.stringKey("agent.next_node")))
                     .isEqualTo("ops");
+            assertThat(node.getEvents()).singleElement().satisfies(event -> {
+                assertThat(event.getName()).isEqualTo("agent.node.progress");
+                assertThat(event.getAttributes().get(
+                        io.opentelemetry.api.common.AttributeKey.stringKey(
+                                "agent.progress.summary")))
+                        .isEqualTo("正在准备工作区快照");
+            });
             assertThat(generationData.getAttributes().get(
                     io.opentelemetry.api.common.AttributeKey.stringKey(
                             "langfuse.observation.type"))).isEqualTo("generation");

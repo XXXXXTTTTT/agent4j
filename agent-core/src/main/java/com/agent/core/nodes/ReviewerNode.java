@@ -2,6 +2,7 @@ package com.agent.core.nodes;
 
 import com.agent.core.engine.AgentState;
 import com.agent.core.engine.Node;
+import com.agent.core.engine.NodeExecutionContext;
 import com.agent.core.llm.ChatMessage;
 import com.agent.core.llm.ModelRequest;
 import com.agent.core.llm.ModelRouter;
@@ -92,6 +93,7 @@ public final class ReviewerNode implements Node {
         Objects.requireNonNull(state, "state 不能为空");
         AgentState evidenceState = state;
         try {
+            NodeExecutionContext.progress("正在收集测试与页面审查证据");
             validateOpsEvidence(state.variables());
             String configuredUrl = state.variables().get(URL_KEY);
             String evidence;
@@ -133,6 +135,7 @@ public final class ReviewerNode implements Node {
                     null,
                     null);
             RoutedCompletion completion = modelRouter.complete(TaskType.VISION, request);
+            NodeExecutionContext.progress("审查模型已返回质量判断");
             ReviewerDecision decision = parseDecision(completion);
             ChatMessage message = completion.response().choices().getFirst().message();
             if (!(message.content() instanceof ChatMessage.TextContent textContent)) {

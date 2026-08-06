@@ -360,24 +360,39 @@ public final class AgentRunService implements AutoCloseable {
             }
 
             @Override
+            public void onNodeProgress(String nodeName, String summary) {
+                RunCheckpoint checkpoint = current.get();
+                publish(new TraceEvent.NodeProgress(
+                        UUID.randomUUID(),
+                        checkpoint.runId(),
+                        checkpoint.version(),
+                        Instant.now(),
+                        nodeName,
+                        summary));
+            }
+
+            @Override
             public void onNodeCompleted(
                     String nodeName,
                     String nextNode,
                     AgentState state) {
                 RunCheckpoint previous = current.get();
                 boolean completed = StateGraph.END.equals(nextNode);
+                String completionError = completed ? stateError(state) : null;
+                boolean failed = completionError != null;
                 RunCheckpoint updated = appendAndSet(
                         current,
                         new CheckpointAppend(
                                 previous.runId(),
                                 previous.version(),
-                                completed ? RunStatus.COMPLETED : RunStatus.RUNNING,
+                                failed ? RunStatus.FAILED
+                                        : completed ? RunStatus.COMPLETED : RunStatus.RUNNING,
                                 state,
                                 completed ? null : nextNode,
                                 null,
                                 null,
                                 null,
-                                null));
+                                completionError));
                 publish(new TraceEvent.NodeCompleted(
                         UUID.randomUUID(),
                         updated.runId(),
@@ -385,7 +400,14 @@ public final class AgentRunService implements AutoCloseable {
                         Instant.now(),
                         nodeName,
                         nextNode));
-                if (completed) {
+                if (failed) {
+                    publish(new TraceEvent.Failed(
+                            UUID.randomUUID(),
+                            updated.runId(),
+                            updated.version(),
+                            Instant.now(),
+                            completionError));
+                } else if (completed) {
                     publish(new TraceEvent.Completed(
                             UUID.randomUUID(),
                             updated.runId(),
@@ -394,6 +416,15 @@ public final class AgentRunService implements AutoCloseable {
                 }
             }
         };
+    }
+
+    private String stateError(AgentState state) {
+        return state.variables().entrySet().stream()
+                .filter(entry -> entry.getKey().endsWith(".error"))
+                .map(Map.Entry::getValue)
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElse(null);
     }
 
     private RunCheckpoint appendAndSet(

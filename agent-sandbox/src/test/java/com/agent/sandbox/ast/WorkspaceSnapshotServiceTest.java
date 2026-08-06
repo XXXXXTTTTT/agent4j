@@ -57,4 +57,21 @@ class WorkspaceSnapshotServiceTest {
                 .isInstanceOf(AstServiceException.class)
                 .hasMessageContaining("字节");
     }
+
+    @Test
+    void capturesBoundedPromptViewWithoutFailingOnRepositoryOverflow() throws Exception {
+        Files.writeString(workspace.resolve("a.txt"), "1234");
+        Files.writeString(workspace.resolve("b.txt"), "5678");
+        Files.writeString(workspace.resolve("c.txt"), "90");
+        try (Git ignored = Git.init().setDirectory(workspace.toFile()).call()) {
+            // 初始化真实 Git 工作树后验证 Prompt 快照的有界截断语义。
+        }
+
+        WorkspaceSnapshot snapshot = new WorkspaceSnapshotService(2, 6)
+                .captureForPrompt(workspace);
+
+        assertThat(snapshot.files()).extracting(WorkspaceFile::relativePath)
+                .containsExactly("a.txt", "c.txt");
+        assertThat(snapshot.totalBytes()).isEqualTo(6);
+    }
 }

@@ -13,6 +13,7 @@ import java.util.UUID;
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
 @JsonSubTypes({
         @JsonSubTypes.Type(value = TraceEvent.NodeStarted.class, name = "NODE_STARTED"),
+        @JsonSubTypes.Type(value = TraceEvent.NodeProgress.class, name = "NODE_PROGRESS"),
         @JsonSubTypes.Type(value = TraceEvent.NodeCompleted.class, name = "NODE_COMPLETED"),
         @JsonSubTypes.Type(value = TraceEvent.Interrupted.class, name = "INTERRUPTED"),
         @JsonSubTypes.Type(value = TraceEvent.Approved.class, name = "APPROVED"),
@@ -22,6 +23,7 @@ import java.util.UUID;
 })
 public sealed interface TraceEvent
         permits TraceEvent.NodeStarted,
+                TraceEvent.NodeProgress,
                 TraceEvent.NodeCompleted,
                 TraceEvent.Interrupted,
                 TraceEvent.Approved,
@@ -46,6 +48,7 @@ public sealed interface TraceEvent
     default TraceEventType type() {
         return switch (this) {
             case NodeStarted ignored -> TraceEventType.NODE_STARTED;
+            case NodeProgress ignored -> TraceEventType.NODE_PROGRESS;
             case NodeCompleted ignored -> TraceEventType.NODE_COMPLETED;
             case Interrupted ignored -> TraceEventType.INTERRUPTED;
             case Approved ignored -> TraceEventType.APPROVED;
@@ -67,6 +70,23 @@ public sealed interface TraceEvent
         public NodeStarted {
             validateCommon(eventId, runId, checkpointVersion, occurredAt);
             requireText(nodeName, "nodeName");
+        }
+    }
+
+    /** 节点执行中的过程摘要。 */
+    record NodeProgress(
+            UUID eventId,
+            UUID runId,
+            long checkpointVersion,
+            Instant occurredAt,
+            String nodeName,
+            String summary) implements TraceEvent {
+
+        /** 校验节点过程事件。 */
+        public NodeProgress {
+            validateCommon(eventId, runId, checkpointVersion, occurredAt);
+            requireText(nodeName, "nodeName");
+            requireText(summary, "summary");
         }
     }
 

@@ -114,6 +114,8 @@ export function AgentConversation({ run, currentNode }: AgentConversationProps) 
   const plannerRequest = variables['planner.request']
   const plannerResponse = variables['planner.response']
   const plannerModel = variables['planner.model']
+  const plannerRoute = variables['planner.route']
+  const finalResponse = variables['final_response']
   const plannerError = variables['planner.error']
   const coderRequest = variables['coder.request']
   const coderResponse = variables['coder.response']
@@ -155,7 +157,11 @@ export function AgentConversation({ run, currentNode }: AgentConversationProps) 
             <span className="message-author">Agent4J</span>
             <span className={`run-status status-${run.status.toLowerCase()}`}>{statusLabel(run.status)}</span>
           </div>
-          {plan === undefined ? (
+          {finalResponse !== undefined ? (
+            <div className="final-response">
+              <p>{finalResponse}</p>
+            </div>
+          ) : plan === undefined ? (
             <p className="agent-progress-copy">正在读取任务并建立执行计划。</p>
           ) : (
             <div className="plan-block"><strong>执行计划</strong><p>{plan}</p></div>
@@ -168,17 +174,19 @@ export function AgentConversation({ run, currentNode }: AgentConversationProps) 
               {plannerError === undefined ? null : <pre className="run-error-detail">{plannerError}</pre>}
             </details>
           )}
-          <ol className="execution-stages" aria-label="执行阶段">
-            {STAGES.map((stage) => {
-              const state = stageState(run, currentNode, stage.id)
-              return (
-                <li key={stage.id} className={`stage-${state}`}>
-                  <span className="stage-icon"><StageIcon state={state} /></span>
-                  <span>{stage.label}</span>
-                </li>
-              )
-            })}
-          </ol>
+          {plannerRoute === 'chat' ? null : (
+            <ol className="execution-stages" aria-label="执行阶段">
+              {STAGES.map((stage) => {
+                const state = stageState(run, currentNode, stage.id)
+                return (
+                  <li key={stage.id} className={`stage-${state}`}>
+                    <span className="stage-icon"><StageIcon state={state} /></span>
+                    <span>{stage.label}</span>
+                  </li>
+                )
+              })}
+            </ol>
+          )}
         </div>
       </article>
 

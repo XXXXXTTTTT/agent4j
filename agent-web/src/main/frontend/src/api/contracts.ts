@@ -102,6 +102,7 @@ interface TraceCommon {
 
 export type TraceEvent =
   | (TraceCommon & { type: 'NODE_STARTED'; nodeName: string })
+  | (TraceCommon & { type: 'NODE_PROGRESS'; nodeName: string; summary: string })
   | (TraceCommon & {
       type: 'NODE_COMPLETED'
       nodeName: string

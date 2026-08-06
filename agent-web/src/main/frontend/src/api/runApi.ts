@@ -33,6 +33,7 @@ const IMAGE_DETAILS = new Set<ImageDetail>(['auto', 'low', 'high'])
 const RUN_LOG_STREAMS = new Set<RunLogStream>(['STDOUT', 'STDERR', 'PTY'])
 const TRACE_TYPES = new Set<TraceEvent['type']>([
   'NODE_STARTED',
+  'NODE_PROGRESS',
   'NODE_COMPLETED',
   'INTERRUPTED',
   'APPROVED',
@@ -407,6 +408,14 @@ function decodeTraceEvent(value: unknown): TraceEvent {
         type,
         ...common,
         nodeName: nonBlankStringAt(object.nodeName, 'traceFrame.event.nodeName'),
+      }
+    case 'NODE_PROGRESS':
+      exactKeys(object, [...commonKeys, 'nodeName', 'summary'], 'traceFrame.event')
+      return {
+        type,
+        ...common,
+        nodeName: nonBlankStringAt(object.nodeName, 'traceFrame.event.nodeName'),
+        summary: nonBlankStringAt(object.summary, 'traceFrame.event.summary'),
       }
     case 'NODE_COMPLETED':
       exactKeys(object, [...commonKeys, 'nodeName', 'nextNode'], 'traceFrame.event')

@@ -86,6 +86,132 @@ class PlannerNodeTest {
     }
 
     @Test
+    void answersHighConfidenceQuestionWithoutPlanningCodeWork() {
+        Endpoint endpoint = endpoint();
+        endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
+                .andExpect(content().json("""
+                        {
+                          "model":"planner-model",
+                          "messages":[
+                            {"role":"system"},
+                            {"role":"user","content":"你是什么模型"}
+                          ],
+                          "tools":[],"temperature":0.0,"stream":false
+                        }
+                        """, false))
+                .andRespond(withSuccess("""
+                        {"id":"answer-response","object":"chat.completion","created":1,
+                         "model":"planner-model","choices":[{"index":0,
+                         "message":{"role":"assistant","content":"我是一个 AI 助手。"},
+                         "finish_reason":"stop"}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        PlannerNode node = new PlannerNode(
+                router(endpoint), request -> {
+                    throw new AssertionError("快速问答不应召回代码仓库记忆");
+                }, 7);
+
+        AgentState result = node.execute(AgentState.empty()
+                .withVariable(PlannerNode.TASK_KEY, "你是什么模型"));
+
+        assertThat(result.variables())
+                .containsEntry(PlannerNode.ROUTE_KEY, PlannerNode.CHAT_ROUTE)
+                .containsEntry(PlannerNode.FINAL_RESPONSE_KEY, "我是一个 AI 助手。")
+                .doesNotContainKey(PlannerNode.PLAN_KEY)
+                .doesNotContainKey(PlannerNode.ERROR_KEY);
+        assertThat(result.trace()).containsExactly("planner");
+    }
+
+    @Test
+    void routesExplicitModifyRequestDirectlyToCodePlanning() {
+        Endpoint endpoint = endpoint();
+        endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
+                .andExpect(content().json("""
+                        {
+                          "model":"planner-model",
+                          "messages":[
+                            {"role":"system"},
+                            {"role":"user","content":"任务:\n修改 value\n\n长期记忆上下文:\nUse narrow patches."}
+                          ],
+                          "tools":[],"temperature":0.0,"stream":false
+                        }
+                        """, false))
+                .andRespond(withSuccess("""
+                        {"id":"plan-response","object":"chat.completion","created":1,
+                         "model":"planner-model","choices":[{"index":0,
+                         "message":{"role":"assistant","content":"apply the narrow patch"},
+                         "finish_reason":"stop"}]}
+                        """, MediaType.APPLICATION_JSON));
+        RecordingProvider provider = new RecordingProvider(
+                new MemoryContext("Use narrow patches.", 1));
+        PlannerNode node = new PlannerNode(router(endpoint), provider, 5);
+
+        AgentState result = node.execute(AgentState.empty()
+                .withVariable(PlannerNode.REPOSITORY_ID_KEY, "repo")
+                .withVariable(PlannerNode.USER_ID_KEY, "user")
+                .withVariable(PlannerNode.TASK_KEY, "修改 value"));
+
+        assertThat(provider.request).isEqualTo(
+                new MemoryContextRequest("repo", "user", "修改 value", 5));
+        assertThat(result.variables())
+                .containsEntry(PlannerNode.ROUTE_KEY, PlannerNode.AGENT_ROUTE)
+                .containsEntry(PlannerNode.PLAN_KEY, "apply the narrow patch")
+                .doesNotContainKeys(PlannerNode.FINAL_RESPONSE_KEY, PlannerNode.ERROR_KEY);
+    }
+
+    @Test
+    void semanticallyRoutesAmbiguousConversationBeforeUsingCodePlanning() {
+        Endpoint endpoint = endpoint();
+        endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
+                .andExpect(content().json("""
+                        {
+                          "model":"planner-model",
+                          "messages":[
+                            {"role":"system"},
+                            {"role":"user","content":"聊聊你最擅长的事情"}
+                          ],
+                          "tools":[],"temperature":0.0,"stream":false
+                        }
+                        """, false))
+                .andRespond(withSuccess("""
+                        {"id":"route-response","object":"chat.completion","created":1,
+                         "model":"planner-model","choices":[{"index":0,
+                         "message":{"role":"assistant","content":"chat"},
+                         "finish_reason":"stop"}]}
+                        """, MediaType.APPLICATION_JSON));
+        endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
+                .andExpect(content().json("""
+                        {
+                          "model":"planner-model",
+                          "messages":[
+                            {"role":"system"},
+                            {"role":"user","content":"聊聊你最擅长的事情"}
+                          ],
+                          "tools":[],"temperature":0.0,"stream":false
+                        }
+                        """, false))
+                .andRespond(withSuccess("""
+                        {"id":"answer-response","object":"chat.completion","created":1,
+                         "model":"planner-model","choices":[{"index":0,
+                         "message":{"role":"assistant","content":"我擅长分析代码与协助工程实现。"},
+                         "finish_reason":"stop"}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        PlannerNode node = new PlannerNode(
+                router(endpoint), request -> {
+                    throw new AssertionError("聊天语义路由不应召回代码仓库记忆");
+                }, 7);
+
+        AgentState result = node.execute(AgentState.empty()
+                .withVariable(PlannerNode.TASK_KEY, "聊聊你最擅长的事情"));
+
+        assertThat(result.variables())
+                .containsEntry(PlannerNode.ROUTE_KEY, PlannerNode.CHAT_ROUTE)
+                .containsEntry(PlannerNode.FINAL_RESPONSE_KEY, "我擅长分析代码与协助工程实现。")
+                .doesNotContainKeys(PlannerNode.PLAN_KEY, PlannerNode.ERROR_KEY);
+    }
+
+    @Test
     void preservesFullMemoryFailureStackAndDoesNotWritePlan() {
         MemoryContextProvider provider = request -> {
             throw new IllegalStateException("memory unavailable");
@@ -95,7 +221,7 @@ class PlannerNodeTest {
         AgentState result = node.execute(AgentState.empty()
                 .withVariable(PlannerNode.REPOSITORY_ID_KEY, "repo")
                 .withVariable(PlannerNode.USER_ID_KEY, "user")
-                .withVariable(PlannerNode.TASK_KEY, "task"));
+                .withVariable(PlannerNode.TASK_KEY, "修复代码"));
 
         assertThat(result.variables()).containsKey(PlannerNode.ERROR_KEY)
                 .doesNotContainKey(PlannerNode.PLAN_KEY);
@@ -112,7 +238,7 @@ class PlannerNodeTest {
         AgentState result = node.execute(AgentState.empty());
 
         assertThat(result.variables().get(PlannerNode.ERROR_KEY))
-                .contains("planner.repositoryId")
+                .contains("planner.task")
                 .contains("IllegalArgumentException");
         assertThat(result.trace()).containsExactly("planner");
     }

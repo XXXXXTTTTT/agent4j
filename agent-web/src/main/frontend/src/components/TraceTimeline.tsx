@@ -33,6 +33,8 @@ function presentation(event: TraceEvent): TracePresentation {
   switch (event.type) {
     case 'NODE_STARTED':
       return { label: '节点开始', detail: event.nodeName, tone: 'running', icon: CirclePlay }
+    case 'NODE_PROGRESS':
+      return { label: '执行进度', detail: `${event.nodeName} · ${event.summary}`, tone: 'running', icon: Activity }
     case 'NODE_COMPLETED':
       return { label: '节点完成', detail: `${event.nodeName} → ${event.nextNode}`, tone: 'success', icon: CircleCheck }
     case 'INTERRUPTED':

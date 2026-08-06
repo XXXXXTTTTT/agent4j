@@ -13,6 +13,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.client.RestClient;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
+import org.apache.hc.client5.http.config.RequestConfig;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.core5.util.Timeout;
 
 import java.util.EnumMap;
 import java.util.List;
@@ -24,19 +29,37 @@ import java.util.Map;
 @EnableConfigurationProperties(ModelGatewayProperties.class)
 public class ModelGatewayConfiguration {
 
+    /** 创建带有界连接和读取超时的 Apache HTTP 客户端。 */
+    @Bean(destroyMethod = "close")
+    CloseableHttpClient modelGatewayHttpClient() {
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setConnectTimeout(Timeout.ofSeconds(5))
+                .setConnectionRequestTimeout(Timeout.ofSeconds(5))
+                .setResponseTimeout(Timeout.ofSeconds(45))
+                .build();
+        return HttpClients.custom()
+                .setDefaultRequestConfig(requestConfig)
+                .build();
+    }
+
     /** 创建共享 OpenAI 兼容客户端。 */
     @Bean(destroyMethod = "close")
     LlmClient modelGatewayClient(
             ModelGatewayProperties properties,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            CloseableHttpClient httpClient) {
         properties.validate();
         RestClient restClient = RestClient.builder()
                 .baseUrl(properties.baseUrl())
+                .requestFactory(new HttpComponentsClientHttpRequestFactory(httpClient))
                 .defaultHeader(
                         HttpHeaders.AUTHORIZATION, "Bearer " + properties.apiKey())
                 .build();
         return new LlmClient(
-                restClient, objectMapper, properties.chatCompletionsPath());
+                restClient,
+                objectMapper,
+                properties.chatCompletionsPath(),
+                properties.baseUrl() + properties.chatCompletionsPath());
     }
 
     /** 为三类任务创建主模型与统一降级模型链。 */

@@ -39,9 +39,12 @@ class AgentRunServiceTest {
         List<StateGraph> graphs = new CopyOnWriteArrayList<>();
         GraphRegistry registry = new GraphRegistry(Map.of("flow", () -> {
             StateGraph graph = new StateGraph(3);
-            graph.addNode("first", state -> state
-                            .withVariable("nodeVirtual", Boolean.toString(Thread.currentThread().isVirtual()))
-                            .withTraceEntry("first"))
+            graph.addNode("first", state -> {
+                        NodeExecutionContext.progress("正在执行 first");
+                        return state
+                                .withVariable("nodeVirtual", Boolean.toString(Thread.currentThread().isVirtual()))
+                                .withTraceEntry("first");
+                    })
                     .addNode("second", state -> state.withTraceEntry("second"))
                     .addEdge("first", "second")
                     .addEdge("second", StateGraph.END)
@@ -69,12 +72,13 @@ class AgentRunServiceTest {
                     .containsExactly("first", "second", null);
             assertThat(events).extracting(TraceEvent::type).containsExactly(
                     TraceEventType.NODE_STARTED,
+                    TraceEventType.NODE_PROGRESS,
                     TraceEventType.NODE_COMPLETED,
                     TraceEventType.NODE_STARTED,
                     TraceEventType.NODE_COMPLETED,
                     TraceEventType.COMPLETED);
             assertThat(events).extracting(TraceEvent::checkpointVersion)
-                    .containsExactly(0L, 1L, 1L, 2L, 2L);
+                    .containsExactly(0L, 0L, 1L, 1L, 2L, 2L);
             assertThat(graphs).hasSize(1);
             assertThatThrownBy(graphs.getFirst()::entryPoint)
                     .isInstanceOf(IllegalStateException.class)

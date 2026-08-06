@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -35,6 +36,7 @@ class LlmClientTest {
         RestClient.Builder builder = RestClient.builder().baseUrl("https://gateway.test");
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
         AtomicBoolean requestOnVirtualThread = new AtomicBoolean();
+        AtomicBoolean modelMdcVisible = new AtomicBoolean();
         JsonNode parameters = objectMapper.createObjectNode()
                 .put("type", "object")
                 .set("properties", objectMapper.createObjectNode()
@@ -51,6 +53,8 @@ class LlmClientTest {
         server.expect(once(), requestTo("https://gateway.test/v1/chat/completions"))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(httpRequest -> requestOnVirtualThread.set(Thread.currentThread().isVirtual()))
+                .andExpect(httpRequest -> modelMdcVisible.set(
+                        "gpt-test".equals(MDC.get("modelName"))))
                 .andExpect(content().json("""
                         {
                           "model": "gpt-test",
@@ -104,6 +108,8 @@ class LlmClientTest {
             assertThat(toolCall.function().name()).isEqualTo("lookup");
             assertThat(toolCall.function().arguments()).isEqualTo("{\"id\":42}");
             assertThat(response.usage().totalTokens()).isEqualTo(15);
+            assertThat(modelMdcVisible).isTrue();
+            assertThat(MDC.get("modelName")).isNull();
         }
         server.verify();
     }
@@ -180,6 +186,26 @@ class LlmClientTest {
             assertThatThrownBy(() -> client.complete(request))
                     .isInstanceOf(LlmClientException.class)
                     .hasCauseInstanceOf(RestClientResponseException.class);
+        }
+        server.verify();
+    }
+
+    @Test
+    void preservesServiceUnavailableStatusForFallbackAndDiagnostics() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://gateway.test");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        server.expect(once(), requestTo("https://gateway.test/v1/chat/completions"))
+                .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"error\":{\"message\":\"busy\"}}"));
+
+        try (LlmClient client = new LlmClient(builder.build(), objectMapper, CHAT_COMPLETIONS_PATH)) {
+            assertThatThrownBy(() -> client.complete(streamingRequest()))
+                    .isInstanceOf(LlmClientException.class)
+                    .hasCauseInstanceOf(RestClientResponseException.class)
+                    .satisfies(exception -> assertThat(
+                            ((RestClientResponseException) exception.getCause()).getStatusCode())
+                            .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
         }
         server.verify();
     }

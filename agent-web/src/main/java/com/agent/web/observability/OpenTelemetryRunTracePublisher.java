@@ -10,6 +10,7 @@ import com.agent.core.observability.ModelUsage;
 import com.agent.core.trace.TraceEvent;
 import com.agent.core.trace.TraceEventPublisher;
 import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanBuilder;
 import io.opentelemetry.api.trace.StatusCode;
@@ -41,6 +42,8 @@ public final class OpenTelemetryRunTracePublisher
             AttributeKey.stringKey("agent.node.name");
     private static final AttributeKey<String> NEXT_NODE =
             AttributeKey.stringKey("agent.next_node");
+    private static final AttributeKey<String> PROGRESS_SUMMARY =
+            AttributeKey.stringKey("agent.progress.summary");
     private static final AttributeKey<String> OBSERVATION_TYPE =
             AttributeKey.stringKey("langfuse.observation.type");
     private static final AttributeKey<String> OPERATION_NAME =
@@ -154,6 +157,7 @@ public final class OpenTelemetryRunTracePublisher
         private void accept(TraceEvent event) {
             switch (event) {
                 case TraceEvent.NodeStarted started -> nodeStarted(started);
+                case TraceEvent.NodeProgress progress -> nodeProgress(progress);
                 case TraceEvent.NodeCompleted completed -> nodeCompleted(completed);
                 case TraceEvent.Interrupted interrupted -> interrupted(interrupted);
                 case TraceEvent.Approved approved -> approved(approved);
@@ -184,6 +188,15 @@ public final class OpenTelemetryRunTracePublisher
             nodeSpan.end(event.occurredAt());
             nodeSpan = null;
             nodeName = null;
+        }
+
+        private void nodeProgress(TraceEvent.NodeProgress event) {
+            requireRun();
+            requireNode(event.nodeName());
+            nodeSpan.addEvent(
+                    "agent.node.progress",
+                    Attributes.of(PROGRESS_SUMMARY, event.summary()),
+                    event.occurredAt());
         }
 
         private void interrupted(TraceEvent.Interrupted event) {

@@ -9,11 +9,16 @@ import org.springframework.http.MediaType;
 import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.net.SocketTimeoutException;
+import java.util.Map;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Callable;
@@ -22,6 +27,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
@@ -29,12 +35,14 @@ import java.util.function.Consumer;
  */
 public final class LlmClient implements AutoCloseable {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(LlmClient.class);
     private static final String SSE_DATA_PREFIX = "data:";
     private static final String SSE_DONE = "[DONE]";
 
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final String chatCompletionsPath;
+    private final String requestUrl;
     private final ExecutorService executor;
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -46,12 +54,25 @@ public final class LlmClient implements AutoCloseable {
      * @param chatCompletionsPath Chat Completions API 的精确路径
      */
     public LlmClient(RestClient restClient, ObjectMapper objectMapper, String chatCompletionsPath) {
+        this(restClient, objectMapper, chatCompletionsPath, chatCompletionsPath);
+    }
+
+    /** 创建带完整审计 URL 的 LLM 客户端。 */
+    public LlmClient(
+            RestClient restClient,
+            ObjectMapper objectMapper,
+            String chatCompletionsPath,
+            String requestUrl) {
         this.restClient = Objects.requireNonNull(restClient, "restClient 不能为空");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
         if (chatCompletionsPath == null || chatCompletionsPath.isBlank()) {
             throw new IllegalArgumentException("chatCompletionsPath 不能为空");
         }
         this.chatCompletionsPath = chatCompletionsPath;
+        if (requestUrl == null || requestUrl.isBlank()) {
+            throw new IllegalArgumentException("requestUrl 不能为空");
+        }
+        this.requestUrl = requestUrl;
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
     }
 
@@ -63,18 +84,28 @@ public final class LlmClient implements AutoCloseable {
      */
     public ChatCompletionResponse complete(ChatCompletionRequest request) {
         Objects.requireNonNull(request, "request 不能为空");
-        return runOnVirtualThread(() -> {
-            ChatCompletionResponse response = restClient.post()
-                    .uri(chatCompletionsPath)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .body(request.withStream(false))
-                    .retrieve()
-                    .body(ChatCompletionResponse.class);
-            if (response == null) {
-                throw new LlmClientException("LLM 返回了空响应");
+        return runOnVirtualThread(request.model(), () -> {
+            long startedAt = System.nanoTime();
+            try {
+                ChatCompletionResponse response = restClient.post()
+                        .uri(chatCompletionsPath)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.APPLICATION_JSON)
+                        .body(request.withStream(false))
+                        .exchange((httpRequest, httpResponse) -> {
+                            requireSuccess(httpResponse, "LLM 请求失败");
+                            return objectMapper.readValue(
+                                    httpResponse.getBody(), ChatCompletionResponse.class);
+                        });
+                if (response == null) {
+                    throw new LlmClientException("LLM 返回了空响应");
+                }
+                logSuccess(request.model(), response.usage(), 200, startedAt);
+                return response;
+            } catch (Exception exception) {
+                logFailure(request.model(), exception, startedAt);
+                throw exception;
             }
-            return response;
         });
     }
 
@@ -87,17 +118,31 @@ public final class LlmClient implements AutoCloseable {
     public void stream(ChatCompletionRequest request, Consumer<ChatCompletionChunk> consumer) {
         Objects.requireNonNull(request, "request 不能为空");
         Objects.requireNonNull(consumer, "consumer 不能为空");
-        runOnVirtualThread(() -> {
-            restClient.post()
-                    .uri(chatCompletionsPath)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.TEXT_EVENT_STREAM)
-                    .body(request.withStream(true))
-                    .exchange((httpRequest, response) -> {
-                        consumeSse(response, consumer);
-                        return null;
-                    });
-            return null;
+        runOnVirtualThread(request.model(), () -> {
+            long startedAt = System.nanoTime();
+            AtomicReference<Usage> usage = new AtomicReference<>();
+            try {
+                Integer status = restClient.post()
+                        .uri(chatCompletionsPath)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .body(request.withStream(true))
+                        .exchange((httpRequest, response) -> {
+                            int responseStatus = response.getStatusCode().value();
+                            consumeSse(response, chunk -> {
+                                if (chunk.usage() != null) {
+                                    usage.set(chunk.usage());
+                                }
+                                consumer.accept(chunk);
+                            });
+                            return responseStatus;
+                        });
+                logSuccess(request.model(), usage.get(), status == null ? 200 : status, startedAt);
+                return null;
+            } catch (Exception exception) {
+                logFailure(request.model(), exception, startedAt);
+                throw exception;
+            }
         });
     }
 
@@ -105,17 +150,7 @@ public final class LlmClient implements AutoCloseable {
             ClientHttpResponse response,
             Consumer<ChatCompletionChunk> consumer) throws IOException {
         if (response.getStatusCode().isError()) {
-            byte[] responseBody = response.getBody().readAllBytes();
-            RestClientResponseException httpException = new RestClientResponseException(
-                    "LLM SSE 请求失败",
-                    response.getStatusCode(),
-                    response.getStatusText(),
-                    response.getHeaders(),
-                    responseBody,
-                    StandardCharsets.UTF_8);
-            throw new LlmClientException(
-                    "LLM SSE 请求失败，HTTP 状态码 " + response.getStatusCode().value(),
-                    httpException);
+            requireSuccess(response, "LLM SSE 请求失败");
         }
 
         try (BufferedReader reader = new BufferedReader(
@@ -134,6 +169,79 @@ public final class LlmClient implements AutoCloseable {
             }
             dispatchSseEvent(eventData, consumer);
         }
+    }
+
+    private void requireSuccess(ClientHttpResponse response, String message)
+            throws IOException {
+        if (!response.getStatusCode().isError()) {
+            return;
+        }
+        byte[] responseBody = response.getBody().readAllBytes();
+        RestClientResponseException httpException = new RestClientResponseException(
+                message,
+                response.getStatusCode(),
+                response.getStatusText(),
+                response.getHeaders(),
+                responseBody,
+                StandardCharsets.UTF_8);
+        throw new LlmClientException(
+                message + "，HTTP 状态码 " + response.getStatusCode().value(),
+                httpException);
+    }
+
+    private void logSuccess(
+            String model,
+            Usage usage,
+            int httpStatus,
+            long startedAt) {
+        int inputTokens = usage == null ? -1 : usage.promptTokens();
+        int outputTokens = usage == null ? -1 : usage.completionTokens();
+        LOGGER.info(
+                "LLM 请求完成 url={} model={} inputTokens={} outputTokens={} httpStatus={} durationMs={}",
+                requestUrl,
+                model,
+                inputTokens,
+                outputTokens,
+                httpStatus,
+                elapsedMillis(startedAt));
+    }
+
+    private void logFailure(String model, Throwable failure, long startedAt) {
+        RestClientResponseException responseException = findCause(
+                failure, RestClientResponseException.class);
+        SocketTimeoutException timeoutException = findCause(
+                failure, SocketTimeoutException.class);
+        int status = responseException == null
+                ? -1
+                : responseException.getStatusCode().value();
+        if (timeoutException != null) {
+            LOGGER.warn(
+                    "LLM 请求读取超时 url={} model={} httpStatus={} durationMs={}",
+                    requestUrl, model, status, elapsedMillis(startedAt), failure);
+        } else if (status == 503) {
+            LOGGER.warn(
+                    "LLM 服务不可用 url={} model={} httpStatus=503 durationMs={}",
+                    requestUrl, model, elapsedMillis(startedAt), failure);
+        } else {
+            LOGGER.error(
+                    "LLM 请求失败 url={} model={} httpStatus={} durationMs={}",
+                    requestUrl, model, status, elapsedMillis(startedAt), failure);
+        }
+    }
+
+    private long elapsedMillis(long startedAt) {
+        return java.time.Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
+    }
+
+    private <T extends Throwable> T findCause(Throwable failure, Class<T> type) {
+        Throwable current = failure;
+        while (current != null) {
+            if (type.isInstance(current)) {
+                return type.cast(current);
+            }
+            current = current.getCause();
+        }
+        return null;
     }
 
     private void appendSseData(StringBuilder eventData, String rawData) {
@@ -158,12 +266,23 @@ public final class LlmClient implements AutoCloseable {
         return false;
     }
 
-    private <T> T runOnVirtualThread(Callable<T> operation) {
+    private <T> T runOnVirtualThread(String modelName, Callable<T> operation) {
         if (closed.get()) {
             throw new LlmClientException("LLM 客户端已经关闭");
         }
+        Map<String, String> callerMdc = MDC.getCopyOfContextMap();
         try {
-            Future<T> future = executor.submit(operation);
+            Future<T> future = executor.submit(() -> {
+                if (callerMdc != null) {
+                    MDC.setContextMap(callerMdc);
+                }
+                MDC.put("modelName", modelName);
+                try {
+                    return operation.call();
+                } finally {
+                    MDC.clear();
+                }
+            });
             return future.get();
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();

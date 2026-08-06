@@ -149,8 +149,19 @@ public class ProductionGraphConfiguration {
                 .addNode("ops", ops)
                 .addNode("reviewer", reviewer)
                 .setEntryPoint("planner")
-                .addEdge("planner", "coder")
-                .addEdge("coder", "ops")
+                .addConditionalEdges(
+                        "planner",
+                        state -> plannerRoute(state),
+                        Map.of(
+                                PlannerNode.CHAT_ROUTE, StateGraph.END,
+                                PlannerNode.AGENT_ROUTE, "coder",
+                                PlannerNode.FAILED_ROUTE, StateGraph.END))
+                .addConditionalEdges(
+                        "coder",
+                        state -> state.variables().containsKey(CoderNode.ERROR_KEY)
+                                ? PlannerNode.FAILED_ROUTE
+                                : "continue",
+                        Map.of(PlannerNode.FAILED_ROUTE, StateGraph.END, "continue", "ops"))
                 .addEdge("ops", "reviewer")
                 .addConditionalEdges(
                         "reviewer",
@@ -158,6 +169,15 @@ public class ProductionGraphConfiguration {
                                 ? "repair"
                                 : "finish",
                         Map.of("repair", "coder", "finish", StateGraph.END));
+    }
+
+    private String plannerRoute(com.agent.core.engine.AgentState state) {
+        if (state.variables().containsKey(PlannerNode.ERROR_KEY)) {
+            return PlannerNode.FAILED_ROUTE;
+        }
+        return PlannerNode.CHAT_ROUTE.equals(state.variables().get(PlannerNode.ROUTE_KEY))
+                ? PlannerNode.CHAT_ROUTE
+                : PlannerNode.AGENT_ROUTE;
     }
 
     private boolean shouldRepair(

@@ -1029,3 +1029,66 @@ planner.model=mock-code、coder.updatedFiles=greeting.txt、ops.exitCode=0、ops
 hello agent4j、reviewer.approved=true；宿主 Git 保持标准工作树 modified Diff，Monaco、xterm、
 Reviewer 和 Trace 均可见。真实网关在修正重复 /v1 后仍对已列模型返回 HTTP 403 upstream_error，
 因此本轮没有把外部模型调用伪装成成功。
+
+## 本轮补充：可观测问答闭环与有界执行
+
+### 【问题现象】简单问题误入代码链
+
+用户只询问模型身份或架构说明时，流程仍然进入 Coder/Ops，最终因为缺少
+`ops.command` 或工作区快照超限失败；即使模型已经生成回答，前端也只显示“已完成”和执行占位。
+
+### 【根因分析】
+
+Planner 过去把所有输入都当作代码任务，缺少“先识别意图、再选择能力”的路由层。代码修改、
+工具执行与普通问答的上下文预算和成功标准不同，不能共享同一条强制执行链。与此同时，前端只关注
+节点终态，没有消费 `final_response`，导致状态机中已有的业务结果丢失在 UI 边界。
+
+### 【解决方案/代码级实现】
+
+`PlannerNode` 先用动作词优先规则识别代码意图；高置信聊天直接调用
+`TaskType.QUICK_CLASSIFICATION` 并写入精确状态键 `final_response`，设置
+`planner.route=chat` 后路由到 `END`。未命中快路径时只执行一次语义路由，模型输出严格限制为
+`chat` 或 `agent`；只有 `agent` 才进入 Planner/Coder/Ops/Reviewer。聊天路径不要求
+`planner.repositoryId`、`planner.userId`，也不召回代码记忆。异常保留完整堆栈并设置
+`planner.route=failed`，避免静默失败。
+
+`WorkspaceSnapshotService.capture` 继续作为严格门禁，适用于需要完整、可审计快照的场景；
+`captureForPrompt` 则在文件数和字节预算内生成稳定的部分视图，超出预算时跳过文件并记录摘要，
+避免大型工作区让一次普通代码请求直接失败。`CoderNode` 明确告知模型该上下文是受预算限制的部分视图，
+防止模型把截断内容误当作完整仓库。
+
+### 【问题现象】执行期间前端长时间停留在“运行中”
+
+节点开始和结束事件存在，但节点内部的模型请求、补丁处理和终端执行没有中间反馈，SSE/WebSocket
+订阅端无法解释延迟来源。
+
+### 【根因分析】
+
+原有事件协议只描述生命周期终态；新增事件如果只在 Java 端定义而没有同步经过 OTel、SSE 和
+TypeScript 解码器，就会在跨模块边界被丢弃或降级为未知事件。
+
+### 【解决方案/代码级实现】
+
+`GraphExecutionListener.onNodeProgress` 在节点执行中发布 `TraceEvent.NodeProgress`，并使用
+`TraceEventType.NODE_PROGRESS` 贯穿 `StateGraph`、`AgentRunService`、
+`OpenTelemetryRunTracePublisher`、`RunTraceController` 的 SSE 流以及前端 `runApi` 精确解码器。
+OTel 将摘要写入 `agent.node.progress` 事件和 `agent.progress.summary` 属性，前端
+`TraceTimeline` 展示节点名与可读摘要，保留原始 traceId/runId 供审计关联。
+
+### 【问题现象】聊天 Run 完成但页面没有最终答案
+
+流程状态已经包含 `final_response`，页面却仍展示代码执行阶段列表，用户无法区分“回答已生成”和“代码已修改”。
+
+### 【解决方案/代码级实现】
+
+`AgentConversation` 读取 `planner.route` 与 `final_response`：聊天路由直接渲染最终回答并隐藏代码阶段；
+代码路由继续展示 Planner、Coder、Ops、Reviewer 和实时进度。`RunTraceController` 订阅 trace 后先读取
+权威 Checkpoint，再发送状态快照，处理“事件先到、快照后写”的竞态，保证新订阅者既能看到最终答案，也能
+继续接收后续事件。
+
+### 【证据】
+
+`PlannerNodeTest` 覆盖高置信聊天、动作词优先、语义路由和异常堆栈；
+`WorkspaceSnapshotServiceTest` 覆盖严格快照与有界提示快照；
+`OpenTelemetryRunTracePublisherTest`、`RunTraceControllerTest` 覆盖进度事件的 OTel/SSE 协议；
+`runApi.test.ts` 与 `Workbench.test.tsx` 覆盖 `NODE_PROGRESS` 解码、聊天 `final_response` 渲染和代码路径回归。

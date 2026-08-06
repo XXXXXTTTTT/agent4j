@@ -82,6 +82,32 @@ function traceEvents(): TraceEvent[] {
 }
 
 describe('Workbench', () => {
+  it('在聊天快路径展示 final_response 而不是代码执行占位', () => {
+    render(
+      <Workbench
+        controller={controller({
+          run: runView({
+            state: {
+              messages: [],
+              variables: {
+                'planner.task': '你是什么模型',
+                'planner.route': 'chat',
+                final_response: '我是 Agent4J 的智能助手。',
+                'planner.model': 'quick-model',
+              },
+              trace: ['planner'],
+            },
+          }),
+        })}
+        onTerminalReady={() => undefined}
+      />,
+    )
+
+    const conversation = screen.getByLabelText('Agent 会话')
+    expect(within(conversation).getByText('我是 Agent4J 的智能助手。')).toBeVisible()
+    expect(within(conversation).queryByText('正在读取任务并建立执行计划。')).not.toBeInTheDocument()
+  })
+
   it('将任务、计划、执行结果和审查结论呈现为连续 Agent 会话', () => {
     render(
       <Workbench

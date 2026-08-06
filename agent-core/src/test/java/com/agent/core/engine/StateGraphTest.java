@@ -1,6 +1,7 @@
 package com.agent.core.engine;
 
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 
 import java.io.IOException;
 import java.util.Map;
@@ -103,6 +104,33 @@ class StateGraphTest {
                 .hasValue(new NodeExecutionContext(runId, "work"));
         assertThat(virtualThread).isTrue();
         assertThat(NodeExecutionContext.current()).isEmpty();
+    }
+
+    @Test
+    void bindsAuditMdcDuringNodeExecutionAndClearsItAfterwards() {
+        UUID runId = UUID.randomUUID();
+        try (StateGraph graph = new StateGraph(1)) {
+            graph.addNode("work", new Node() {
+                @Override
+                public AgentState execute(AgentState state) {
+                    throw new AssertionError("不应调用无上下文入口");
+                }
+
+                @Override
+                public AgentState execute(NodeExecutionContext context, AgentState state) {
+                    assertThat(MDC.get("runId")).isEqualTo(runId.toString());
+                    assertThat(MDC.get("traceId")).isEqualTo(runId.toString());
+                    assertThat(MDC.get("nodeName")).isEqualTo("work");
+                    return state;
+                }
+            }).addEdge("work", StateGraph.END).setEntryPoint("work");
+
+            graph.execute(new GraphExecutionRequest(
+                    runId, AgentState.empty(), "work", false), noOpListener());
+        }
+        assertThat(MDC.get("runId")).isNull();
+        assertThat(MDC.get("traceId")).isNull();
+        assertThat(MDC.get("nodeName")).isNull();
     }
 
     @Test
