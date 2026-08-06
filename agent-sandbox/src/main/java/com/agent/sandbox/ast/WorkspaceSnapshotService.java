@@ -81,6 +81,12 @@ public final class WorkspaceSnapshotService {
     }
 
     private boolean isExcluded(Path root, Path path) {
+        String fileName = path.getFileName().toString();
+        if (".env".equals(fileName)
+                || fileName.endsWith(".pem")
+                || fileName.endsWith(".key")) {
+            return true;
+        }
         Path relative = root.relativize(path);
         for (Path element : relative) {
             if (EXCLUDED_DIRECTORIES.contains(element.toString())) {

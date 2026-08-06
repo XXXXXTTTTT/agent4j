@@ -11,3 +11,7 @@ node_modules
 .env
 *.log
 *.out
+
+# 允许 Docker 传输 agent-web 下打好的 jar 包
+!agent-web/target/
+!agent-web/target/*.jar

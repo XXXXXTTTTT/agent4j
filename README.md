@@ -146,7 +146,9 @@ Create a Run with the exact state shape:
 }
 ```
 
-Production graph IDs are the exact names of registered `GraphFactory` beans. The Docker quick start exposes the deterministic `demo-agent` graph for task-first product demonstration; production Coder/Ops/Reviewer graphs are assembled by the host application with constructor-injected capabilities.
+Production graph IDs are the exact names of registered `GraphFactory` beans. Docker Compose enables
+the production `code-agent` graph by default. The deterministic `demo-agent` graph remains
+available for protocol debugging; the task-first endpoint is POST /api/runs/code-agent.
 
 ## Configuration
 
@@ -210,6 +212,22 @@ Provide PostgreSQL through standard `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_
 - Unified Diff application rejects paths outside the repository root and preserves the original file on conflict.
 - PTY execution receives an explicit Bash path and working directory; backend selection is type-safe.
 - Do not commit `.env`, API keys, database passwords, certificates or generated `target/` / `node_modules/` content.
+
+## Production Agent Runtime Notes
+
+Docker Compose enables the production code-agent graph by default. The browser workbench submits
+natural-language tasks to POST /api/runs/code-agent and displays Planner, Coder, Ops, Reviewer
+evidence, Diff, terminal output, review decisions, Trace and complete error stacks.
+
+Example request:
+
+    {"task":"将 greeting.txt 修改为 hello agent4j，并运行 README 中的验证命令"}
+
+Set AGENT_CODE_HOST_WORKSPACE to an existing Git worktree. Compose mounts that exact directory
+at /agent-workspace; the one-shot sandbox receives only that workspace bind.
+
+AGENT_LLM_BASE_URL is the gateway root. With
+AGENT_LLM_CHAT_COMPLETIONS_PATH=/v1/chat/completions, do not include /v1 again in the base URL.
 
 ## License
 

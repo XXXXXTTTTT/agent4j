@@ -173,12 +173,20 @@ public class ProductionGraphConfiguration {
         return Integer.parseInt(attempts) < maxRepairAttempts;
     }
 
-    private TerminalTarget terminalTarget(ProductionAgentProperties properties) {
+    TerminalTarget terminalTarget(ProductionAgentProperties properties) {
         return switch (properties.executionMode()) {
-            case "DOCKER" -> new DockerTarget(
-                    properties.dockerImage(),
-                    properties.workspace(),
-                    properties.containerWorkspace());
+            case "DOCKER" -> properties.workspaceSourceContainer().isBlank()
+                    ? new DockerTarget(
+                            properties.dockerImage(),
+                            properties.workspace(),
+                            properties.containerWorkspace())
+                    : new DockerTarget(
+                            properties.dockerImage(),
+                            properties.workspace(),
+                            properties.containerWorkspace(),
+                            new DockerTarget.ContainerWorkspaceSource(
+                                    properties.workspaceSourceContainer(),
+                                    properties.workspaceSourcePath()));
             case "PTY" -> new PtyTarget(
                     Path.of(properties.bashExecutable()),
                     properties.workspace());

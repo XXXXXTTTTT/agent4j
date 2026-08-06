@@ -5,6 +5,8 @@ import com.agent.sandbox.pty.DockerTarget;
 import com.agent.sandbox.pty.Stream;
 import com.agent.sandbox.pty.TerminalLog;
 import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.command.InspectContainerResponse;
+import com.github.dockerjava.api.model.Volume;
 import com.github.dockerjava.core.DefaultDockerClientConfig;
 import com.github.dockerjava.core.DockerClientImpl;
 import com.github.dockerjava.httpclient5.ApacheDockerHttpClient;
@@ -24,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class DockerCommandExecutorTest {
@@ -117,6 +120,59 @@ class DockerCommandExecutorTest {
             assertThat(Duration.ofNanos(System.nanoTime() - startedAt))
                     .isLessThan(Duration.ofSeconds(2));
         }
+    }
+
+    @Test
+    void resolvesOnlyUniqueWritableBindFromSourceContainer() {
+        DockerTarget.ContainerWorkspaceSource source =
+                new DockerTarget.ContainerWorkspaceSource(
+                        "agent4j-web-local", "/agent-workspace");
+        InspectContainerResponse.Mount mount = mount(
+                "/agent-workspace", "D:/agent4j", null, true);
+
+        assertThat(DockerCommandExecutor.resolveContainerBindSource(
+                source, List.of(mount)))
+                .isEqualTo("D:/agent4j");
+    }
+
+    @Test
+    void rejectsMissingDuplicateReadOnlyAndNamedVolumeSources() {
+        DockerTarget.ContainerWorkspaceSource source =
+                new DockerTarget.ContainerWorkspaceSource(
+                        "agent4j-web-local", "/agent-workspace");
+        InspectContainerResponse.Mount writable = mount(
+                "/agent-workspace", "D:/agent4j", null, true);
+
+        assertThatThrownBy(() -> DockerCommandExecutor.resolveContainerBindSource(
+                source, List.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("/agent-workspace");
+        assertThatThrownBy(() -> DockerCommandExecutor.resolveContainerBindSource(
+                source, List.of(writable, writable)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("唯一");
+        assertThatThrownBy(() -> DockerCommandExecutor.resolveContainerBindSource(
+                source, List.of(mount(
+                        "/agent-workspace", "D:/agent4j", null, false))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("读写");
+        assertThatThrownBy(() -> DockerCommandExecutor.resolveContainerBindSource(
+                source, List.of(mount(
+                        "/agent-workspace", "/var/lib/docker/volumes/workspace", "workspace", true))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("bind");
+    }
+
+    private InspectContainerResponse.Mount mount(
+            String destination,
+            String source,
+            String name,
+            boolean writable) {
+        return new InspectContainerResponse.Mount()
+                .withDestination(new Volume(destination))
+                .withSource(source)
+                .withName(name)
+                .withRw(writable);
     }
 
     private DockerTarget target() {

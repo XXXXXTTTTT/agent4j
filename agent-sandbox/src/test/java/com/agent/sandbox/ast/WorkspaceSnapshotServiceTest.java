@@ -22,6 +22,9 @@ class WorkspaceSnapshotServiceTest {
         Files.createDirectories(workspace.resolve("node_modules/pkg"));
         Files.writeString(workspace.resolve("src/App.java"), "class App {}\n");
         Files.writeString(workspace.resolve("README.md"), "readme\n");
+        Files.writeString(workspace.resolve(".env"), "AGENT_LLM_API_KEY=secret\n");
+        Files.writeString(workspace.resolve("client.pem"), "private certificate\n");
+        Files.writeString(workspace.resolve("signing.key"), "private key\n");
         Files.writeString(workspace.resolve("target/generated.java"), "ignored\n");
         Files.writeString(workspace.resolve("node_modules/pkg/index.js"), "ignored\n");
         Files.write(workspace.resolve("image.bin"), new byte[] {0, 1, 2});

@@ -8,7 +8,9 @@ import com.agent.core.trace.RunLogPublisher;
 import com.agent.sandbox.ast.AstService;
 import com.agent.sandbox.ast.WorkspaceSnapshotService;
 import com.agent.sandbox.browser.BrowserAutomation;
+import com.agent.sandbox.pty.DockerTarget;
 import com.agent.sandbox.pty.SandboxTerminalService;
+import com.agent.sandbox.pty.TerminalTarget;
 import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -41,6 +43,8 @@ class ProductionGraphConfigurationTest {
                 "/bin/bash",
                 "python:3.12-slim",
                 "/workspace",
+                "agent4j-web-local",
+                "/agent-workspace",
                 Duration.ofSeconds(30),
                 Duration.ofSeconds(15),
                 50,
@@ -61,5 +65,14 @@ class ProductionGraphConfigurationTest {
         try (StateGraph graph = factory.create()) {
             assertThat(graph.entryPoint()).isEqualTo("planner");
         }
+
+        TerminalTarget terminalTarget =
+                new ProductionGraphConfiguration().terminalTarget(properties);
+        assertThat(terminalTarget).isEqualTo(new DockerTarget(
+                "python:3.12-slim",
+                workspace,
+                "/workspace",
+                new DockerTarget.ContainerWorkspaceSource(
+                        "agent4j-web-local", "/agent-workspace")));
     }
 }

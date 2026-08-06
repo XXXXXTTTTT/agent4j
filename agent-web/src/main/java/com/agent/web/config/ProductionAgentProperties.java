@@ -18,6 +18,8 @@ public record ProductionAgentProperties(
         String bashExecutable,
         String dockerImage,
         String containerWorkspace,
+        String workspaceSourceContainer,
+        String workspaceSourcePath,
         Duration commandTimeout,
         Duration browserTimeout,
         int snapshotMaxFiles,
@@ -34,6 +36,12 @@ public record ProductionAgentProperties(
         bashExecutable = text(bashExecutable, "bashExecutable");
         dockerImage = text(dockerImage, "dockerImage");
         containerWorkspace = text(containerWorkspace, "containerWorkspace");
+        workspaceSourceContainer = optionalText(workspaceSourceContainer);
+        workspaceSourcePath = optionalText(workspaceSourcePath);
+        if (workspaceSourceContainer.isBlank() != workspaceSourcePath.isBlank()) {
+            throw new IllegalArgumentException(
+                    "workspaceSourceContainer 与 workspaceSourcePath 必须同时配置");
+        }
         Objects.requireNonNull(workspace, "workspace 不能为空");
         positive(commandTimeout, "commandTimeout");
         positive(browserTimeout, "browserTimeout");
@@ -59,6 +67,10 @@ public record ProductionAgentProperties(
             throw new IllegalArgumentException(name + " 不能为空");
         }
         return value.trim();
+    }
+
+    private static String optionalText(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private static void positive(Duration value, String name) {

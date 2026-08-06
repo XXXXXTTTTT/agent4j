@@ -172,7 +172,8 @@ old/new path 做标准化并验证仍在根目录；之后才把同一字节交�
 
 **【解决方案/代码级实现】** `PtyCommandExecutor` 从 pty4j 明确提供的 `pid()` 和
 `WinPtyProcess.getChildProcessId()` 同时构造包装进程与真实 Bash 子进程的双根
-`ProcessHandle` 快照，再反向强杀全部后代，使用 `onExit()` 和 1 秒上限等待进程树。
+`ProcessHandle` 快照；Windows 超时路径先对两个精确 PID 执行 `taskkill /T /F`，
+再反向强杀快照中的全部后代，使用 `onExit()` 和 1 秒上限等待进程树。
 不能再调用无界的 `WinPtyProcess.waitFor()`：它等待 WinPTY 原生包装进程时
 可能额外阻塞约 30 秒，因此只做 1 秒有界等待。WinPTY 输入流的原生 `read` 与 `close()`
 共享读取锁，超时路径不能依赖同步关闭；Windows reader 改用 `available()` 轮询，进程销毁
@@ -182,7 +183,7 @@ old/new path 做标准化并验证仍在根目录；之后才把同一字节交�
 
 **【证据】** `PtyCommandExecutorTest.releasesWorkingDirectoryBeforeReturningFromTimeout`、
 `terminatesProcessAtTimeout`；`mvn -pl agent-sandbox -Dtest=PtyCommandExecutorTest test`
-实测 `5/5` 通过，超时用例耗时 `1.66s`，未再出现 30 秒等待。
+连续 3 次实测 `5/5` 通过，超时用例未再出现工作目录锁定或 30 秒等待。
 
 ### 2.9 Docker 一次性容器的清理必须覆盖所有出口
 
@@ -990,3 +991,41 @@ Task 2、3、4、5 已分别提交为 `8a432a6`、`92f4854`、`b55f462`、`96283
   `npm audit --audit-level=low` 返回 `found 0 vulnerabilities`。
 - `git diff --check` 通过；精确模块路径扫描未发现 `langchain4j` 或 `langgraph4j`；
   `docker ps -a --filter label=com.agent.runtime.managed=true` 返回 0 个容器。
+
+## Phase 2 补充：JGit index 与容器 bind 边界
+
+**【问题现象】** 生产 Code Agent 在 Compose 工作区中成功写入文件后，宿主 Windows Git
+曾显示 tracked 文件删除并重新变为 untracked；JGit 测试仓库却只显示 staged 修改。
+
+**【根因分析】** JGit ApplyCommand 不只写工作树，还会重写 Repository.getIndexFile()。
+在 Windows 工作区通过 Docker bind mount 由 Linux JVM 原子替换 index 时，宿主 Git 的 index
+扩展和文件项可能被丢弃。这样即使文件内容正确，git diff 和后续修复循环也失去可靠基线。
+
+**【解决方案/代码级实现】** AstService 在应用补丁前读取 JGit 返回的精确 index 文件字节，
+让 JGit 完成 UTF-8 Unified Diff 的工作树写入和路径校验，然后在 finally 中恢复原 index；
+无 index 的新仓库则删除 ApplyCommand 新建的 index。回归测试先提交真实 tracked 文件，断言
+工作树出现 modified、staged 集合为空且 index 字节完全不变。该保护不自动提交，也不吞掉恢复
+失败异常。
+
+## Phase 5 补充：生产 Code Agent 运行边界
+
+**【问题现象】** 固定 demo 图可以完成页面验收，但无法证明用户输入真的驱动 Planner、Coder、
+Ops 和 Reviewer；外部模型网关还可能因为 base URL 与路径重复或模型不可用而返回 404/403。
+
+**【根因分析】** 任务优先接口、工作区来源和模型端点是三个独立协议。把 /v1 同时写入
+AGENT_LLM_BASE_URL 与 AGENT_LLM_CHAT_COMPLETIONS_PATH 会产生 /v1/v1/chat/completions；
+模型列表存在也不代表该网关账号允许 Chat Completions。Compose 内的容器路径也不能直接
+当作 Docker Engine 可见的宿主 bind source。
+
+**【解决方案/代码级实现】** POST /api/runs/code-agent 只接收精确 task 优先请求，校验工作区
+位于 AGENT_CODE_WORKSPACE。Compose 以 source container 名称和 /agent-workspace 精确解析
+唯一、可写、非 named-volume mount；一次性沙箱只接收这一条 bind，结束后强制删除。模型配置
+约定根地址不含重复 API 前缀，所有请求、响应和错误栈写入 PostgreSQL Checkpoint。
+
+**【本轮真实证据】** 2026-08-06 使用 Docker Desktop Engine 27.4.0、Compose local、
+Java 21 运行真实 Spring Web、PostgreSQL、JGit、Docker Bash、REST 和 Chromium 页面；mock
+OpenAI 兼容端点仅替代不可用外部网关。浏览器输入自然语言任务后，Run 为 COMPLETED，
+planner.model=mock-code、coder.updatedFiles=greeting.txt、ops.exitCode=0、ops.stdout 为
+hello agent4j、reviewer.approved=true；宿主 Git 保持标准工作树 modified Diff，Monaco、xterm、
+Reviewer 和 Trace 均可见。真实网关在修正重复 /v1 后仍对已列模型返回 HTTP 403 upstream_error，
+因此本轮没有把外部模型调用伪装成成功。

@@ -77,7 +77,8 @@ public final class PtyCommandExecutor {
     private CommandResult awaitResult(
             PtyProcess process,
             Duration timeout,
-            Consumer<TerminalLog> logConsumer) throws InterruptedException {
+            Consumer<TerminalLog> logConsumer)
+            throws IOException, InterruptedException {
         StringBuilder stdout = new StringBuilder();
         AtomicReference<IOException> readFailure = new AtomicReference<>();
         AtomicReference<RuntimeException> consumerFailure = new AtomicReference<>();
@@ -113,7 +114,8 @@ public final class PtyCommandExecutor {
         return new CommandResult(exitCode, stdout.toString(), "", timedOut);
     }
 
-    private void terminateProcessTree(PtyProcess process) throws InterruptedException {
+    private void terminateProcessTree(PtyProcess process)
+            throws IOException, InterruptedException {
         List<ProcessHandle> roots = new java.util.ArrayList<>();
         ProcessHandle wrapper = ProcessHandle.of(process.pid()).orElse(null);
         if (wrapper != null) {
@@ -122,8 +124,12 @@ public final class PtyCommandExecutor {
         if (process instanceof WinPtyProcess winPtyProcess) {
             int childPid = winPtyProcess.getChildProcessId();
             if (childPid > 0) {
+                terminateWindowsProcessTree(childPid);
                 ProcessHandle.of(childPid).ifPresent(roots::add);
             }
+        }
+        if (WINDOWS && process.pid() > 0) {
+            terminateWindowsProcessTree(process.pid());
         }
         List<ProcessHandle> descendants = roots.stream()
                 .flatMap(root -> java.util.stream.Stream.concat(
@@ -153,6 +159,24 @@ public final class PtyCommandExecutor {
         // ProcessHandle 已确认 Bash 及其后代退出；WinPTY 包装进程的 waitFor
         // 在 Windows 上可能阻塞约 30 秒，因此这里只做有界等待。
         process.waitFor(PROCESS_TERMINATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    private void terminateWindowsProcessTree(long pid)
+            throws IOException, InterruptedException {
+        if (!WINDOWS) {
+            return;
+        }
+        Process taskkill = new ProcessBuilder(
+                "taskkill", "/PID", Long.toString(pid), "/T", "/F")
+                .redirectErrorStream(true)
+                .start();
+        taskkill.getInputStream().transferTo(java.io.OutputStream.nullOutputStream());
+        if (!taskkill.waitFor(
+                PROCESS_TERMINATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+            taskkill.destroyForcibly();
+            taskkill.waitFor(
+                    PROCESS_TERMINATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        }
     }
 
     private void awaitReader(Thread readerThread)

@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import org.eclipse.jgit.lib.PersonIdent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -110,6 +111,42 @@ class AstServiceDiffTest {
                 .isInstanceOf(AstServiceException.class)
                 .hasMessageContaining("工作树");
         assertThat(outsideFile).doesNotExist();
+    }
+
+    @Test
+    void preservesTrackedFileAfterApplyingDiff() throws Exception {
+        Path repositoryRoot = initializeRepository("tracked-file");
+        Path file = repositoryRoot.resolve("greeting.txt");
+        Files.writeString(file, "hello", StandardCharsets.UTF_8);
+        try (Git git = Git.open(repositoryRoot.toFile())) {
+            git.add().addFilepattern("greeting.txt").call();
+            git.commit()
+                    .setMessage("baseline")
+                    .setAuthor(new PersonIdent("test", "test@example.com"))
+                    .call();
+        }
+        Path index = repositoryRoot.resolve(".git/index");
+        byte[] originalIndex = Files.readAllBytes(index);
+
+        new AstService().applyDiff(repositoryRoot, """
+                diff --git a/greeting.txt b/greeting.txt
+                --- a/greeting.txt
+                +++ b/greeting.txt
+                @@ -1 +1 @@
+                -hello
+                +hello agent4j
+                """);
+
+        try (Git git = Git.open(repositoryRoot.toFile())) {
+            var status = git.status().call();
+            assertThat(status.getModified())
+                    .containsExactly("greeting.txt");
+            assertThat(status.getChanged())
+                    .doesNotContain("greeting.txt");
+            assertThat(status.getUntracked())
+                    .doesNotContain("greeting.txt");
+        }
+        assertThat(Files.readAllBytes(index)).containsExactly(originalIndex);
     }
 
     private Path initializeRepository(String directoryName) throws Exception {

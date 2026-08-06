@@ -117,9 +117,12 @@ class ProductWorkbenchBrowserTest {
             page.navigate("http://127.0.0.1:"
                     + application.getWebServer().getPort() + "/");
 
+            page.getByLabel("任务描述").fill("验证工作台审批与执行证据");
+            page.getByRole(com.microsoft.playwright.options.AriaRole.BUTTON,
+                    new Page.GetByRoleOptions().setName("高级运行参数")).click();
             page.getByLabel("图 ID").fill(GRAPH_ID);
             page.getByRole(com.microsoft.playwright.options.AriaRole.BUTTON,
-                    new Page.GetByRoleOptions().setName("启动 Run")).click();
+                    new Page.GetByRoleOptions().setName("运行 Agent")).click();
             try {
                 page.getByTestId("approval-dialog").waitFor();
             } catch (PlaywrightException exception) {
@@ -148,11 +151,8 @@ class ProductWorkbenchBrowserTest {
                     .contains("src/App.java");
             assertRequiredRegions(page, desktop);
             assertNoOverlap(
-                    page.getByTestId("run-launcher"),
-                    page.getByTestId("workspace-main"));
-            assertNoOverlap(
                     page.getByTestId("workspace-main"),
-                    page.getByTestId("trace-timeline"));
+                    page.getByLabel("执行检查器"));
 
             page.getByRole(com.microsoft.playwright.options.AriaRole.TAB,
                     new Page.GetByRoleOptions().setName("终端")).click();
@@ -175,7 +175,7 @@ class ProductWorkbenchBrowserTest {
                     .contains("tests passed");
 
             page.getByRole(com.microsoft.playwright.options.AriaRole.TAB,
-                    new Page.GetByRoleOptions().setName("审查")).click();
+                    new Page.GetByRoleOptions().setName("浏览器")).click();
             Locator reviewPanel = page.getByTestId("review-panel");
             reviewPanel.waitFor();
             Object evidenceState = reviewPanel.evaluate("""

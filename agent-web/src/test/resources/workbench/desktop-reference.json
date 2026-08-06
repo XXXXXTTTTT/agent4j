@@ -1,5 +1,5 @@
 {
   "width": 1440,
   "height": 900,
-  "requiredTestIds": ["run-launcher", "workspace-main", "trace-timeline"]
+  "requiredTestIds": ["workbench-shell", "workspace-main", "run-launcher"]
 }

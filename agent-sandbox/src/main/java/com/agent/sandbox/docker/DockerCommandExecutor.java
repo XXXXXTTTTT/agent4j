@@ -9,6 +9,7 @@ import com.agent.sandbox.pty.TerminalLog;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.async.ResultCallback;
 import com.github.dockerjava.api.command.CreateContainerResponse;
+import com.github.dockerjava.api.command.InspectContainerResponse;
 import com.github.dockerjava.api.command.WaitContainerResultCallback;
 import com.github.dockerjava.api.model.AccessMode;
 import com.github.dockerjava.api.model.Bind;
@@ -25,6 +26,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -71,7 +73,7 @@ public final class DockerCommandExecutor implements AutoCloseable {
         RuntimeException primaryFailure = null;
         try {
             HostConfig hostConfig = HostConfig.newHostConfig().withBinds(new Bind(
-                    target.hostWorkspace().toString(),
+                    bindSource(target),
                     new Volume(target.containerWorkspace()),
                     AccessMode.rw));
             CreateContainerResponse container = dockerClient
@@ -98,6 +100,52 @@ public final class DockerCommandExecutor implements AutoCloseable {
                 removeContainer(containerId, primaryFailure);
             }
         }
+    }
+
+    private String bindSource(DockerTarget target) {
+        return switch (target.workspaceSource()) {
+            case DockerTarget.HostWorkspaceSource ignored ->
+                    target.hostWorkspace().toString();
+            case DockerTarget.ContainerWorkspaceSource source ->
+                    resolveContainerBindSource(
+                            source,
+                            dockerClient.inspectContainerCmd(source.containerName())
+                                    .exec()
+                                    .getMounts());
+        };
+    }
+
+    static String resolveContainerBindSource(
+            DockerTarget.ContainerWorkspaceSource source,
+            List<InspectContainerResponse.Mount> mounts) {
+        Objects.requireNonNull(source, "source 不能为空");
+        Objects.requireNonNull(mounts, "mounts 不能为空");
+        List<InspectContainerResponse.Mount> matches = mounts.stream()
+                .filter(Objects::nonNull)
+                .filter(mount -> mount.getDestination() != null)
+                .filter(mount -> source.containerPath().equals(
+                        mount.getDestination().getPath()))
+                .toList();
+        if (matches.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "源容器未找到工作区 mount: " + source.containerPath());
+        }
+        if (matches.size() != 1) {
+            throw new IllegalArgumentException(
+                    "源容器工作区 mount 必须唯一: " + source.containerPath());
+        }
+        InspectContainerResponse.Mount mount = matches.getFirst();
+        if (!Boolean.TRUE.equals(mount.getRW())) {
+            throw new IllegalArgumentException("源容器工作区 mount 必须可读写");
+        }
+        if (mount.getName() != null && !mount.getName().isBlank()) {
+            throw new IllegalArgumentException("源容器工作区 mount 必须是 bind");
+        }
+        String bindSource = mount.getSource();
+        if (bindSource == null || bindSource.isBlank()) {
+            throw new IllegalArgumentException("源容器工作区 bind source 不能为空");
+        }
+        return bindSource;
     }
 
     private CommandResult runContainer(

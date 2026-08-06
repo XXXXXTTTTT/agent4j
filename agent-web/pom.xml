@@ -98,6 +98,7 @@
                 <configuration>
                     <workingDirectory>src/main/frontend</workingDirectory>
                     <installDirectory>src/main/frontend/.frontend</installDirectory>
+                    <skip>${frontend.skip}</skip>
                 </configuration>
                 <executions>
                     <execution>

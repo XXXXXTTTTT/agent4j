@@ -1,0 +1,53 @@
+name: agent4j-local
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agent4j-postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agent}
+      POSTGRES_USER: ${POSTGRES_USER:-agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent123456}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-agent} -d $${POSTGRES_DB:-agent}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - agent4j-postgres-data:/var/lib/postgresql/data
+
+  agent-web:
+    build:
+      context: .
+      # 显式指定使用本地的 Dockerfile.local
+      dockerfile: Dockerfile.local
+    container_name: agent4j-web-local
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${AGENT_WEB_PORT:-8080}:8080"
+    env_file:
+      - .env
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-agent}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-agent}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-agent123456}
+      AGENT_PRODUCTION_ENABLED: ${AGENT_PRODUCTION_ENABLED:-true}
+      AGENT_CODE_WORKSPACE: /agent-workspace
+      AGENT_CODE_WORKSPACE_SOURCE_CONTAINER: agent4j-web-local
+      AGENT_CODE_WORKSPACE_SOURCE_PATH: /agent-workspace
+    volumes:
+      - type: bind
+        source: ${AGENT_CODE_HOST_WORKSPACE:-.}
+        target: /agent-workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  agent4j-postgres-data:

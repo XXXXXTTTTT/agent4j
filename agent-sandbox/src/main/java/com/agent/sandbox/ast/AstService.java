@@ -102,9 +102,18 @@ public final class AstService {
 
                 byte[] patchBytes = unifiedDiff.getBytes(StandardCharsets.UTF_8);
                 validatePatch(root, patchBytes);
-                ApplyResult result = git.apply()
-                        .setPatch(new ByteArrayInputStream(patchBytes))
-                        .call();
+                Path indexPath = git.getRepository().getIndexFile().toPath();
+                byte[] originalIndex = Files.exists(indexPath)
+                        ? Files.readAllBytes(indexPath)
+                        : null;
+                ApplyResult result;
+                try {
+                    result = git.apply()
+                            .setPatch(new ByteArrayInputStream(patchBytes))
+                            .call();
+                } finally {
+                    restoreIndex(indexPath, originalIndex);
+                }
                 List<Path> updatedFiles = new ArrayList<>();
                 for (java.io.File updatedFile : result.getUpdatedFiles()) {
                     Path updatedPath = updatedFile.getCanonicalFile().toPath();
@@ -117,6 +126,18 @@ public final class AstService {
             throw exception;
         } catch (Exception exception) {
             throw new AstServiceException("应用 Unified Diff 失败: " + repositoryRoot, exception);
+        }
+    }
+
+    private void restoreIndex(Path indexPath, byte[] originalIndex) {
+        try {
+            if (originalIndex == null) {
+                Files.deleteIfExists(indexPath);
+            } else {
+                Files.write(indexPath, originalIndex);
+            }
+        } catch (IOException exception) {
+            throw new AstServiceException("恢复 Git index 失败: " + indexPath, exception);
         }
     }
 

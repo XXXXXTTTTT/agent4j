@@ -1,0 +1,13 @@
+# 本地专用：只负责运行宿主机本地编译好的 Jar 包
+FROM docker.m.daocloud.io/library/eclipse-temurin:21-jre
+
+WORKDIR /app
+
+# 直接复制本地 target 目录下打好的 jar 包
+COPY agent-web/target/agent-web-0.1.0-SNAPSHOT.jar app.jar
+
+ENV JAVA_OPTS="-XX:+UseG1GC -XX:MaxRAMPercentage=75.0 -Dfile.encoding=UTF-8"
+
+EXPOSE 8080
+
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

@@ -38,7 +38,6 @@ public final class CoderNode implements Node {
 
     private final AstService astService;
     private final ModelRouter modelRouter;
-    private final ObjectMapper objectMapper;
     private final WorkspaceSnapshotService snapshotService;
     private final ObjectReader changeReader;
 
@@ -50,7 +49,6 @@ public final class CoderNode implements Node {
     public CoderNode(AstService astService) {
         this.astService = Objects.requireNonNull(astService, "astService 不能为空");
         this.modelRouter = null;
-        this.objectMapper = null;
         this.snapshotService = null;
         this.changeReader = null;
     }
@@ -63,7 +61,7 @@ public final class CoderNode implements Node {
             WorkspaceSnapshotService snapshotService) {
         this.astService = Objects.requireNonNull(astService, "astService 不能为空");
         this.modelRouter = Objects.requireNonNull(modelRouter, "modelRouter 不能为空");
-        this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
+        Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
         this.snapshotService = Objects.requireNonNull(
                 snapshotService, "snapshotService 不能为空");
         this.changeReader = objectMapper.readerFor(CodeChange.class)
