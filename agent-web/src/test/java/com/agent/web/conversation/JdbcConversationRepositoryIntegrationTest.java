@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class JdbcConversationRepositoryIntegrationTest {
 
@@ -37,7 +38,7 @@ class JdbcConversationRepositoryIntegrationTest {
             new PostgreSQLContainer<>("postgres:16-alpine");
 
     private JdbcClient jdbc;
-    private WorkspaceRepository repository;
+    private JdbcConversationRepository repository;
 
     @BeforeAll
     static void startPostgres() {
@@ -120,6 +121,72 @@ class JdbcConversationRepositoryIntegrationTest {
                 .param("userId", owner.userId()).update();
 
         assertThat(repository.findWorkspace(WORKSPACE_ID, owner.userId())).isEmpty();
+    }
+
+    @Test
+    void persistsConversationTurnsWithStableIndexesAndIdempotentTerminalUpdates() {
+        Actor owner = new Actor("conversation-owner", "Owner");
+        repository.ensureDefaultWorkspace(
+                WORKSPACE_ID, owner, "项目工作区", Path.of("D:/agent4j"), "repo-owner", NOW);
+        UUID conversationId = UUID.randomUUID();
+        ConversationRecord conversation = repository.createConversation(
+                conversationId, WORKSPACE_ID, owner, "首轮标题", NOW);
+
+        ConversationTurnRecord first = repository.createPendingTurn(
+                conversationId, owner.userId(), "第一轮", NOW);
+        UUID runId = UUID.randomUUID();
+        jdbc.sql("""
+                insert into agent_runs (
+                    run_id, graph_id, status, latest_version, created_at, updated_at
+                ) values (:runId, 'code-agent', 'RUNNING', 0, :createdAt, :updatedAt)
+                """)
+                .param("runId", runId)
+                .param("createdAt", java.sql.Timestamp.from(NOW))
+                .param("updatedAt", java.sql.Timestamp.from(NOW))
+                .update();
+        ConversationTurnRecord running = repository.markTurnRunning(first.turnId(), runId, NOW);
+        ConversationTurnRecord completed = repository.markTurnCompleted(
+                running.turnId(), "第一轮回答", NOW);
+        ConversationTurnRecord completedAgain = repository.markTurnCompleted(
+                completed.turnId(), "第一轮回答", NOW);
+        ConversationTurnRecord second = repository.createPendingTurn(
+                conversationId, owner.userId(), "第二轮", NOW);
+
+        assertThat(conversation.status()).isEqualTo(ConversationStatus.ACTIVE);
+        assertThat(first.turnIndex()).isEqualTo(1);
+        assertThat(completed.status()).isEqualTo(ConversationTurnStatus.COMPLETED);
+        assertThat(completedAgain).isEqualTo(completed);
+        assertThat(second.turnIndex()).isEqualTo(2);
+        assertThat(repository.findTurns(conversationId, owner.userId()))
+                .extracting(ConversationTurnRecord::turnIndex)
+                .containsExactly(1L, 2L);
+    }
+
+    @Test
+    void rejectsConcurrentActiveTurnAndArchivedConversation() {
+        Actor owner = new Actor("conversation-conflict-owner", "Owner");
+        repository.ensureDefaultWorkspace(
+                WORKSPACE_ID, owner, "项目工作区", Path.of("D:/agent4j"), "repo-owner", NOW);
+        UUID conversationId = UUID.randomUUID();
+        repository.createConversation(conversationId, WORKSPACE_ID, owner, "标题", NOW);
+        repository.createPendingTurn(conversationId, owner.userId(), "执行中", NOW);
+
+        assertThatThrownBy(() -> repository.createPendingTurn(
+                conversationId, owner.userId(), "并发输入", NOW))
+                .isInstanceOf(JdbcConversationRepository.ConversationConflictException.class);
+
+        repository.archiveConversation(conversationId, owner.userId(), NOW);
+        assertThatThrownBy(() -> repository.createPendingTurn(
+                conversationId, owner.userId(), "归档后输入", NOW))
+                .isInstanceOf(JdbcConversationRepository.ConversationConflictException.class);
+    }
+
+    @Test
+    void titleHelperUsesFirstEightyUnicodeCodePointsAfterWhitespaceCollapse() {
+        String title = JdbcConversationRepository.deriveTitle("  你好\t世界  "+ "a".repeat(100));
+
+        assertThat(title).startsWith("你好 世界");
+        assertThat(title.codePointCount(0, title.length())).isEqualTo(80);
     }
 
     private DataSource dataSource() {
