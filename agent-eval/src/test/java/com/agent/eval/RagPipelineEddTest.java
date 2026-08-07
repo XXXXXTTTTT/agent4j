@@ -32,6 +32,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -64,6 +65,17 @@ class RagPipelineEddTest {
                 .writerWithDefaultPrettyPrinter()
                 .writeValue(report.toFile(), new EddReport(Instant.now(), results));
 
+        ObjectMapper reportMapper = new ObjectMapper().findAndRegisterModules();
+        var reportJson = reportMapper.readTree(report.toFile());
+        assertThat(reportJson.path("scenarios")).hasSize(8);
+        for (var scenario : reportJson.path("scenarios")) {
+            List<String> fieldNames = new ArrayList<>();
+            scenario.fieldNames().forEachRemaining(fieldNames::add);
+            assertThat(fieldNames).containsExactlyInAnyOrderElementsOf(Set.of(
+                    "taskId", "passed", "documents", "estimatedTokens",
+                    "degraded", "evidence"));
+            assertThat(scenario.path("evidence")).hasSize(6);
+        }
         assertThat(results).hasSize(8);
         assertThat(results).allSatisfy(result -> {
             assertThat(result.passed()).as(result.taskId() + " EDD 失败").isTrue();
