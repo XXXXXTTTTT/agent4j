@@ -9,6 +9,7 @@ import javax.sql.DataSource;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -59,7 +60,8 @@ public final class JdbcMemoryStore implements MemoryStore {
                     + "select greatest(0.0, 1 - (m.embedding <=> q.value)) as retrieval_score, "
                     + "m.memory_id, m.repository_id, m.user_id, m.memory_type, "
                     + "m.title, m.content, m.content_hash, m.embedding::text, "
-                    + "m.created_at, m.updated_at "
+                    + "m.created_at, m.updated_at, m.importance, m.access_count, "
+                    + "m.last_accessed_at "
                     + "from rag_memories m cross join query_vector q "
                     + "where m.repository_id = ? and m.user_id = ? "
                     + "and m.memory_type in (" + filter.placeholders() + ") "
@@ -87,7 +89,8 @@ public final class JdbcMemoryStore implements MemoryStore {
                     + "websearch_to_tsquery('simple', ?))::double precision as retrieval_score, "
                     + "m.memory_id, m.repository_id, m.user_id, m.memory_type, "
                     + "m.title, m.content, m.content_hash, m.embedding::text, "
-                    + "m.created_at, m.updated_at "
+                    + "m.created_at, m.updated_at, m.importance, m.access_count, "
+                    + "m.last_accessed_at "
                     + "from rag_memories m "
                     + "where m.repository_id = ? and m.user_id = ? "
                     + "and m.memory_type in (" + filter.placeholders() + ") "
@@ -104,6 +107,41 @@ public final class JdbcMemoryStore implements MemoryStore {
             return jdbcTemplate.query(sql, this::mapRow, parameters.toArray());
         } catch (DataAccessException exception) {
             throw new MemoryStoreException("长期记忆词法召回失败", exception);
+        }
+    }
+
+    @Override
+    public void recordAccess(
+            MemoryQuery query,
+            List<UUID> memoryIds,
+            Instant accessedAt) {
+        Objects.requireNonNull(query, "query 不能为空");
+        Objects.requireNonNull(memoryIds, "memoryIds 不能为空");
+        Objects.requireNonNull(accessedAt, "accessedAt 不能为空");
+        if (memoryIds.isEmpty()) {
+            return;
+        }
+        if (memoryIds.stream().anyMatch(Objects::isNull)) {
+            throw new IllegalArgumentException("memoryIds 不能包含 null");
+        }
+        try {
+            TypeFilter filter = typeFilter(query);
+            StringJoiner idPlaceholders = new StringJoiner(", ");
+            memoryIds.forEach(ignored -> idPlaceholders.add("?"));
+            String sql = "update rag_memories "
+                    + "set access_count = access_count + 1, last_accessed_at = ? "
+                    + "where repository_id = ? and user_id = ? "
+                    + "and memory_type in (" + filter.placeholders() + ") "
+                    + "and memory_id in (" + idPlaceholders + ")";
+            List<Object> parameters = new ArrayList<>();
+            parameters.add(Timestamp.from(accessedAt));
+            parameters.add(query.repositoryId());
+            parameters.add(query.userId());
+            parameters.addAll(filter.values());
+            parameters.addAll(memoryIds);
+            jdbcTemplate.update(sql, parameters.toArray());
+        } catch (DataAccessException exception) {
+            throw new MemoryStoreException("长期记忆访问记录失败", exception);
         }
     }
 
@@ -135,19 +173,23 @@ public final class JdbcMemoryStore implements MemoryStore {
         return jdbcTemplate.queryForObject("""
                 insert into rag_memories(
                     memory_id, repository_id, user_id, memory_type, title, content,
-                    content_hash, embedding, created_at, updated_at)
-                values (?, ?, ?, ?, ?, ?, ?, cast(? as vector), ?, ?)
+                    content_hash, embedding, created_at, updated_at, importance,
+                    access_count, last_accessed_at)
+                values (?, ?, ?, ?, ?, ?, ?, cast(? as vector), ?, ?, ?, ?, ?)
                 on conflict (repository_id, user_id, memory_type, content_hash)
                 do update set title = excluded.title,
                               content = excluded.content,
                               embedding = excluded.embedding,
+                              importance = excluded.importance,
                               updated_at = excluded.updated_at
                 returning memory_id, repository_id, user_id, memory_type, title, content,
-                          content_hash, embedding::text, created_at, updated_at
+                          content_hash, embedding::text, created_at, updated_at,
+                          importance, access_count, last_accessed_at
                 """, this::mapEntry,
                 entry.memoryId(), entry.repositoryId(), entry.userId(), entry.type().name(),
                 entry.title(), entry.content(), entry.contentHash(), vectorLiteral(entry.embedding()),
-                Timestamp.from(entry.createdAt()), Timestamp.from(entry.updatedAt()));
+                Timestamp.from(entry.createdAt()), Timestamp.from(entry.updatedAt()),
+                entry.importance(), entry.accessCount(), Timestamp.from(entry.lastAccessedAt()));
     }
 
     private MemoryRetrievalRow mapRow(ResultSet resultSet, int rowNumber) throws SQLException {
@@ -169,7 +211,10 @@ public final class JdbcMemoryStore implements MemoryStore {
                 resultSet.getString("content_hash"),
                 parseVector(resultSet.getString("embedding")),
                 resultSet.getTimestamp("created_at").toInstant(),
-                resultSet.getTimestamp("updated_at").toInstant());
+                resultSet.getTimestamp("updated_at").toInstant(),
+                resultSet.getDouble("importance"),
+                resultSet.getLong("access_count"),
+                resultSet.getTimestamp("last_accessed_at").toInstant());
     }
 
     private TypeFilter typeFilter(MemoryQuery query) {
