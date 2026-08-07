@@ -93,7 +93,7 @@ Run:
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Java\jdk-21'
 $env:Path="$env:JAVA_HOME\bin;$env:Path"
-mvn -pl agent-core -am -Dtest=PromptCatalogTest -DfailIfNoTests=false test
+mvn -pl agent-core -am -Dtest=PromptCatalogTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: `COMPILATION ERROR`，明确报告 `PromptCatalog`、`PromptTemplate` 或 `RenderedPrompt` 不存在。
@@ -135,7 +135,7 @@ public final class PromptCatalog {
 
 - [ ] **Step 4: 运行 Prompt 测试并确认通过**
 
-Run: `mvn -pl agent-core -am -Dtest=PromptCatalogTest -DfailIfNoTests=false test`
+Run: `mvn -pl agent-core -am -Dtest=PromptCatalogTest -Dsurefire.failIfNoSpecifiedTests=false test`
 
 Expected: `Tests run: 2, Failures: 0, Errors: 0`。
 
@@ -218,7 +218,7 @@ class ContextWindowManagerTest {
 
 - [ ] **Step 2: 运行测试并确认因上下文类型不存在而失败**
 
-Run: `mvn -pl agent-core -am -Dtest=ContextWindowManagerTest -DfailIfNoTests=false test`
+Run: `mvn -pl agent-core -am -Dtest=ContextWindowManagerTest -Dsurefire.failIfNoSpecifiedTests=false test`
 
 Expected: `COMPILATION ERROR`，明确报告 `ContextWindowManager` 或请求/结果类型不存在。
 
@@ -261,7 +261,7 @@ public final class ContextWindowManager {
 
 - [ ] **Step 4: 运行上下文测试并确认通过**
 
-Run: `mvn -pl agent-core -am -Dtest=ContextWindowManagerTest -DfailIfNoTests=false test`
+Run: `mvn -pl agent-core -am -Dtest=ContextWindowManagerTest -Dsurefire.failIfNoSpecifiedTests=false test`
 
 Expected: `Tests run: 2, Failures: 0, Errors: 0`。
 
@@ -341,7 +341,7 @@ private ModelIntentClassifier classifier(IntentModel model) {
 
 - [ ] **Step 2: 运行测试并确认因 intent 类型不存在而失败**
 
-Run: `mvn -pl agent-core -am -Dtest=ModelIntentClassifierTest -DfailIfNoTests=false test`
+Run: `mvn -pl agent-core -am -Dtest=ModelIntentClassifierTest -Dsurefire.failIfNoSpecifiedTests=false test`
 
 Expected: `COMPILATION ERROR`，明确报告 `TaskDecision` 或 `ModelIntentClassifier` 不存在。
 
@@ -398,7 +398,7 @@ public final class ModelRouterIntentModel implements IntentModel {
 Run:
 
 ```powershell
-mvn -pl agent-core -am -Dtest=ModelIntentClassifierTest,PlannerNodeTest -DfailIfNoTests=false test
+mvn -pl agent-core -am -Dtest=ModelIntentClassifierTest,PlannerNodeTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: 新增测试通过；Planner 旧测试此时仍通过，因为尚未切换实现。
@@ -440,7 +440,7 @@ assertThat(result.variables())
 
 - [ ] **Step 2: 运行 Planner 测试并确认因状态键缺失而失败**
 
-Run: `mvn -pl agent-core -am -Dtest=PlannerNodeTest -DfailIfNoTests=false test`
+Run: `mvn -pl agent-core -am -Dtest=PlannerNodeTest -Dsurefire.failIfNoSpecifiedTests=false test`
 
 Expected: 测试断言失败，明确显示 `planner.taskKind`、Prompt 审计键或 Context 审计键不存在。
 
@@ -492,7 +492,7 @@ planner.contextSummarized
 Run:
 
 ```powershell
-mvn -pl agent-core -am -Dtest=PlannerNodeTest,CoderOpsGraphTest,CoderOpsReviewerGraphTest -DfailIfNoTests=false test
+mvn -pl agent-core -am -Dtest=PlannerNodeTest,CoderOpsGraphTest,CoderOpsReviewerGraphTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: 所有选择的测试 `Failures: 0, Errors: 0`。
@@ -538,7 +538,7 @@ assertThatThrownBy(() -> new ProductionAgentProperties(
 Run:
 
 ```powershell
-mvn -pl agent-web -am -Dfrontend.skip=true -Dtest=ProductionAgentPropertiesTest,ProductionGraphConfigurationTest,ProductionCodeAgentIntegrationTest -DfailIfNoTests=false test
+mvn -pl agent-web -am -Dfrontend.skip=true -Dtest=ProductionAgentPropertiesTest,ProductionGraphConfigurationTest,ProductionCodeAgentIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: `COMPILATION ERROR` 或断言失败，原因是 `plannerContextMaxTokens` 尚未存在。
@@ -576,7 +576,7 @@ Expected: Maven `BUILD SUCCESS`，所有实际运行测试 `Failures: 0, Errors:
 Run:
 
 ```powershell
-mvn -pl agent-eval -am -Dtest=LlmEddTest -DfailIfNoTests=false test
+mvn -pl agent-eval -am -Dtest=LlmEddTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
 Expected: `AGENT_LLM_ENABLED=true` 时实际调用配置端点，模型身份、连续出游追问、代码修改和不合法路由场景通过并生成 `agent-eval/target/edd/` 报告；未开启时 JUnit assumption 明确跳过。
