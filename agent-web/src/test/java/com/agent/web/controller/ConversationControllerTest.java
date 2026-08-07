@@ -27,7 +27,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
-@WebFluxTest(controllers = {ConversationController.class, WorkspaceController.class, IdentityController.class})
+@WebFluxTest(
+        controllers = {ConversationController.class, WorkspaceController.class, IdentityController.class},
+        properties = "agent.production.enabled=true")
 @Import(RunExceptionHandler.class)
 class ConversationControllerTest {
 

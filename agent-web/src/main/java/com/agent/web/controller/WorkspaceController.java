@@ -6,6 +6,7 @@ import com.agent.web.workspace.WorkspaceAccessService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,6 +22,7 @@ import java.util.UUID;
 /** 工作区与工作区下会话列表 REST API。 */
 @RestController
 @RequestMapping("/api/workspaces")
+@ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
 public final class WorkspaceController {
 
     private final ActorResolver actorResolver;

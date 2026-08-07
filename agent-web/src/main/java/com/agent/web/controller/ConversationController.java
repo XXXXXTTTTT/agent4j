@@ -4,6 +4,7 @@ import com.agent.web.conversation.ConversationService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -18,6 +19,7 @@ import java.util.UUID;
 /** 持久化会话和轮次 REST API。 */
 @RestController
 @RequestMapping("/api/conversations")
+@ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
 public final class ConversationController {
 
     private final ObjectProvider<ConversationService> conversationService;
