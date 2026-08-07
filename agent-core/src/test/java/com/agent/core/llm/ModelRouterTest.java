@@ -1,5 +1,10 @@
 package com.agent.core.llm;
 
+import com.agent.core.engine.AgentState;
+import com.agent.core.engine.ExecutionBudget;
+import com.agent.core.engine.InterruptPolicy;
+import com.agent.core.engine.NodeExecutionContext;
+import com.agent.core.engine.StateGraph;
 import com.agent.core.observability.ModelCallSpan;
 import com.agent.core.observability.ModelCallStart;
 import com.agent.core.observability.ModelCallSuccess;
@@ -20,6 +25,7 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -117,6 +123,30 @@ class ModelRouterTest {
                 Optional.of("vision-fallback-model"),
                 Optional.of(new ModelUsage(11, 7, 18))));
         assertThat(observer.closeCount()).isEqualTo(2);
+    }
+
+    @Test
+    void contributesSuccessfulModelUsageToGraphTokenBudget() {
+        EndpointFixture code = endpoint("code-primary", "code-model");
+        EndpointFixture vision = endpoint("vision-primary", "vision-model");
+        EndpointFixture classification = endpoint("classification-primary", "quick-model");
+        expectSuccessWithUsage(code, "code-result", 11, 7, 18);
+        ModelRouter router = router(code.endpoint(), vision.endpoint(), classification.endpoint());
+        ExecutionBudget budget = new ExecutionBudget(
+                Duration.ofSeconds(2), Duration.ofSeconds(1), 20, 2, 2);
+
+        try (StateGraph graph = new StateGraph(budget, InterruptPolicy.never())) {
+            graph.addNode("model", state -> {
+                        router.complete(TaskType.CODE, request());
+                        return state.withVariable(
+                                "tokens", Long.toString(NodeExecutionContext.consumedTokens()));
+                    })
+                    .addEdge("model", StateGraph.END)
+                    .setEntryPoint("model");
+
+            assertThat(graph.execute(AgentState.empty()).variables())
+                    .containsEntry("tokens", "18");
+        }
     }
 
     @Test

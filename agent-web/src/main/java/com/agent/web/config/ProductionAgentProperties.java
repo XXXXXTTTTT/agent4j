@@ -1,5 +1,6 @@
 package com.agent.web.config;
 
+import com.agent.core.engine.ExecutionBudget;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.nio.file.Path;
@@ -26,6 +27,10 @@ public record ProductionAgentProperties(
         long snapshotMaxBytes,
         int maxRepairAttempts,
         int maxSteps,
+        long maxDurationMs,
+        long idleTimeoutMs,
+        long tokenBudget,
+        int noProgressLimit,
         int plannerContextMaxTokens) {
 
     /** 冻结配置文本并校验生产图所需的精确值。 */
@@ -61,9 +66,31 @@ public record ProductionAgentProperties(
         if (maxSteps < 4) {
             throw new IllegalArgumentException("maxSteps 必须至少为 4");
         }
+        if (maxDurationMs < 1) {
+            throw new IllegalArgumentException("maxDurationMs 必须大于 0");
+        }
+        if (idleTimeoutMs < 1) {
+            throw new IllegalArgumentException("idleTimeoutMs 必须大于 0");
+        }
+        if (tokenBudget < 1) {
+            throw new IllegalArgumentException("tokenBudget 必须大于 0");
+        }
+        if (noProgressLimit < 1) {
+            throw new IllegalArgumentException("noProgressLimit 必须大于 0");
+        }
         if (plannerContextMaxTokens < 1) {
             throw new IllegalArgumentException("plannerContextMaxTokens 必须大于 0");
         }
+    }
+
+    /** 将精确生产属性映射为图执行预算。 */
+    public ExecutionBudget executionBudget() {
+        return new ExecutionBudget(
+                Duration.ofMillis(maxDurationMs),
+                Duration.ofMillis(idleTimeoutMs),
+                tokenBudget,
+                maxSteps,
+                noProgressLimit);
     }
 
     private static String text(String value, String name) {

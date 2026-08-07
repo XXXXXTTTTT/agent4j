@@ -1,7 +1,9 @@
 package com.agent.web.config;
 
 import com.agent.core.engine.GraphFactory;
+import com.agent.core.engine.InterruptPolicy;
 import com.agent.core.engine.StateGraph;
+import com.agent.core.harness.HarnessHookChain;
 import com.agent.core.llm.ModelRouter;
 import com.agent.core.memory.MemoryContext;
 import com.agent.core.memory.MemoryContextProvider;
@@ -28,10 +30,13 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Objects;
+import java.util.List;
 
 /** 装配真实模型、代码工具、沙箱和浏览器驱动的生产 Agent 图。 */
 @Configuration(proxyBeanMethods = false)
@@ -39,6 +44,9 @@ import java.util.Objects;
 @ConditionalOnBean(ModelRouter.class)
 @EnableConfigurationProperties(ProductionAgentProperties.class)
 public class ProductionGraphConfiguration {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(
+            ProductionGraphConfiguration.class);
 
     /** 创建 JavaParser/JGit 服务。 */
     @Bean
@@ -73,6 +81,24 @@ public class ProductionGraphConfiguration {
         return request -> new MemoryContext("", 0);
     }
 
+    /** 创建写入现有日志归档的默认 Harness Hook 链。 */
+    @Bean
+    @ConditionalOnMissingBean(HarnessHookChain.class)
+    HarnessHookChain productionHarnessHookChain() {
+        return new HarnessHookChain(
+                List.of(event -> LOGGER.info(
+                        "Harness event runId={} nodeName={} eventType={} metadata={}",
+                        event.runId(),
+                        event.nodeName(),
+                        event.eventType(),
+                        event.metadata())),
+                failure -> LOGGER.warn(
+                        "Harness hook failure hookName={} eventType={}",
+                        failure.hookName(),
+                        failure.eventType(),
+                        failure));
+    }
+
     /** 注册精确图标识 `code-agent` 的生产执行链。 */
     @Bean("code-agent")
     GraphFactory codeAgentGraph(
@@ -84,7 +110,8 @@ public class ProductionGraphConfiguration {
             AstService astService,
             WorkspaceSnapshotService snapshotService,
             RunLogPublisher logPublisher,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            HarnessHookChain harness) {
         Objects.requireNonNull(properties, "properties 不能为空");
         Objects.requireNonNull(modelRouter, "modelRouter 不能为空");
         Objects.requireNonNull(memoryContextProvider, "memoryContextProvider 不能为空");
@@ -94,6 +121,7 @@ public class ProductionGraphConfiguration {
         Objects.requireNonNull(snapshotService, "snapshotService 不能为空");
         Objects.requireNonNull(logPublisher, "logPublisher 不能为空");
         Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
+        Objects.requireNonNull(harness, "harness 不能为空");
         TerminalTarget target = terminalTarget(properties);
         return () -> createGraph(
                 properties,
@@ -105,6 +133,7 @@ public class ProductionGraphConfiguration {
                 snapshotService,
                 logPublisher,
                 objectMapper,
+                harness,
                 target);
     }
 
@@ -126,7 +155,31 @@ public class ProductionGraphConfiguration {
                 astService,
                 snapshotService,
                 logPublisher,
-                new ObjectMapper());
+                new ObjectMapper(),
+                HarnessHookChain.noop());
+    }
+
+    GraphFactory codeAgentGraph(
+            ProductionAgentProperties properties,
+            ModelRouter modelRouter,
+            MemoryContextProvider memoryContextProvider,
+            SandboxTerminalService terminalService,
+            BrowserAutomation browserAutomation,
+            AstService astService,
+            WorkspaceSnapshotService snapshotService,
+            RunLogPublisher logPublisher,
+            ObjectMapper objectMapper) {
+        return codeAgentGraph(
+                properties,
+                modelRouter,
+                memoryContextProvider,
+                terminalService,
+                browserAutomation,
+                astService,
+                snapshotService,
+                logPublisher,
+                objectMapper,
+                HarnessHookChain.noop());
     }
 
     private StateGraph createGraph(
@@ -139,6 +192,7 @@ public class ProductionGraphConfiguration {
             WorkspaceSnapshotService snapshotService,
             RunLogPublisher logPublisher,
             ObjectMapper objectMapper,
+            HarnessHookChain harness,
             TerminalTarget target) {
         var promptCatalog = PlannerPromptTemplates.catalog();
         PlannerNode planner = new PlannerNode(
@@ -157,7 +211,8 @@ public class ProductionGraphConfiguration {
                 terminalService, target, properties.commandTimeout(), logPublisher);
         ReviewerNode reviewer = new ReviewerNode(
                 browserAutomation, modelRouter, objectMapper, properties.browserTimeout());
-        return new StateGraph(properties.maxSteps())
+        return new StateGraph(
+                properties.executionBudget(), InterruptPolicy.never(), harness)
                 .addNode("planner", planner)
                 .addNode("coder", coder)
                 .addNode("ops", ops)

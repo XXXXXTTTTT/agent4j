@@ -100,6 +100,10 @@ class ProductionCodeAgentIntegrationTest {
                 32_000,
                 2,
                 12,
+                1_800_000,
+                120_000,
+                200_000,
+                3,
                 12_000);
         GraphFactory factory = new ProductionGraphConfiguration().codeAgentGraph(
                 properties,

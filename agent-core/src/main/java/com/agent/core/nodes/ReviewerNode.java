@@ -3,6 +3,7 @@ package com.agent.core.nodes;
 import com.agent.core.engine.AgentState;
 import com.agent.core.engine.Node;
 import com.agent.core.engine.NodeExecutionContext;
+import com.agent.core.harness.HarnessHookException;
 import com.agent.core.llm.ChatMessage;
 import com.agent.core.llm.ModelRequest;
 import com.agent.core.llm.ModelRouter;
@@ -90,6 +91,20 @@ public final class ReviewerNode implements Node {
      */
     @Override
     public AgentState execute(AgentState state) {
+        return executeReview(state, false);
+    }
+
+    /** 在 Run 上下文中执行并发布浏览器证据工具事件。 */
+    @Override
+    public AgentState execute(NodeExecutionContext context, AgentState state) {
+        Objects.requireNonNull(context, "context 不能为空");
+        boolean harness = NodeExecutionContext.current()
+                .filter(context::equals)
+                .isPresent();
+        return executeReview(state, harness);
+    }
+
+    private AgentState executeReview(AgentState state, boolean harness) {
         Objects.requireNonNull(state, "state 不能为空");
         AgentState evidenceState = state;
         try {
@@ -102,11 +117,15 @@ public final class ReviewerNode implements Node {
                 evidence = buildCodeEvidence(state.variables());
             } else {
                 URI requestedUri = URI.create(configuredUrl);
-                NavigationResult navigation = await(
-                        browserAutomation.navigate(requestedUri, browserTimeout));
-                String dom = await(browserAutomation.extractDom());
-                BrowserScreenshot screenshot = await(
-                        browserAutomation.screenshot(browserTimeout));
+                BrowserEvidence browserEvidence = harness
+                        ? NodeExecutionContext.callTool(
+                                "browser.evidence",
+                                Map.of("url", configuredUrl),
+                                () -> collectBrowserEvidence(requestedUri))
+                        : collectBrowserEvidence(requestedUri);
+                NavigationResult navigation = browserEvidence.navigation();
+                String dom = browserEvidence.dom();
+                BrowserScreenshot screenshot = browserEvidence.screenshot();
                 evidence = buildEvidence(
                         Objects.requireNonNull(navigation, "导航结果不能为空"),
                         Objects.requireNonNull(dom, "DOM 不能为空"),
@@ -148,6 +167,8 @@ public final class ReviewerNode implements Node {
                     .withVariable(FEEDBACK_KEY, decision.feedback())
                     .withVariable(MODEL_KEY, completion.model())
                     .withTraceEntry("reviewer");
+        } catch (HarnessHookException exception) {
+            throw exception;
         } catch (Exception exception) {
             if (exception instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
@@ -156,6 +177,18 @@ public final class ReviewerNode implements Node {
                     .withVariable(ERROR_KEY, stackTrace(exception))
                     .withTraceEntry("reviewer");
         }
+    }
+
+    private BrowserEvidence collectBrowserEvidence(URI requestedUri)
+            throws InterruptedException, ExecutionException {
+        NavigationResult navigation = await(
+                browserAutomation.navigate(requestedUri, browserTimeout));
+        String dom = await(browserAutomation.extractDom());
+        BrowserScreenshot screenshot = await(browserAutomation.screenshot(browserTimeout));
+        return new BrowserEvidence(
+                Objects.requireNonNull(navigation, "导航结果不能为空"),
+                Objects.requireNonNull(dom, "DOM 不能为空"),
+                Objects.requireNonNull(screenshot, "截图不能为空"));
     }
 
     private ReviewerDecision parseDecision(RoutedCompletion completion) throws Exception {
@@ -263,5 +296,11 @@ public final class ReviewerNode implements Node {
             Objects.requireNonNull(summary, "summary 不能为空");
             Objects.requireNonNull(feedback, "feedback 不能为空");
         }
+    }
+
+    private record BrowserEvidence(
+            NavigationResult navigation,
+            String dom,
+            BrowserScreenshot screenshot) {
     }
 }

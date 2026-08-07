@@ -1,6 +1,7 @@
 package com.agent.core.llm;
 
 import com.agent.core.engine.NodeExecutionContext;
+import com.agent.core.engine.ExecutionBudgetExceededException;
 import com.agent.core.observability.ModelCallObserver;
 import com.agent.core.observability.ModelCallSpan;
 import com.agent.core.observability.ModelCallStart;
@@ -81,7 +82,10 @@ public final class ModelRouter {
                 LlmClient.ChatCompletionResponse response = endpoint.circuitBreaker()
                         .executeSupplier(() -> validatedComplete(endpoint, request));
                 succeedSpan(span, response);
+                recordTokenUsage(response);
                 return new RoutedCompletion(endpoint.name(), endpoint.model(), response);
+            } catch (ExecutionBudgetExceededException exception) {
+                throw exception;
             } catch (RuntimeException exception) {
                 failSpan(span, exception);
                 failures.add(new ModelEndpointException(
@@ -94,6 +98,13 @@ public final class ModelRouter {
         ModelRoutingException routingException = new ModelRoutingException(taskType);
         failures.forEach(routingException::addSuppressed);
         throw routingException;
+    }
+
+    private void recordTokenUsage(LlmClient.ChatCompletionResponse response) {
+        LlmClient.Usage usage = response.usage();
+        if (usage != null && NodeExecutionContext.current().isPresent()) {
+            NodeExecutionContext.consumeTokens(usage.totalTokens());
+        }
     }
 
     private LlmClient.ChatCompletionResponse validatedComplete(

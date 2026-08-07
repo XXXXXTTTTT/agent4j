@@ -1,7 +1,13 @@
 package com.agent.core.nodes;
 
 import com.agent.core.engine.AgentState;
+import com.agent.core.engine.ExecutionBudget;
+import com.agent.core.engine.InterruptPolicy;
 import com.agent.core.engine.NodeExecutionContext;
+import com.agent.core.engine.StateGraph;
+import com.agent.core.harness.HarnessEvent;
+import com.agent.core.harness.HarnessEventType;
+import com.agent.core.harness.HarnessHookChain;
 import com.agent.core.trace.RunLogEvent;
 import com.agent.core.trace.RunLogStream;
 import com.agent.sandbox.pty.CommandRequest;
@@ -101,6 +107,36 @@ class OpsNodeTest {
             assertThat(event.occurredAt()).isNotNull();
         });
         assertThat(result.variables()).containsEntry(OpsNode.EXIT_CODE_KEY, "0");
+    }
+
+    @Test
+    void publishesTerminalExecutionThroughHarnessToolBoundary() {
+        TerminalCommandExecutor executor = (request, logConsumer) ->
+                CompletableFuture.completedFuture(new CommandResult(0, "ok", "", false));
+        OpsNode node = new OpsNode(executor, target, Duration.ofSeconds(30));
+        List<HarnessEvent> events = new CopyOnWriteArrayList<>();
+        ExecutionBudget budget = new ExecutionBudget(
+                Duration.ofSeconds(2), Duration.ofSeconds(1), 100, 2, 2);
+
+        try (StateGraph graph = new StateGraph(
+                budget,
+                InterruptPolicy.never(),
+                new HarnessHookChain(List.of(events::add)))) {
+            graph.addNode("ops", node)
+                    .addEdge("ops", StateGraph.END)
+                    .setEntryPoint("ops");
+            graph.execute(AgentState.empty().withVariable(OpsNode.COMMAND_KEY, "mvn test"));
+        }
+
+        assertThat(events).filteredOn(event ->
+                        event.eventType() == HarnessEventType.BEFORE_TOOL
+                                || event.eventType() == HarnessEventType.AFTER_TOOL)
+                .extracting(HarnessEvent::eventType)
+                .containsExactly(HarnessEventType.BEFORE_TOOL, HarnessEventType.AFTER_TOOL);
+        assertThat(events).filteredOn(event -> event.metadata().containsKey("toolName"))
+                .allSatisfy(event -> assertThat(event.metadata())
+                        .containsEntry("toolName", "terminal")
+                        .containsEntry("command", "mvn test"));
     }
 
     @Test

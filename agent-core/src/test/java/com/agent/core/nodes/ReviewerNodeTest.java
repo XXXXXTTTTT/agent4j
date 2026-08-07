@@ -1,6 +1,12 @@
 package com.agent.core.nodes;
 
 import com.agent.core.engine.AgentState;
+import com.agent.core.engine.ExecutionBudget;
+import com.agent.core.engine.InterruptPolicy;
+import com.agent.core.engine.StateGraph;
+import com.agent.core.harness.HarnessEvent;
+import com.agent.core.harness.HarnessEventType;
+import com.agent.core.harness.HarnessHookChain;
 import com.agent.core.llm.ChatMessage;
 import com.agent.core.llm.LlmClient;
 import com.agent.core.llm.ModelEndpoint;
@@ -26,6 +32,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -91,6 +98,36 @@ class ReviewerNodeTest {
                 .containsEntry(ReviewerNode.MODEL_KEY, "vision-model")
                 .doesNotContainKey(ReviewerNode.ERROR_KEY);
         assertThat(result.trace()).containsExactly("reviewer");
+    }
+
+    @Test
+    void publishesBrowserEvidenceThroughHarnessToolBoundary() throws Exception {
+        ReviewerNode node = reviewerNode();
+        expectModelResponse(textContent(
+                "{\"approved\":true,\"summary\":\"正常\",\"feedback\":\"无\"}"));
+        List<HarnessEvent> events = new CopyOnWriteArrayList<>();
+        ExecutionBudget budget = new ExecutionBudget(
+                Duration.ofSeconds(5), Duration.ofSeconds(2), 100, 2, 2);
+
+        try (StateGraph graph = new StateGraph(
+                budget,
+                InterruptPolicy.never(),
+                new HarnessHookChain(List.of(events::add)))) {
+            graph.addNode("reviewer", node)
+                    .addEdge("reviewer", StateGraph.END)
+                    .setEntryPoint("reviewer");
+            graph.execute(completeOpsState());
+        }
+
+        assertThat(events).filteredOn(event ->
+                        event.eventType() == HarnessEventType.BEFORE_TOOL
+                                || event.eventType() == HarnessEventType.AFTER_TOOL)
+                .extracting(HarnessEvent::eventType)
+                .containsExactly(HarnessEventType.BEFORE_TOOL, HarnessEventType.AFTER_TOOL);
+        assertThat(events).filteredOn(event -> event.metadata().containsKey("toolName"))
+                .allSatisfy(event -> assertThat(event.metadata())
+                        .containsEntry("toolName", "browser.evidence")
+                        .containsEntry("url", PAGE_URI.toString()));
     }
 
     @Test

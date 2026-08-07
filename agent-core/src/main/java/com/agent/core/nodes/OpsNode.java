@@ -3,6 +3,7 @@ package com.agent.core.nodes;
 import com.agent.core.engine.AgentState;
 import com.agent.core.engine.Node;
 import com.agent.core.engine.NodeExecutionContext;
+import com.agent.core.harness.HarnessHookException;
 import com.agent.core.trace.RunLogEvent;
 import com.agent.core.trace.RunLogPublisher;
 import com.agent.core.trace.RunLogStream;
@@ -16,6 +17,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
@@ -82,7 +84,7 @@ public final class OpsNode implements Node {
      */
     @Override
     public AgentState execute(AgentState state) {
-        return executeCommand(state, ignored -> { }, new AtomicReference<>());
+        return executeCommand(state, ignored -> { }, new AtomicReference<>(), false);
     }
 
     /** 在 Run 上下文中执行命令并发布原始终端片段。 */
@@ -93,22 +95,23 @@ public final class OpsNode implements Node {
         AtomicReference<Throwable> logFailure = new AtomicReference<>();
         Consumer<TerminalLog> logConsumer = log -> publishLog(
                 context, log, sequence.getAndIncrement(), logFailure);
-        return executeCommand(state, logConsumer, logFailure);
+        boolean harness = NodeExecutionContext.current()
+                .filter(context::equals)
+                .isPresent();
+        return executeCommand(state, logConsumer, logFailure, harness);
     }
 
     private AgentState executeCommand(
             AgentState state,
             Consumer<TerminalLog> logConsumer,
-            AtomicReference<Throwable> logFailure) {
+            AtomicReference<Throwable> logFailure,
+            boolean harness) {
         Objects.requireNonNull(state, "state 不能为空");
         AgentState result;
         try {
             String command = requireCommand(state);
             NodeExecutionContext.progress("开始执行终端命令: " + command);
-            CommandResult commandResult = executor.execute(
-                            new CommandRequest(target, command, timeout),
-                            logConsumer)
-                    .get();
+            CommandResult commandResult = executeTerminal(command, logConsumer, harness);
             result = state
                     .withVariable(EXIT_CODE_KEY, Integer.toString(commandResult.exitCode()))
                     .withVariable(STDOUT_KEY, commandResult.stdout())
@@ -116,6 +119,8 @@ public final class OpsNode implements Node {
                     .withVariable(TIMED_OUT_KEY, Boolean.toString(commandResult.timedOut()))
                     .withTraceEntry("ops");
             NodeExecutionContext.progress("终端命令已结束，退出码 " + commandResult.exitCode());
+        } catch (HarnessHookException exception) {
+            throw exception;
         } catch (Exception exception) {
             if (exception instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
@@ -129,6 +134,22 @@ public final class OpsNode implements Node {
             return result.withVariable(LOG_ERROR_KEY, stackTrace(publisherFailure));
         }
         return result;
+    }
+
+    private CommandResult executeTerminal(
+            String command,
+            Consumer<TerminalLog> logConsumer,
+            boolean harness) throws Exception {
+        if (harness) {
+            return NodeExecutionContext.callTool(
+                    "terminal",
+                    Map.of("command", command),
+                    () -> executor.execute(
+                                    new CommandRequest(target, command, timeout),
+                                    logConsumer)
+                            .get());
+        }
+        return executor.execute(new CommandRequest(target, command, timeout), logConsumer).get();
     }
 
     private void publishLog(

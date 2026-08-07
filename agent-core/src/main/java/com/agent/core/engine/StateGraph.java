@@ -1,6 +1,11 @@
 package com.agent.core.engine;
 
+import com.agent.core.harness.HarnessEvent;
+import com.agent.core.harness.HarnessEventType;
+import com.agent.core.harness.HarnessHookChain;
+
 import java.time.Duration;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -27,6 +32,7 @@ public final class StateGraph implements AutoCloseable {
 
     private final ExecutionBudget budget;
     private final InterruptPolicy interruptPolicy;
+    private final HarnessHookChain harness;
     private final ExecutorService executor;
     private final Map<String, Node> nodes = new LinkedHashMap<>();
     private final Map<String, String> edges = new LinkedHashMap<>();
@@ -61,9 +67,18 @@ public final class StateGraph implements AutoCloseable {
 
     /** 创建受完整执行预算和中断策略约束的状态图。 */
     public StateGraph(ExecutionBudget budget, InterruptPolicy interruptPolicy) {
+        this(budget, interruptPolicy, HarnessHookChain.noop());
+    }
+
+    /** 创建受预算、中断策略和 Harness Hook 约束的状态图。 */
+    public StateGraph(
+            ExecutionBudget budget,
+            InterruptPolicy interruptPolicy,
+            HarnessHookChain harness) {
         this.budget = Objects.requireNonNull(budget, "budget 不能为空");
         this.interruptPolicy = Objects.requireNonNull(
                 interruptPolicy, "interruptPolicy 不能为空");
+        this.harness = Objects.requireNonNull(harness, "harness 不能为空");
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
     }
 
@@ -216,7 +231,13 @@ public final class StateGraph implements AutoCloseable {
         ExecutionTracker tracker = new ExecutionTracker(budget);
 
         while (!END.equals(currentNode)) {
-            tracker.checkAll(steps, noProgress);
+            try {
+                tracker.checkAll(steps, noProgress);
+            } catch (ExecutionBudgetExceededException exception) {
+                publishBudgetExhausted(
+                        request.runId(), currentNode, currentState, exception);
+                throw exception;
+            }
             if (bypassInterrupt) {
                 bypassInterrupt = false;
             } else {
@@ -236,11 +257,27 @@ public final class StateGraph implements AutoCloseable {
                             currentState, currentNode, interruptRequest);
                 }
             }
+            publishHarness(
+                    request.runId(), currentNode, HarnessEventType.BEFORE_NODE,
+                    currentState, Map.of());
             listener.onNodeStarted(currentNode, currentState);
             tracker.markProgress();
             AgentState previousState = currentState;
-            currentState = executeNode(
-                    request.runId(), currentNode, currentState, listener, tracker);
+            try {
+                currentState = executeNode(
+                        request.runId(), currentNode, currentState, listener, tracker);
+                tracker.checkActive();
+            } catch (ExecutionBudgetExceededException exception) {
+                publishBudgetExhausted(
+                        request.runId(), currentNode, currentState, exception);
+                throw exception;
+            } catch (RuntimeException exception) {
+                publishHarness(
+                        request.runId(), currentNode, HarnessEventType.FAILURE,
+                        currentState,
+                        Map.of("errorType", exception.getClass().getName()));
+                throw exception;
+            }
             steps++;
             if (sameProgressState(previousState, currentState)) {
                 noProgress++;
@@ -249,6 +286,9 @@ public final class StateGraph implements AutoCloseable {
                 tracker.markProgress();
             }
             String nextNode = resolveNextNode(currentNode, currentState);
+            publishHarness(
+                    request.runId(), currentNode, HarnessEventType.AFTER_NODE,
+                    currentState, Map.of("nextNode", nextNode));
             listener.onNodeCompleted(currentNode, nextNode, currentState);
             currentNode = nextNode;
         }
@@ -274,6 +314,8 @@ public final class StateGraph implements AutoCloseable {
                         summary -> listener.onNodeProgress(nodeName, summary),
                         nodeTokens -> tracker.recordNodeTokens(tokenBase, nodeTokens),
                         tracker::markProgress,
+                        state,
+                        harness,
                         () -> node.execute(context, state)));
         try {
             while (true) {
@@ -310,6 +352,33 @@ public final class StateGraph implements AutoCloseable {
     private boolean sameProgressState(AgentState previous, AgentState current) {
         return previous.messages().equals(current.messages())
                 && previous.variables().equals(current.variables());
+    }
+
+    private void publishBudgetExhausted(
+            UUID runId,
+            String nodeName,
+            AgentState state,
+            ExecutionBudgetExceededException exception) {
+        publishHarness(
+                runId,
+                nodeName,
+                HarnessEventType.BUDGET_EXHAUSTED,
+                state,
+                Map.of(
+                        "reason", exception.reason().name(),
+                        "observed", Long.toString(exception.observed()),
+                        "limit", Long.toString(exception.limit()),
+                        "consumedTokens", Long.toString(exception.consumedTokens())));
+    }
+
+    private void publishHarness(
+            UUID runId,
+            String nodeName,
+            HarnessEventType eventType,
+            AgentState state,
+            Map<String, String> metadata) {
+        harness.publish(new HarnessEvent(
+                runId, nodeName, eventType, Instant.now(), state, metadata));
     }
 
     private static ExecutionBudget legacyBudget(int maxSteps) {
