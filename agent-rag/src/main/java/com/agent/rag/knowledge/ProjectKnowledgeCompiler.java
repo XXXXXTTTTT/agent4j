@@ -18,6 +18,8 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Stream;
 
 /** 在工作区边界内编译精确命名的项目知识文件。 */
@@ -27,6 +29,7 @@ public final class ProjectKnowledgeCompiler {
     private static final int MAX_FILE_LINES = 200;
 
     private final TokenEstimator tokenEstimator;
+    private final ConcurrentMap<CacheKey, CacheEntry> cache = new ConcurrentHashMap<>();
 
     /** 创建使用指定 token 估算器的编译器。 */
     public ProjectKnowledgeCompiler(TokenEstimator tokenEstimator) {
@@ -58,18 +61,23 @@ public final class ProjectKnowledgeCompiler {
             }
             List<Path> directories = hierarchy(realRoot, activeDirectory);
             List<LoadedSource> loaded = loadSources(realRoot, directories);
-            if (loaded.isEmpty()) {
-                return ProjectKnowledgeContext.empty();
-            }
-            String prompt = renderPrompt(loaded);
-            List<KnowledgeSource> sources = loaded.stream()
+            List<KnowledgeSource> discoveredSources = loaded.stream()
                     .map(LoadedSource::metadata)
                     .toList();
-            return new ProjectKnowledgeContext(
-                    prompt,
-                    sources,
-                    fingerprint(sources),
-                    tokenEstimator.estimate(ChatMessage.user(prompt)));
+            String discoveredFingerprint = fingerprint(discoveredSources);
+            CacheKey key = new CacheKey(realRoot, activeDirectory, maxTokens);
+            CacheEntry cached = cache.get(key);
+            if (cached != null && cached.discoveredFingerprint().equals(discoveredFingerprint)) {
+                return cached.context();
+            }
+            ProjectKnowledgeContext context = selectWithinBudget(loaded, maxTokens);
+            CacheEntry replacement = cache.compute(key, (ignored, current) -> {
+                if (current != null && current.discoveredFingerprint().equals(discoveredFingerprint)) {
+                    return current;
+                }
+                return new CacheEntry(discoveredFingerprint, context);
+            });
+            return replacement.context();
         } catch (ProjectKnowledgeException exception) {
             throw exception;
         } catch (IOException exception) {
@@ -192,6 +200,78 @@ public final class ProjectKnowledgeCompiler {
                 .orElse("");
     }
 
+    private ProjectKnowledgeContext selectWithinBudget(
+            List<LoadedSource> loaded,
+            int maxTokens) {
+        if (loaded.isEmpty()) {
+            return ProjectKnowledgeContext.empty();
+        }
+        LoadedSource rootAgents = loaded.stream()
+                .filter(source -> source.metadata().fileType() == KnowledgeFileType.AGENTS)
+                .filter(source -> source.metadata().depth() == 0)
+                .findFirst()
+                .orElse(null);
+        List<LoadedSource> selected = new ArrayList<>();
+        if (rootAgents != null) {
+            int rootTokens = estimatePrompt(List.of(rootAgents));
+            if (rootTokens > maxTokens) {
+                throw new ProjectKnowledgeLimitException(
+                        rootAgents.metadata().relativePath(),
+                        ProjectKnowledgeLimitKind.TOKENS,
+                        rootTokens,
+                        maxTokens);
+            }
+            selected.add(rootAgents);
+        }
+        for (LoadedSource source : loaded) {
+            if (source == rootAgents) {
+                continue;
+            }
+            List<LoadedSource> trial = new ArrayList<>(selected);
+            trial.add(source);
+            int trialTokens = estimatePromptInSourceOrder(loaded, trial);
+            if (trialTokens <= maxTokens) {
+                selected.add(source);
+            }
+        }
+        if (selected.isEmpty()) {
+            return ProjectKnowledgeContext.empty();
+        }
+        List<LoadedSource> orderedSelected = loaded.stream()
+                .filter(selected::contains)
+                .toList();
+        String prompt = renderPrompt(orderedSelected);
+        int estimatedTokens = tokenEstimator.estimate(ChatMessage.user(prompt));
+        if (estimatedTokens > maxTokens) {
+            throw new ProjectKnowledgeLimitException(
+                    orderedSelected.getFirst().metadata().relativePath(),
+                    ProjectKnowledgeLimitKind.TOKENS,
+                    estimatedTokens,
+                    maxTokens);
+        }
+        List<KnowledgeSource> sources = orderedSelected.stream()
+                .map(LoadedSource::metadata)
+                .toList();
+        return new ProjectKnowledgeContext(
+                prompt,
+                sources,
+                fingerprint(sources),
+                estimatedTokens);
+    }
+
+    private int estimatePrompt(List<LoadedSource> selected) {
+        return tokenEstimator.estimate(ChatMessage.user(renderPrompt(selected)));
+    }
+
+    private int estimatePromptInSourceOrder(
+            List<LoadedSource> loaded,
+            List<LoadedSource> selected) {
+        List<LoadedSource> ordered = loaded.stream()
+                .filter(selected::contains)
+                .toList();
+        return estimatePrompt(ordered);
+    }
+
     private String fingerprint(List<KnowledgeSource> sources) {
         MessageDigest digest = sha256Digest();
         for (KnowledgeSource source : sources) {
@@ -220,5 +300,11 @@ public final class ProjectKnowledgeCompiler {
     }
 
     private record LoadedSource(KnowledgeSource metadata, String content) {
+    }
+
+    private record CacheKey(Path workspaceRoot, Path activeDirectory, int maxTokens) {
+    }
+
+    private record CacheEntry(String discoveredFingerprint, ProjectKnowledgeContext context) {
     }
 }

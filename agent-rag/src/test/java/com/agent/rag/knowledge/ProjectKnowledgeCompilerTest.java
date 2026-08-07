@@ -1,6 +1,8 @@
 package com.agent.rag.knowledge;
 
+import com.agent.core.context.TokenEstimator;
 import com.agent.core.context.Utf8TokenEstimator;
+import com.agent.core.llm.ChatMessage;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -10,6 +12,7 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -118,6 +121,69 @@ class ProjectKnowledgeCompilerTest {
         assertThatThrownBy(() -> compiler().compile(root, root, 1_000))
                 .isInstanceOf(ProjectKnowledgeException.class)
                 .hasMessageContaining("工作区外");
+    }
+
+    @Test
+    void keepsRootAgentsWithinBudgetAndSelectsOnlyCompleteOptionalSources() throws IOException {
+        Path root = Files.createDirectory(tempDir.resolve("budget-repo"));
+        Files.writeString(root.resolve("SOUL.md"), "soul", StandardCharsets.UTF_8);
+        Files.writeString(root.resolve("AGENTS.md"), "agents", StandardCharsets.UTF_8);
+        Files.writeString(root.resolve("CLAUDE.md"), "claude", StandardCharsets.UTF_8);
+
+        TokenEstimator estimator = message -> {
+            String text = ((ChatMessage.TextContent) message.content()).text();
+            long sections = text.lines().filter(line -> line.startsWith("### [")).count();
+            if (sections == 1) {
+                return 4;
+            }
+            if (sections == 2) {
+                return 7;
+            }
+            return 20;
+        };
+
+        ProjectKnowledgeContext context = new ProjectKnowledgeCompiler(estimator)
+                .compile(root, root, 7);
+
+        assertThat(context.sources()).extracting(KnowledgeSource::fileType)
+                .containsExactly(KnowledgeFileType.SOUL, KnowledgeFileType.AGENTS);
+        assertThat(context.prompt()).contains("soul", "agents").doesNotContain("claude");
+        assertThat(context.estimatedTokens()).isEqualTo(7);
+    }
+
+    @Test
+    void rejectsRootAgentsWhenItsCompleteSourceExceedsBudget() throws IOException {
+        Path root = Files.createDirectory(tempDir.resolve("mandatory-repo"));
+        Files.writeString(root.resolve("AGENTS.md"), "agents", StandardCharsets.UTF_8);
+
+        TokenEstimator estimator = message -> 20;
+
+        assertThatThrownBy(() -> new ProjectKnowledgeCompiler(estimator).compile(root, root, 10))
+                .isInstanceOfSatisfying(ProjectKnowledgeLimitException.class, exception -> {
+                    assertThat(exception.relativePath()).isEqualTo("AGENTS.md");
+                    assertThat(exception.kind()).isEqualTo(ProjectKnowledgeLimitKind.TOKENS);
+                    assertThat(exception.observed()).isEqualTo(20);
+                    assertThat(exception.limit()).isEqualTo(10);
+                });
+    }
+
+    @Test
+    void cachesByContentFingerprintEvenWhenMtimeIsRestored() throws IOException {
+        Path root = Files.createDirectory(tempDir.resolve("cache-repo"));
+        Path agents = Files.writeString(root.resolve("AGENTS.md"), "version-one", StandardCharsets.UTF_8);
+        ProjectKnowledgeCompiler compiler = compiler();
+
+        ProjectKnowledgeContext first = compiler.compile(root, root, 1_000);
+        ProjectKnowledgeContext same = compiler.compile(root, root, 1_000);
+        assertThat(same).isSameAs(first);
+
+        FileTime originalTime = Files.getLastModifiedTime(agents);
+        Files.writeString(agents, "version-two", StandardCharsets.UTF_8);
+        Files.setLastModifiedTime(agents, originalTime);
+
+        ProjectKnowledgeContext changed = compiler.compile(root, root, 1_000);
+        assertThat(changed).isNotSameAs(first);
+        assertThat(changed.fingerprint()).isNotEqualTo(first.fingerprint());
     }
 
     private ProjectKnowledgeCompiler compiler() {
