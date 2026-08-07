@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.client.RestClient;
 
@@ -35,7 +36,7 @@ class LlmEddTest {
     @Test
     void evaluatesConversationRoutesAndWritesAuditReport() throws Exception {
         if (!Boolean.parseBoolean(System.getenv().getOrDefault("AGENT_LLM_ENABLED", "false"))) {
-            return;
+            Assumptions.assumeTrue(false, "AGENT_LLM_ENABLED 未开启，跳过真实 LLM EDD");
         }
         EddConfiguration configuration = EddConfiguration.fromEnvironment();
         ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
