@@ -1316,3 +1316,96 @@ SLF4J 进入已有按日滚动日志，仍由 Checkpoint 而不是日志裁决�
 `JdbcMemoryLifecycleIntegrationTest`、`StateGraphBudgetTest`、
 `AgentRunServiceBudgetTest`、`HarnessHookChainTest`、`StateGraphHarnessTest`、Ops/Reviewer
 工具边界测试、`RuntimeHarnessEddTest` 和显式开关的 `LlmEddTest` 共同覆盖 2B。
+
+## 第三篇 3A 补充：自适应 RAG 流水线与 EDD
+
+### 【问题现象】多查询召回直接相加会放大结果数量和分数
+
+查询改写后得到多组有序召回。如果把每组的原始分数直接相加，分数尺度和列表长度会
+影响最终顺序，重复命中也无法说明“在几组结果中稳定出现”。
+
+### 【根因分析】
+
+向量、BM25 和符号分数不是跨查询可加的统一概率；列表排名才是每个查询都具备的稳定
+信息。融合还必须按精确 `childId` 合并，并验证同一标识对应的父子正文一致。
+
+### 【解决方案/代码级实现】
+
+`ReciprocalRankFusion` 固定使用 `1 / (60 + rank)`，每组 rank 从 1 开始，对重复
+`childId` 累加倒数排名分；冲突正文立即失败，输出按分数、路径、ordinal、childId
+稳定排序。`RagRetrievalPipeline` 保留原始查询为第一组，改写查询只能追加，基础召回
+失败不降级且保留原始 cause。
+
+### 【问题现象】HyDE 生成文本污染 BM25 结果
+
+HyDE 的假设正文通常比用户问题更长。若把它同时作为词法检索文本，召回会偏向模型生成
+的术语，而不是用户实际输入的文件、类名和错误信息。
+
+### 【根因分析】
+
+HyDE 的用途是改善向量空间中的语义邻近度，不是替换用户的词法证据。两种检索通道需要
+明确区分输入来源。
+
+### 【解决方案/代码级实现】
+
+流水线只用 HyDE 正文生成原始查询的 embedding；`RagQuery.query` 始终保留原始查询，
+改写查询不携带 HyDE 向量。阶段证据明确记录“HyDE 仅替换原始查询的向量”，可从报告
+复核该边界。
+
+### 【问题现象】外部 reranker 返回未知、重复或超限标识
+
+模型或远程精排服务可能返回不属于本批召回的 `childId`、重复标识、空项或超过 limit
+的结果。直接按返回顺序注入上下文会导致证据错配或绕过预算。
+
+### 【根因分析】
+
+rerank 是不可信边界。它只应返回已召回子块的排序和非负有限分数，不能重新定义文档
+身份，也不能改变上下文数量协议。
+
+### 【解决方案/代码级实现】
+
+`RerankValidation` 先建立精确 `childId` 集合，再检查 null、未知标识、重复标识、分数
+有限性和 limit。校验失败时流水线保存完整堆栈并退回 RRF 顺序，`RERANK` 证据标记为
+`DEGRADED`，已经可靠的基础召回仍可继续。
+
+### 【问题现象】按字符截断 token 上下文破坏代码证据
+
+为了满足上下文窗口，直接截断父块字符串会把方法、括号或错误堆栈截成不可编译、不可
+解释的片段，并且字符数不等于 token 数。
+
+### 【根因分析】
+
+父块和子块是 AST/语义边界，必须以完整文档作为原子单位；预算选择还要处理同一父块的
+多条子命中，避免重复注入。
+
+### 【解决方案/代码级实现】
+
+`RagTokenBudgetSelector` 按精排顺序先尝试完整父块；父块放不下时尝试完整子块；同一
+`parentId` 只注入一次；后续放不下的文档完整跳过，第一条子块也超预算则抛出包含
+`estimatedTokens` 与 `limit` 的 `RagContextBudgetExceededException`。结果的 token 总数
+再次由 `RagRetrievalResult` 校验。
+
+### 【问题现象】增强阶段异常被吞掉，无法判断结果是否可信
+
+查询改写、HyDE 或 rerank 的异常如果只打印一句“已降级”，后续维护者无法知道原始端点、
+模型和调用栈，也无法区分增强失败与基础检索失败。
+
+### 【根因分析】
+
+增强是可选能力，失败时可以回退；基础 embedding、召回和融合是证据来源，失败时不能
+伪造空结果。两类错误需要不同的终止语义和审计字段。
+
+### 【解决方案/代码级实现】
+
+`RagStageEvidence` 固定记录阶段、输入/输出计数、详情和完整 `errorStack`。改写、HyDE、
+rerank 失败写入 `DEGRADED` 并保留最后一个可证明结果；embedding、基础召回和融合失败
+包装为 `RagPipelineException` 并保留 cause。确定性 `RagPipelineEddTest` 覆盖模糊改写、
+HyDE、重复 RRF、rerank、父转子预算以及三种增强失败，报告固定写入
+`agent-eval/target/edd/rag-pipeline-edd.json`，每个任务均包含六阶段证据。
+
+### 【证据】
+
+`RagRetrievalPipelineTest`、`RagTokenBudgetSelectorTest`、`ReciprocalRankFusionTest`、
+`LexicalCoverageRerankerTest`、`ModelRetrievalEnhancerTest` 和 `RagPipelineEddTest`。
+真实模型协议 EDD 仅在 `AGENT_LLM_ENABLED=true` 时运行；关闭时由 JUnit assumption
+明确跳过，不让普通构建依赖外部端点。

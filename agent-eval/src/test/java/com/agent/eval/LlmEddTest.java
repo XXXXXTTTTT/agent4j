@@ -8,6 +8,8 @@ import com.agent.core.llm.ModelRouter;
 import com.agent.core.llm.TaskType;
 import com.agent.core.memory.MemoryContext;
 import com.agent.core.nodes.PlannerNode;
+import com.agent.rag.pipeline.ModelHypotheticalDocumentGenerator;
+import com.agent.rag.pipeline.ModelQueryRewriter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.junit.jupiter.api.Tag;
@@ -86,6 +88,66 @@ class LlmEddTest {
             assertThat(results).allSatisfy(result -> assertThat(result.passed())
                     .as(result.id() + " EDD 失败: " + result.error())
                     .isTrue());
+        }
+    }
+
+    @Test
+    void evaluatesRagEnhancerProtocolsWhenEnabled() throws Exception {
+        if (!Boolean.parseBoolean(System.getenv().getOrDefault("AGENT_LLM_ENABLED", "false"))) {
+            Assumptions.assumeTrue(false, "AGENT_LLM_ENABLED 未开启，跳过真实 RAG 模型 EDD");
+        }
+        EddConfiguration configuration = EddConfiguration.fromEnvironment();
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        RestClient restClient = RestClient.builder()
+                .baseUrl(configuration.baseUrl())
+                .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + configuration.apiKey())
+                .build();
+        List<RagEnhancerResult> results;
+        try (LlmClient client = new LlmClient(
+                restClient,
+                objectMapper,
+                configuration.chatCompletionsPath(),
+                configuration.baseUrl() + configuration.chatCompletionsPath())) {
+            ModelRouter router = router(configuration, client);
+            results = List.of(
+                    runQueryRewrite(router, objectMapper),
+                    runHyde(router, objectMapper));
+        }
+        Path directory = Path.of("target", "edd");
+        Files.createDirectories(directory);
+        objectMapper.writerWithDefaultPrettyPrinter().writeValue(
+                directory.resolve("llm-rag-enhancers-" + Instant.now().toEpochMilli() + ".json").toFile(),
+                new RagEnhancerReport(configuration.baseUrl(), Instant.now(), results));
+        assertThat(results).allSatisfy(result -> assertThat(result.passed())
+                .as(result.taskId() + " RAG 模型 EDD 失败: " + result.error())
+                .isTrue());
+    }
+
+    private RagEnhancerResult runQueryRewrite(
+            ModelRouter router, ObjectMapper objectMapper) {
+        try {
+            List<String> rewrites = new ModelQueryRewriter(router, objectMapper)
+                    .rewrite("如何定位用户认证失败的调用链", 2);
+            boolean passed = rewrites.size() <= 2
+                    && rewrites.stream().allMatch(item -> item != null && !item.isBlank());
+            return new RagEnhancerResult(
+                    "rag.model-query-rewrite", passed, rewrites.toString(), "");
+        } catch (Throwable throwable) {
+            return new RagEnhancerResult(
+                    "rag.model-query-rewrite", false, "", stackTrace(throwable));
+        }
+    }
+
+    private RagEnhancerResult runHyde(
+            ModelRouter router, ObjectMapper objectMapper) {
+        try {
+            String document = new ModelHypotheticalDocumentGenerator(router, objectMapper)
+                    .generate("如何定位用户认证失败的调用链");
+            return new RagEnhancerResult(
+                    "rag.model-hyde", !document.isBlank(), responsePreview(document), "");
+        } catch (Throwable throwable) {
+            return new RagEnhancerResult(
+                    "rag.model-hyde", false, "", stackTrace(throwable));
         }
     }
 
@@ -232,6 +294,19 @@ class LlmEddTest {
             String endpoint,
             Instant generatedAt,
             List<EddScenarioResult> scenarios) {
+    }
+
+    private record RagEnhancerReport(
+            String endpoint,
+            Instant generatedAt,
+            List<RagEnhancerResult> scenarios) {
+    }
+
+    private record RagEnhancerResult(
+            String taskId,
+            boolean passed,
+            String responsePreview,
+            String error) {
     }
 
     private record EddConfiguration(
