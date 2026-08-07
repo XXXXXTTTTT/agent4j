@@ -14,6 +14,9 @@ import com.agent.core.intent.RequiredCapability;
 import com.agent.core.intent.TaskDecision;
 import com.agent.core.intent.TaskKind;
 import com.agent.core.intent.TaskRoute;
+import com.agent.core.knowledge.KnowledgeContext;
+import com.agent.core.knowledge.KnowledgeContextProvider;
+import com.agent.core.knowledge.KnowledgeContextRequest;
 import com.agent.core.llm.ChatMessage;
 import com.agent.core.llm.ModelRequest;
 import com.agent.core.llm.ModelRouter;
@@ -24,12 +27,14 @@ import com.agent.core.memory.MemoryContextProvider;
 import com.agent.core.memory.MemoryContextRequest;
 import com.agent.core.prompt.PromptCatalog;
 import com.agent.core.prompt.RenderedPrompt;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -42,12 +47,18 @@ public final class PlannerNode implements Node {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(PlannerNode.class);
     private static final int DEFAULT_MAX_CONTEXT_TOKENS = 12_000;
+    private static final int DEFAULT_KNOWLEDGE_MAX_TOKENS = 4_000;
     private static final int SUMMARY_MAX_TOKENS = 800;
 
     public static final String REPOSITORY_ID_KEY = "planner.repositoryId";
     public static final String USER_ID_KEY = "planner.userId";
     public static final String TASK_KEY = "planner.task";
     public static final String MEMORY_CONTEXT_KEY = "planner.memoryContext";
+    public static final String KNOWLEDGE_CONTEXT_KEY = "planner.knowledgeContext";
+    public static final String KNOWLEDGE_FINGERPRINT_KEY = "planner.knowledgeFingerprint";
+    public static final String KNOWLEDGE_SOURCES_KEY = "planner.knowledgeSources";
+    public static final String KNOWLEDGE_EVIDENCE_KEY = "planner.knowledgeEvidence";
+    public static final String KNOWLEDGE_DEGRADED_KEY = "planner.knowledgeDegraded";
     public static final String PLAN_KEY = "planner.plan";
     public static final String MODEL_KEY = "planner.model";
     public static final String REQUEST_KEY = "planner.request";
@@ -73,12 +84,16 @@ public final class PlannerNode implements Node {
     public static final String CONVERSATION_TURN_ID_KEY = "conversation.turnId";
 
     public static final String CHAT_ROUTE = "chat";
+    public static final String KNOWLEDGE_ROUTE = "knowledge";
     public static final String AGENT_ROUTE = "agent";
     public static final String FAILED_ROUTE = "failed";
 
     private final ModelRouter modelRouter;
     private final MemoryContextProvider memoryContextProvider;
     private final int memoryLimit;
+    private final KnowledgeContextProvider knowledgeContextProvider;
+    private final int knowledgeMaxTokens;
+    private final ObjectMapper objectMapper;
     private final PromptCatalog promptCatalog;
     private final ContextWindowManager contextWindowManager;
     private final IntentClassifier intentClassifier;
@@ -93,6 +108,9 @@ public final class PlannerNode implements Node {
                 modelRouter,
                 memoryContextProvider,
                 memoryLimit,
+                KnowledgeContextProvider.empty(),
+                DEFAULT_KNOWLEDGE_MAX_TOKENS,
+                new ObjectMapper(),
                 PlannerPromptTemplates.catalog(),
                 defaultContextWindowManager(),
                 null,
@@ -114,6 +132,31 @@ public final class PlannerNode implements Node {
             ContextWindowManager contextWindowManager,
             IntentClassifier intentClassifier,
             int maxContextTokens) {
+        this(
+                modelRouter,
+                memoryContextProvider,
+                memoryLimit,
+                KnowledgeContextProvider.empty(),
+                DEFAULT_KNOWLEDGE_MAX_TOKENS,
+                new ObjectMapper(),
+                promptCatalog,
+                contextWindowManager,
+                intentClassifier,
+                maxContextTokens);
+    }
+
+    /** 创建包含长期记忆与项目知识策略的完整 Planner。 */
+    public PlannerNode(
+            ModelRouter modelRouter,
+            MemoryContextProvider memoryContextProvider,
+            int memoryLimit,
+            KnowledgeContextProvider knowledgeContextProvider,
+            int knowledgeMaxTokens,
+            ObjectMapper objectMapper,
+            PromptCatalog promptCatalog,
+            ContextWindowManager contextWindowManager,
+            IntentClassifier intentClassifier,
+            int maxContextTokens) {
         this.modelRouter = Objects.requireNonNull(modelRouter, "modelRouter 不能为空");
         this.memoryContextProvider = Objects.requireNonNull(
                 memoryContextProvider, "memoryContextProvider 不能为空");
@@ -121,13 +164,20 @@ public final class PlannerNode implements Node {
             throw new IllegalArgumentException("memoryLimit 必须在 1 到 20 之间");
         }
         this.memoryLimit = memoryLimit;
+        this.knowledgeContextProvider = Objects.requireNonNull(
+                knowledgeContextProvider, "knowledgeContextProvider 不能为空");
+        if (knowledgeMaxTokens < 1) {
+            throw new IllegalArgumentException("knowledgeMaxTokens 必须大于 0");
+        }
+        this.knowledgeMaxTokens = knowledgeMaxTokens;
+        this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
         this.promptCatalog = Objects.requireNonNull(promptCatalog, "promptCatalog 不能为空");
         this.contextWindowManager = Objects.requireNonNull(
                 contextWindowManager, "contextWindowManager 不能为空");
         this.intentClassifier = intentClassifier == null
                 ? new ModelIntentClassifier(
                         new ModelRouterIntentModel(modelRouter),
-                        new ObjectMapper(),
+                        objectMapper,
                         promptCatalog)
                 : intentClassifier;
         if (maxContextTokens < 1) {
@@ -157,15 +207,29 @@ public final class PlannerNode implements Node {
 
             String repositoryId = requireVariable(output, REPOSITORY_ID_KEY);
             String userId = requireVariable(output, USER_ID_KEY);
+            Path workspace = Path.of(requireVariable(output, CoderNode.WORKSPACE_PATH_KEY))
+                    .toAbsolutePath()
+                    .normalize();
+            if (decision.route() == TaskRoute.KNOWLEDGE) {
+                KnowledgeContext knowledgeContext = loadKnowledge(
+                        repositoryId, userId, workspace, task, decision);
+                output = withKnowledgeEvidence(output, knowledgeContext);
+                return answerKnowledge(output, task, knowledgeContext);
+            }
+
+            NodeExecutionContext.progress("正在检索任务相关记忆");
             MemoryContext memoryContext = Objects.requireNonNull(
                     memoryContextProvider.recall(new MemoryContextRequest(
                             repositoryId, userId, task, memoryLimit)),
                     "记忆上下文不能为空");
-            NodeExecutionContext.progress("正在检索任务相关记忆");
+            KnowledgeContext knowledgeContext = loadKnowledge(
+                    repositoryId, userId, workspace, task, decision);
+            output = withKnowledgeEvidence(output, knowledgeContext);
             RenderedPrompt planPrompt = promptCatalog.render(
-                    "planner.plan", "1", Map.of(
+                    "planner.plan", "2", Map.of(
                             "task", task,
-                            "memory", memoryContext.prompt()));
+                            "memory", memoryContext.prompt(),
+                            "knowledge", knowledgeContext.prompt()));
             ContextWindow contextWindow = contextWindowManager.fit(
                     new ContextWindowRequest(
                             ChatMessage.system(planPrompt.staticSection()),
@@ -261,6 +325,88 @@ public final class PlannerNode implements Node {
                 .withTraceEntry("planner");
     }
 
+    private AgentState answerKnowledge(
+            AgentState state,
+            String task,
+            KnowledgeContext knowledgeContext) {
+        NodeExecutionContext.progress("项目知识已加载，正在生成证据化回答");
+        RenderedPrompt prompt = promptCatalog.render(
+                "planner.knowledge", "1", Map.of(
+                        "task", task,
+                        "knowledge", knowledgeContext.prompt()));
+        ContextWindow contextWindow = contextWindowManager.fit(
+                new ContextWindowRequest(
+                        ChatMessage.system(prompt.staticSection()),
+                        state.messages(),
+                        ChatMessage.user(prompt.dynamicSection()),
+                        latestToolError(state),
+                        maxContextTokens,
+                        Math.min(SUMMARY_MAX_TOKENS, maxContextTokens)));
+        RoutedCompletion completion = modelRouter.complete(
+                TaskType.CODE,
+                new ModelRequest(contextWindow.messages(), List.of(), null, 0.0));
+        ChatMessage message = completion.response().choices().getFirst().message();
+        if (!(message.content() instanceof ChatMessage.TextContent textContent)) {
+            throw new IllegalStateException("项目知识模型响应 content 必须是 TextContent");
+        }
+        String response = textContent.text();
+        if (response.isBlank()) {
+            throw new IllegalStateException("项目知识模型响应不能为空");
+        }
+        NodeExecutionContext.progress("项目知识回答已生成");
+        return state
+                .withMessage(ChatMessage.user(task))
+                .withMessage(ChatMessage.assistant(response))
+                .withVariable(REQUEST_KEY, prompt.dynamicSection())
+                .withVariable(RESPONSE_KEY, response)
+                .withVariable(FINAL_RESPONSE_KEY, response)
+                .withVariable(MODEL_KEY, completion.model())
+                .withVariable(RESPONSE_PROMPT_NAME_KEY, prompt.name())
+                .withVariable(RESPONSE_PROMPT_VERSION_KEY, prompt.version())
+                .withVariable(RESPONSE_PROMPT_FINGERPRINT_KEY, prompt.fingerprint())
+                .withVariable(CONTEXT_ESTIMATED_TOKENS_KEY,
+                        Integer.toString(contextWindow.estimatedTokens()))
+                .withVariable(CONTEXT_DROPPED_MESSAGES_KEY,
+                        Integer.toString(contextWindow.droppedMessages()))
+                .withVariable(CONTEXT_SUMMARIZED_KEY,
+                        Boolean.toString(contextWindow.summarized()))
+                .withVariable(ROUTE_KEY, KNOWLEDGE_ROUTE)
+                .withTraceEntry("planner");
+    }
+
+    private KnowledgeContext loadKnowledge(
+            String repositoryId,
+            String userId,
+            Path workspace,
+            String task,
+            TaskDecision decision) {
+        NodeExecutionContext.progress("正在加载当前项目知识");
+        return Objects.requireNonNull(
+                knowledgeContextProvider.load(new KnowledgeContextRequest(
+                        repositoryId,
+                        userId,
+                        workspace,
+                        workspace,
+                        task,
+                        decision.complexity(),
+                        knowledgeMaxTokens)),
+                "知识上下文不能为空");
+    }
+
+    private AgentState withKnowledgeEvidence(
+            AgentState state,
+            KnowledgeContext knowledgeContext) throws JsonProcessingException {
+        String evidence = objectMapper.writeValueAsString(knowledgeContext.evidence());
+        return state
+                .withVariable(KNOWLEDGE_CONTEXT_KEY, knowledgeContext.prompt())
+                .withVariable(KNOWLEDGE_FINGERPRINT_KEY, knowledgeContext.fingerprint())
+                .withVariable(KNOWLEDGE_SOURCES_KEY,
+                        Integer.toString(knowledgeContext.sourceCount()))
+                .withVariable(KNOWLEDGE_EVIDENCE_KEY, evidence)
+                .withVariable(KNOWLEDGE_DEGRADED_KEY,
+                        Boolean.toString(knowledgeContext.degraded()));
+    }
+
     private AgentState withDecisionEvidence(AgentState state, TaskDecision decision) {
         String capabilities = decision.requiredCapabilities().stream()
                 .sorted(Comparator.comparing(Enum::name))
@@ -271,8 +417,11 @@ public final class PlannerNode implements Node {
                 .withVariable(COMPLEXITY_KEY, decision.complexity().name())
                 .withVariable(REQUIRED_CAPABILITIES_KEY, capabilities)
                 .withVariable(ROUTE_REASON_KEY, decision.reason())
-                .withVariable(ROUTE_KEY,
-                        decision.route() == TaskRoute.CHAT ? CHAT_ROUTE : AGENT_ROUTE);
+                .withVariable(ROUTE_KEY, switch (decision.route()) {
+                    case CHAT -> CHAT_ROUTE;
+                    case KNOWLEDGE -> KNOWLEDGE_ROUTE;
+                    case AGENT -> AGENT_ROUTE;
+                });
     }
 
     private ChatMessage latestToolError(AgentState state) {
