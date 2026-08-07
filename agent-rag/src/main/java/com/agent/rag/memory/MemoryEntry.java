@@ -16,7 +16,38 @@ public record MemoryEntry(
         String contentHash,
         float[] embedding,
         Instant createdAt,
-        Instant updatedAt) {
+        Instant updatedAt,
+        double importance,
+        long accessCount,
+        Instant lastAccessedAt) {
+
+    /** 使用生命周期默认值创建兼容的记忆条目。 */
+    public MemoryEntry(
+            UUID memoryId,
+            String repositoryId,
+            String userId,
+            MemoryType type,
+            String title,
+            String content,
+            String contentHash,
+            float[] embedding,
+            Instant createdAt,
+            Instant updatedAt) {
+        this(
+                memoryId,
+                repositoryId,
+                userId,
+                type,
+                title,
+                content,
+                contentHash,
+                embedding,
+                createdAt,
+                updatedAt,
+                0.5,
+                0,
+                createdAt);
+    }
 
     /** 校验字段并防御性复制 embedding。 */
     public MemoryEntry {
@@ -40,6 +71,16 @@ public record MemoryEntry(
         Objects.requireNonNull(updatedAt, "updatedAt 不能为空");
         if (updatedAt.isBefore(createdAt)) {
             throw new IllegalArgumentException("updatedAt 不能早于 createdAt");
+        }
+        if (!Double.isFinite(importance) || importance < 0 || importance > 1) {
+            throw new IllegalArgumentException("importance 必须是 0.0 到 1.0 的有限数");
+        }
+        if (accessCount < 0) {
+            throw new IllegalArgumentException("accessCount 不能为负数");
+        }
+        Objects.requireNonNull(lastAccessedAt, "lastAccessedAt 不能为空");
+        if (lastAccessedAt.isBefore(createdAt)) {
+            throw new IllegalArgumentException("lastAccessedAt 不能早于 createdAt");
         }
     }
 
@@ -66,7 +107,10 @@ public record MemoryEntry(
                 && Objects.equals(contentHash, that.contentHash)
                 && Arrays.equals(embedding, that.embedding)
                 && Objects.equals(createdAt, that.createdAt)
-                && Objects.equals(updatedAt, that.updatedAt);
+                && Objects.equals(updatedAt, that.updatedAt)
+                && Double.compare(importance, that.importance) == 0
+                && accessCount == that.accessCount
+                && Objects.equals(lastAccessedAt, that.lastAccessedAt);
     }
 
     /** 与 equals 保持 embedding 数组的值语义一致。 */
@@ -74,7 +118,7 @@ public record MemoryEntry(
     public int hashCode() {
         int result = Objects.hash(
                 memoryId, repositoryId, userId, type, title, content,
-                contentHash, createdAt, updatedAt);
+                contentHash, createdAt, updatedAt, importance, accessCount, lastAccessedAt);
         return 31 * result + Arrays.hashCode(embedding);
     }
 

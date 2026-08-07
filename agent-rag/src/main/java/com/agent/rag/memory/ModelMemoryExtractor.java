@@ -19,8 +19,9 @@ public final class ModelMemoryExtractor implements MemoryExtractor {
     private static final String SYSTEM_INSTRUCTION = """
             你负责提取可长期复用的用户事实。只保留用户确认的编码偏好、项目架构规范和已经发生的 Bad Case。
             不要保存临时命令、密钥、个人隐私或模型猜测。只能返回一个 JSON 对象，且只能包含 memories 字段。
-            memories 必须是数组，每项只能包含 type、title、content；type 只能是 USER_PREFERENCE、
-            ARCHITECTURE_RULE、BAD_CASE 之一；title 和 content 必须是字符串。
+            memories 必须是数组，每项只能包含 type、title、content、importance；type 只能是
+            USER_PREFERENCE、ARCHITECTURE_RULE、BAD_CASE 之一；title 和 content 必须是字符串；
+            importance 必须是 0.0 到 1.0 的数字。
             """;
 
     private final ModelRouter modelRouter;
@@ -72,10 +73,14 @@ public final class ModelMemoryExtractor implements MemoryExtractor {
         List<MemoryDraft> drafts = new ArrayList<>(memories.size());
         for (JsonNode memory : memories) {
             requireObject(memory, "memory 项必须是 JSON 对象");
-            requireExactFields(memory, List.of("type", "title", "content"), "memory 项");
+            requireExactFields(
+                    memory,
+                    List.of("type", "title", "content", "importance"),
+                    "memory 项");
             requireText(memory.get("type"), "type");
             requireText(memory.get("title"), "title");
             requireText(memory.get("content"), "content");
+            requireNumber(memory.get("importance"), "importance");
             MemoryType type;
             try {
                 type = MemoryType.valueOf(memory.get("type").textValue());
@@ -85,7 +90,8 @@ public final class ModelMemoryExtractor implements MemoryExtractor {
             drafts.add(new MemoryDraft(
                     type,
                     memory.get("title").textValue(),
-                    memory.get("content").textValue()));
+                    memory.get("content").textValue(),
+                    memory.get("importance").doubleValue()));
         }
         return List.copyOf(drafts);
     }
@@ -99,6 +105,12 @@ public final class ModelMemoryExtractor implements MemoryExtractor {
     private void requireText(JsonNode node, String field) {
         if (node == null || !node.isTextual()) {
             throw new IllegalArgumentException(field + " 必须是字符串");
+        }
+    }
+
+    private void requireNumber(JsonNode node, String field) {
+        if (node == null || !node.isNumber() || !Double.isFinite(node.doubleValue())) {
+            throw new IllegalArgumentException(field + " 必须是有限数字");
         }
     }
 

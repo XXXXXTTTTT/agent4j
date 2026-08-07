@@ -60,7 +60,7 @@ class ModelMemoryExtractorTest {
                         {
                           "id":"memory-response","object":"chat.completion","created":1,
                           "model":"quick-model","choices":[{"index":0,
-                          "message":{"role":"assistant","content":"{\\"memories\\":[{\\"type\\":\\"USER_PREFERENCE\\",\\"title\\":\\"Constructors\\",\\"content\\":\\"Use constructor injection.\\"},{\\"type\\":\\"BAD_CASE\\",\\"title\\":\\"Timeout\\",\\"content\\":\\"PTY timeout required cleanup.\\"}]}"},
+                          "message":{"role":"assistant","content":"{\\"memories\\":[{\\"type\\":\\"USER_PREFERENCE\\",\\"title\\":\\"Constructors\\",\\"content\\":\\"Use constructor injection.\\",\\"importance\\":0.8},{\\"type\\":\\"BAD_CASE\\",\\"title\\":\\"Timeout\\",\\"content\\":\\"PTY timeout required cleanup.\\",\\"importance\\":1.0}]}"},
                           "finish_reason":"stop"}]}
                         """, MediaType.APPLICATION_JSON));
 
@@ -71,14 +71,18 @@ class ModelMemoryExtractorTest {
                 .containsExactly(MemoryType.USER_PREFERENCE, MemoryType.BAD_CASE);
         assertThat(drafts.getFirst().title()).isEqualTo("Constructors");
         assertThat(drafts.getFirst().content()).isEqualTo("Use constructor injection.");
+        assertThat(drafts).extracting(MemoryDraft::importance)
+                .containsExactly(0.8, 1.0);
     }
 
     @Test
     void rejectsUnknownFieldsAndInvalidItemsWithOriginalCause() {
         for (String response : List.of(
-                "{\"memories\":[{\"type\":\"USER_PREFERENCE\",\"title\":\"t\",\"content\":\"c\",\"extra\":true}]}",
-                "{\"memories\":[{\"type\":\"UNKNOWN\",\"title\":\"t\",\"content\":\"c\"}]}",
-                "{\"memories\":[{\"type\":\"USER_PREFERENCE\",\"title\":null,\"content\":\"c\"}]}",
+                "{\"memories\":[{\"type\":\"USER_PREFERENCE\",\"title\":\"t\",\"content\":\"c\",\"importance\":0.5,\"extra\":true}]}",
+                "{\"memories\":[{\"type\":\"UNKNOWN\",\"title\":\"t\",\"content\":\"c\",\"importance\":0.5}]}",
+                "{\"memories\":[{\"type\":\"USER_PREFERENCE\",\"title\":null,\"content\":\"c\",\"importance\":0.5}]}",
+                "{\"memories\":[{\"type\":\"USER_PREFERENCE\",\"title\":\"t\",\"content\":\"c\"}]}",
+                "{\"memories\":[{\"type\":\"USER_PREFERENCE\",\"title\":\"t\",\"content\":\"c\",\"importance\":1.1}]}",
                 "{\"unknown\":[]}")
         ) {
             Endpoint endpoint = endpoint();
