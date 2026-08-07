@@ -5,6 +5,7 @@ import com.agent.core.engine.InterruptPolicy;
 import com.agent.core.engine.StateGraph;
 import com.agent.core.harness.HarnessHookChain;
 import com.agent.core.llm.ModelRouter;
+import com.agent.core.knowledge.KnowledgeContextProvider;
 import com.agent.core.memory.MemoryContext;
 import com.agent.core.memory.MemoryContextProvider;
 import com.agent.core.nodes.CoderNode;
@@ -81,6 +82,13 @@ public class ProductionGraphConfiguration {
         return request -> new MemoryContext("", 0);
     }
 
+    /** 没有启用项目知识实现时提供无外部访问的空上下文。 */
+    @Bean
+    @ConditionalOnMissingBean(KnowledgeContextProvider.class)
+    KnowledgeContextProvider emptyKnowledgeContextProvider() {
+        return KnowledgeContextProvider.empty();
+    }
+
     /** 创建写入现有日志归档的默认 Harness Hook 链。 */
     @Bean
     @ConditionalOnMissingBean(HarnessHookChain.class)
@@ -105,6 +113,7 @@ public class ProductionGraphConfiguration {
             ProductionAgentProperties properties,
             ModelRouter modelRouter,
             MemoryContextProvider memoryContextProvider,
+            KnowledgeContextProvider knowledgeContextProvider,
             SandboxTerminalService terminalService,
             BrowserAutomation browserAutomation,
             AstService astService,
@@ -115,6 +124,7 @@ public class ProductionGraphConfiguration {
         Objects.requireNonNull(properties, "properties 不能为空");
         Objects.requireNonNull(modelRouter, "modelRouter 不能为空");
         Objects.requireNonNull(memoryContextProvider, "memoryContextProvider 不能为空");
+        Objects.requireNonNull(knowledgeContextProvider, "knowledgeContextProvider 不能为空");
         Objects.requireNonNull(terminalService, "terminalService 不能为空");
         Objects.requireNonNull(browserAutomation, "browserAutomation 不能为空");
         Objects.requireNonNull(astService, "astService 不能为空");
@@ -127,6 +137,7 @@ public class ProductionGraphConfiguration {
                 properties,
                 modelRouter,
                 memoryContextProvider,
+                knowledgeContextProvider,
                 terminalService,
                 browserAutomation,
                 astService,
@@ -150,6 +161,7 @@ public class ProductionGraphConfiguration {
                 properties,
                 modelRouter,
                 memoryContextProvider,
+                KnowledgeContextProvider.empty(),
                 terminalService,
                 browserAutomation,
                 astService,
@@ -173,6 +185,32 @@ public class ProductionGraphConfiguration {
                 properties,
                 modelRouter,
                 memoryContextProvider,
+                KnowledgeContextProvider.empty(),
+                terminalService,
+                browserAutomation,
+                astService,
+                snapshotService,
+                logPublisher,
+                objectMapper,
+                HarnessHookChain.noop());
+    }
+
+    GraphFactory codeAgentGraph(
+            ProductionAgentProperties properties,
+            ModelRouter modelRouter,
+            MemoryContextProvider memoryContextProvider,
+            KnowledgeContextProvider knowledgeContextProvider,
+            SandboxTerminalService terminalService,
+            BrowserAutomation browserAutomation,
+            AstService astService,
+            WorkspaceSnapshotService snapshotService,
+            RunLogPublisher logPublisher,
+            ObjectMapper objectMapper) {
+        return codeAgentGraph(
+                properties,
+                modelRouter,
+                memoryContextProvider,
+                knowledgeContextProvider,
                 terminalService,
                 browserAutomation,
                 astService,
@@ -186,6 +224,7 @@ public class ProductionGraphConfiguration {
             ProductionAgentProperties properties,
             ModelRouter modelRouter,
             MemoryContextProvider memoryContextProvider,
+            KnowledgeContextProvider knowledgeContextProvider,
             SandboxTerminalService terminalService,
             BrowserAutomation browserAutomation,
             AstService astService,
@@ -199,6 +238,9 @@ public class ProductionGraphConfiguration {
                 modelRouter,
                 memoryContextProvider,
                 5,
+                knowledgeContextProvider,
+                4_000,
+                objectMapper,
                 promptCatalog,
                 PlannerNode.defaultContextWindowManager(),
                 new ModelIntentClassifier(
@@ -223,6 +265,7 @@ public class ProductionGraphConfiguration {
                         state -> plannerRoute(state),
                         Map.of(
                                 PlannerNode.CHAT_ROUTE, StateGraph.END,
+                                PlannerNode.KNOWLEDGE_ROUTE, StateGraph.END,
                                 PlannerNode.AGENT_ROUTE, "coder",
                                 PlannerNode.FAILED_ROUTE, StateGraph.END))
                 .addConditionalEdges(
@@ -240,13 +283,18 @@ public class ProductionGraphConfiguration {
                         Map.of("repair", "coder", "finish", StateGraph.END));
     }
 
-    private String plannerRoute(com.agent.core.engine.AgentState state) {
-        if (state.variables().containsKey(PlannerNode.ERROR_KEY)) {
-            return PlannerNode.FAILED_ROUTE;
+    String plannerRoute(com.agent.core.engine.AgentState state) {
+        String route = state.variables().get(PlannerNode.ROUTE_KEY);
+        if (route == null) {
+            throw new IllegalStateException("缺少状态变量: " + PlannerNode.ROUTE_KEY);
         }
-        return PlannerNode.CHAT_ROUTE.equals(state.variables().get(PlannerNode.ROUTE_KEY))
-                ? PlannerNode.CHAT_ROUTE
-                : PlannerNode.AGENT_ROUTE;
+        return switch (route) {
+            case PlannerNode.CHAT_ROUTE -> PlannerNode.CHAT_ROUTE;
+            case PlannerNode.KNOWLEDGE_ROUTE -> PlannerNode.KNOWLEDGE_ROUTE;
+            case PlannerNode.AGENT_ROUTE -> PlannerNode.AGENT_ROUTE;
+            case PlannerNode.FAILED_ROUTE -> PlannerNode.FAILED_ROUTE;
+            default -> throw new IllegalStateException("未知 Planner 路由: " + route);
+        };
     }
 
     private boolean shouldRepair(

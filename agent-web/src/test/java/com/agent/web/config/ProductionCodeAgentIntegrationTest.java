@@ -7,6 +7,10 @@ import com.agent.core.llm.LlmClient;
 import com.agent.core.llm.ModelEndpoint;
 import com.agent.core.llm.ModelRouter;
 import com.agent.core.llm.TaskType;
+import com.agent.core.knowledge.KnowledgeContext;
+import com.agent.core.knowledge.KnowledgeEvidence;
+import com.agent.core.knowledge.KnowledgeEvidenceKind;
+import com.agent.core.knowledge.KnowledgeEvidenceStatus;
 import com.agent.core.nodes.CoderNode;
 import com.agent.core.nodes.OpsNode;
 import com.agent.core.nodes.PlannerNode;
@@ -109,6 +113,7 @@ class ProductionCodeAgentIntegrationTest {
                 properties,
                 router,
                 request -> new com.agent.core.memory.MemoryContext("", 0),
+                request -> knowledgeContext(),
                 terminalService,
                 browserAutomation,
                 new AstService(),
@@ -129,6 +134,8 @@ class ProductionCodeAgentIntegrationTest {
                     .containsExactly("planner", "coder", "ops", "reviewer");
             assertThat(result.variables())
                     .containsEntry(PlannerNode.MODEL_KEY, "code-model")
+                    .containsEntry(PlannerNode.KNOWLEDGE_FINGERPRINT_KEY,
+                            knowledgeContext().fingerprint())
                     .containsEntry(CoderNode.MODEL_KEY, "code-model")
                     .containsEntry(CoderNode.UPDATED_FILES_KEY, "value.txt")
                     .containsEntry(OpsNode.EXIT_CODE_KEY, "0")
@@ -149,6 +156,111 @@ class ProductionCodeAgentIntegrationTest {
                             ReviewerNode.ERROR_KEY);
         }
         server.verify();
+    }
+
+    @Test
+    void endsProjectKnowledgeQueryAfterPlannerWithoutExecutionTools() throws Exception {
+        Files.writeString(workspace.resolve("value.txt"), "before\n");
+        Path bash = Files.createFile(workspace.resolve("bash.exe"));
+        try (Git ignored = Git.init().setDirectory(workspace.toFile()).call()) {
+            // 知识问答使用真实 Git 工作区，但不得进入任何写入节点。
+        }
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        RestClient.Builder builder = RestClient.builder().baseUrl(BASE_URL);
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        LlmClient client = new LlmClient(
+                builder.build(), objectMapper, COMPLETIONS_PATH);
+        ModelEndpoint endpoint = endpoint("knowledge", "code-model", client);
+        ModelRouter router = new ModelRouter(Map.of(
+                TaskType.CODE, List.of(endpoint),
+                TaskType.VISION, List.of(endpoint),
+                TaskType.QUICK_CLASSIFICATION, List.of(endpoint)));
+        server.expect(times(1), requestTo(BASE_URL + COMPLETIONS_PATH))
+                .andRespond(withSuccess(response(
+                        objectMapper,
+                        "code-model",
+                        "当前仓库包含核心、沙箱和 Web 模块。"),
+                        MediaType.APPLICATION_JSON));
+
+        SandboxTerminalService terminalService = mock(SandboxTerminalService.class);
+        BrowserAutomation browserAutomation = mock(BrowserAutomation.class);
+        ProductionAgentProperties properties = properties(bash);
+        GraphFactory factory = new ProductionGraphConfiguration().codeAgentGraph(
+                properties,
+                router,
+                request -> {
+                    throw new AssertionError("知识问答不应召回长期记忆");
+                },
+                request -> knowledgeContext(),
+                terminalService,
+                browserAutomation,
+                new AstService(),
+                new WorkspaceSnapshotService(50, 32_000),
+                RunLogPublisher.noop(),
+                objectMapper);
+
+        try (client; StateGraph graph = factory.create()) {
+            AgentState result = graph.execute(AgentState.empty()
+                    .withVariable(PlannerNode.TASK_KEY, "请解释当前仓库架构")
+                    .withVariable(PlannerNode.REPOSITORY_ID_KEY, "repository")
+                    .withVariable(PlannerNode.USER_ID_KEY, "user")
+                    .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString()));
+
+            assertThat(result.trace()).containsExactly("planner");
+            assertThat(result.variables())
+                    .containsEntry(PlannerNode.ROUTE_KEY, PlannerNode.KNOWLEDGE_ROUTE)
+                    .containsEntry(PlannerNode.FINAL_RESPONSE_KEY,
+                            "当前仓库包含核心、沙箱和 Web 模块。")
+                    .doesNotContainKeys(
+                            CoderNode.UNIFIED_DIFF_KEY,
+                            OpsNode.COMMAND_KEY,
+                            ReviewerNode.APPROVED_KEY);
+            assertThat(Files.readString(workspace.resolve("value.txt")))
+                    .isEqualTo("before\n");
+        }
+        server.verify();
+    }
+
+    private ProductionAgentProperties properties(Path bash) {
+        return new ProductionAgentProperties(
+                true,
+                workspace,
+                "repository",
+                "user",
+                "",
+                "PTY",
+                bash.toString(),
+                "python:3.12-slim",
+                "/workspace",
+                "",
+                "",
+                Duration.ofSeconds(30),
+                Duration.ofSeconds(15),
+                50,
+                32_000,
+                2,
+                12,
+                1_800_000,
+                120_000,
+                200_000,
+                3,
+                12_000);
+    }
+
+    private KnowledgeContext knowledgeContext() {
+        return new KnowledgeContext(
+                "[PROJECT_FILE] AGENTS.md",
+                1,
+                "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                32,
+                false,
+                List.of(new KnowledgeEvidence(
+                        KnowledgeEvidenceKind.PROJECT_FILE,
+                        "AGENTS.md",
+                        KnowledgeEvidenceStatus.APPLIED,
+                        "loaded",
+                        null)));
     }
 
     private ModelEndpoint endpoint(String id, String model, LlmClient client) {

@@ -1,9 +1,11 @@
 package com.agent.web.config;
 
 import com.agent.core.engine.GraphFactory;
+import com.agent.core.engine.AgentState;
 import com.agent.core.engine.StateGraph;
 import com.agent.core.llm.ModelRouter;
 import com.agent.core.memory.MemoryContextProvider;
+import com.agent.core.nodes.PlannerNode;
 import com.agent.core.trace.RunLogPublisher;
 import com.agent.sandbox.ast.AstService;
 import com.agent.sandbox.ast.WorkspaceSnapshotService;
@@ -22,6 +24,7 @@ import java.time.Duration;
 import static org.mockito.Mockito.mock;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ProductionGraphConfigurationTest {
 
@@ -79,5 +82,27 @@ class ProductionGraphConfigurationTest {
                 "/workspace",
                 new DockerTarget.ContainerWorkspaceSource(
                         "agent4j-web-local", "/agent-workspace")));
+    }
+
+    @Test
+    void acceptsOnlyExactPlannerRouteValues() {
+        ProductionGraphConfiguration configuration = new ProductionGraphConfiguration();
+
+        assertThat(configuration.plannerRoute(AgentState.empty()
+                .withVariable(PlannerNode.ROUTE_KEY, PlannerNode.CHAT_ROUTE)))
+                .isEqualTo(PlannerNode.CHAT_ROUTE);
+        assertThat(configuration.plannerRoute(AgentState.empty()
+                .withVariable(PlannerNode.ROUTE_KEY, PlannerNode.KNOWLEDGE_ROUTE)))
+                .isEqualTo(PlannerNode.KNOWLEDGE_ROUTE);
+        assertThat(configuration.plannerRoute(AgentState.empty()
+                .withVariable(PlannerNode.ROUTE_KEY, PlannerNode.AGENT_ROUTE)))
+                .isEqualTo(PlannerNode.AGENT_ROUTE);
+        assertThat(configuration.plannerRoute(AgentState.empty()
+                .withVariable(PlannerNode.ROUTE_KEY, PlannerNode.FAILED_ROUTE)))
+                .isEqualTo(PlannerNode.FAILED_ROUTE);
+        assertThatThrownBy(() -> configuration.plannerRoute(AgentState.empty()
+                .withVariable(PlannerNode.ROUTE_KEY, "unexpected")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("unexpected");
     }
 }
