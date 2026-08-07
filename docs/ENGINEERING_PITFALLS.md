@@ -1409,3 +1409,96 @@ HyDE、重复 RRF、rerank、父转子预算以及三种增强失败，报告固
 `LexicalCoverageRerankerTest`、`ModelRetrievalEnhancerTest` 和 `RagPipelineEddTest`。
 真实模型协议 EDD 仅在 `AGENT_LLM_ENABLED=true` 时运行；关闭时由 JUnit assumption
 明确跳过，不让普通构建依赖外部端点。
+
+## 第三篇 3B 补充：项目知识编译与安全边界
+
+### 【问题现象】Windows 会把错误大小写知识文件当成正确路径
+
+在 Windows 上直接执行 `root.resolve("AGENTS.md")` 再判断 `exists`，可能命中实际名为
+`agents.md` 的目录项。这样会把开发者没有声明为规则的普通 Markdown 注入系统 Prompt，
+而 Linux 部署又不会加载，形成跨环境行为漂移。
+
+### 【根因分析】
+
+`Path.resolve` 只拼接路径，最终匹配语义由文件系统决定。大小写不敏感文件系统不能替业务
+协议保证文件名精确相等。
+
+### 【解决方案/代码级实现】
+
+`ProjectKnowledgeCompiler` 对根到 activePath 的每一级目录调用 `Files.list`，读取实际
+目录项名称，再用 `String.equals` 精确匹配 `SOUL.md`、`AGENTS.md`、`CLAUDE.md`。加载
+顺序固定为根 `SOUL.md`、根到活动目录的全部 `AGENTS.md`、再到全部 `CLAUDE.md`，不扫描
+用户 Home，也不做任何大小写或格式推断。
+
+### 【问题现象】只看 mtime 的热重载会继续使用旧规则
+
+文件同步工具、Git 操作或测试可以在内容变化后恢复原 mtime。若缓存键只包含路径和修改
+时间，Agent 会继续注入旧规则，且日志看起来仍是缓存正常命中。
+
+### 【根因分析】
+
+mtime 是文件系统元数据，不是正文身份；时间精度和写入恢复操作都可能让不同内容具有相同
+时间戳。
+
+### 【解决方案/代码级实现】
+
+每次加载都严格读取 UTF-8 正文并计算文件 SHA-256；来源清单指纹按固定顺序组合
+`fileType + relativePath + sourceSha256`。缓存键包含真实 root、真实 activePath 和
+`maxTokens`，命中时还必须比较重新扫描得到的完整来源指纹。内容不变返回同一不可变对象；
+内容改变即使 mtime 恢复也产生新上下文和新指纹。
+
+### 【问题现象】工作区内的知识文件名可以通过符号链接读取工作区外内容
+
+只检查链接路径位于仓库内并不安全。攻击者可以把 `AGENTS.md` 指向仓库外的密钥、用户级
+指令或其他项目文件，绕过普通的 `startsWith(workspaceRoot)` 检查。
+
+### 【根因分析】
+
+逻辑路径边界和真实目标边界不同。`normalize` 只消除 `.`/`..`，不会解析符号链接。
+
+### 【解决方案/代码级实现】
+
+workspaceRoot 与 activePath 首先执行 `toRealPath`；每个知识文件在读取前也解析真实目标并
+再次验证仍以真实 root 开头。路径解析、读取和 UTF-8 解码异常保留 cause；文件目标越界
+立即终止，不回退到不可信正文。Windows 无符号链接权限时，仅对应集成单例通过 JUnit
+assumption 明确跳过。
+
+### 【问题现象】字符截断会把规则变成另一条规则
+
+按剩余字符数截断 Markdown 可能删除否定词、代码围栏结尾或安全约束后半段。把可选
+`SOUL.md` 先塞满预算，还会挤掉根 `AGENTS.md`，导致项目最明确的工程规则反而缺失。
+
+### 【根因分析】
+
+规则文件是完整语义单元，不是可任意截断的搜索片段；预算优先级也不能简单等同展示顺序。
+
+### 【解决方案/代码级实现】
+
+单文件先执行 25,000 bytes、200 行和严格 UTF-8 门禁。token 选择只在完整来源边界发生，
+根 `AGENTS.md` 存在时先预留预算，单独超限则抛出带 `observed/limit` 的 `TOKENS` 异常；
+其他来源按固定顺序完整加入或完整跳过，最终 Prompt 仍按固定展示顺序渲染并重新估算。
+代码 RAG 证据同样只按完整文档反向移除，不裁断正文。
+
+### 【问题现象】基础 RAG 失败被伪装成“没有相关代码”
+
+数据库、embedding 或基础召回故障若直接返回空文档，Planner 无法区分“确实没有证据”和
+“证据系统不可用”，会在缺失事实的情况下继续修改代码。
+
+### 【根因分析】
+
+查询改写、HyDE、rerank 属于可降级增强；基础召回是代码证据来源。两者不能共享同一个
+吞异常策略。
+
+### 【解决方案/代码级实现】
+
+`RagKnowledgeContextProvider` 先保留项目文件规则，再用剩余预算调用 RAG。增强失败映射为
+对应阶段的 `DEGRADED` 证据并保留完整堆栈；基础失败在 `strict=true` 时原样终止并保留
+cause，在 `strict=false` 时只返回文件规则，并新增 source 精确为 `RAG_PIPELINE` 的降级
+证据。最终上下文使用固定双标题、内容指纹和不可变证据集合。
+
+### 【证据】
+
+`ProjectKnowledgeCompilerTest`、`RagKnowledgeContextProviderTest` 和
+`ProjectKnowledgeEddTest`。确定性 EDD 报告固定写入
+`agent-eval/target/edd/project-knowledge-edd.json`，六个场景均包含
+`taskId/passed/sourceCount/fingerprint/estimatedTokens/degraded/evidence`。
