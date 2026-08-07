@@ -22,8 +22,9 @@ public final class ModelIntentClassifier implements IntentClassifier {
     private static final Set<String> EXACT_FIELDS = Set.of(
             "route", "taskKind", "complexity", "requiredCapabilities", "reason");
     private static final List<String> CODE_ACTION_MARKERS = List.of(
-            "修改", "写代码", "生成代码", "实现", "修复", "重构", "补充测试",
-            "code", "fix", "implement", "refactor");
+            "修改", "改", "写代码", "生成代码", "实现", "修复", "重构", "补充测试",
+            "文件", "源码", "代码", "git", "docker", "code", "fix", "implement",
+            "refactor", "test", "build");
     private static final List<String> COMMAND_MARKERS = List.of(
             "运行测试", "执行测试", "执行命令", "运行命令", "编译", "docker", "build");
     private static final List<String> BROWSER_MARKERS = List.of(

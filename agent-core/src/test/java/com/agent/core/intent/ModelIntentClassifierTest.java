@@ -47,6 +47,22 @@ class ModelIntentClassifierTest {
     }
 
     @Test
+    void routesChineseModifyVerbToCodeChangeFastPath() {
+        ModelIntentClassifier classifier = classifier(messages -> {
+            throw new AssertionError("明确修改动作不应调用语义模型");
+        });
+
+        TaskDecision decision = classifier.classify(
+                List.of(), "把 value.txt 改成 after 并验证");
+
+        assertThat(decision.route()).isEqualTo(TaskRoute.AGENT);
+        assertThat(decision.taskKind()).isEqualTo(TaskKind.CODE_CHANGE);
+        assertThat(decision.requiredCapabilities()).containsExactlyInAnyOrder(
+                RequiredCapability.CODE_READ,
+                RequiredCapability.CODE_WRITE);
+    }
+
+    @Test
     void parsesExactSemanticDecisionJson() {
         ModelIntentClassifier classifier = classifier(messages -> """
                 {"route":"CHAT","taskKind":"CHAT","complexity":"SIMPLE",
