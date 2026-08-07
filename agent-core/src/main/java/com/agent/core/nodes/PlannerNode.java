@@ -94,10 +94,15 @@ public final class PlannerNode implements Node {
                 memoryContextProvider,
                 memoryLimit,
                 PlannerPromptTemplates.catalog(),
-                new ContextWindowManager(
-                        new Utf8TokenEstimator(), PlannerNode::summarizeHistory),
+                defaultContextWindowManager(),
                 null,
                 DEFAULT_MAX_CONTEXT_TOKENS);
+    }
+
+    /** 返回生产装配共用的确定性上下文窗口策略。 */
+    public static ContextWindowManager defaultContextWindowManager() {
+        return new ContextWindowManager(
+                new Utf8TokenEstimator(), PlannerNode::summarizeHistory);
     }
 
     /** 创建全部策略均由构造器注入的 Planner。 */
