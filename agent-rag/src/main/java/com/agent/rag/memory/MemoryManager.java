@@ -16,9 +16,13 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Supplier;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /** 长期记忆的提取、持久化、召回和稳定排序协调器。 */
 public final class MemoryManager {
+
+    private static final Logger LOGGER = Logger.getLogger(MemoryManager.class.getName());
 
     private static final double VECTOR_WEIGHT = 0.65;
     private static final double LEXICAL_WEIGHT = 0.35;
@@ -28,6 +32,7 @@ public final class MemoryManager {
     private final EmbeddingModel embeddingModel;
     private final Clock clock;
     private final Supplier<UUID> idSupplier;
+    private final MemoryAuditSink auditSink;
 
     /** 创建无请求共享可变状态的记忆管理器。 */
     public MemoryManager(
@@ -36,11 +41,23 @@ public final class MemoryManager {
             EmbeddingModel embeddingModel,
             Clock clock,
             Supplier<UUID> idSupplier) {
+        this(extractor, store, embeddingModel, clock, idSupplier, MemoryAuditSink.noop());
+    }
+
+    /** 创建带访问更新审计端口的记忆管理器。 */
+    public MemoryManager(
+            MemoryExtractor extractor,
+            MemoryStore store,
+            EmbeddingModel embeddingModel,
+            Clock clock,
+            Supplier<UUID> idSupplier,
+            MemoryAuditSink auditSink) {
         this.extractor = Objects.requireNonNull(extractor, "extractor 不能为空");
         this.store = Objects.requireNonNull(store, "store 不能为空");
         this.embeddingModel = Objects.requireNonNull(embeddingModel, "embeddingModel 不能为空");
         this.clock = Objects.requireNonNull(clock, "clock 不能为空");
         this.idSupplier = Objects.requireNonNull(idSupplier, "idSupplier 不能为空");
+        this.auditSink = Objects.requireNonNull(auditSink, "auditSink 不能为空");
         if (embeddingModel.dimensions() != 8) {
             throw new IllegalArgumentException("embeddingModel 维度必须为 8");
         }
@@ -127,22 +144,52 @@ public final class MemoryManager {
         double vectorMax = rows.stream().mapToDouble(row -> row.vectorScore).max().orElse(0);
         double lexicalMin = rows.stream().mapToDouble(row -> row.lexicalScore).min().orElse(0);
         double lexicalMax = rows.stream().mapToDouble(row -> row.lexicalScore).max().orElse(0);
-        return rows.stream()
+        List<MemoryHit> hits = rows.stream()
                 .map(row -> {
                     double vector = normalize(row.vectorScore, vectorMin, vectorMax);
                     double lexical = normalize(row.lexicalScore, lexicalMin, lexicalMax);
+                    double finalScore = VECTOR_WEIGHT * vector + LEXICAL_WEIGHT * lexical;
+                    double lifecycleScore = MemoryLifecycle.score(row.entry, clock.instant());
                     return new MemoryHit(
                             row.entry,
                             vector,
                             lexical,
-                            VECTOR_WEIGHT * vector + LEXICAL_WEIGHT * lexical);
+                            finalScore,
+                            lifecycleScore,
+                            0.8 * finalScore + 0.2 * lifecycleScore);
                 })
                 .sorted(Comparator
-                        .comparingDouble(MemoryHit::finalScore).reversed()
+                        .comparingDouble(MemoryHit::rankingScore).reversed()
+                        .thenComparing(MemoryHit::finalScore, Comparator.reverseOrder())
                         .thenComparing(hit -> hit.entry().updatedAt(), Comparator.reverseOrder())
                         .thenComparing(hit -> hit.entry().memoryId()))
                 .limit(query.limit())
                 .toList();
+        try {
+            auditAccess(query, hits);
+        } catch (RuntimeException failure) {
+            LOGGER.log(Level.WARNING, "长期记忆访问更新失败", failure);
+        }
+        return hits;
+    }
+
+    private void auditAccess(MemoryQuery query, List<MemoryHit> hits) {
+        List<UUID> memoryIds = hits.stream()
+                .map(hit -> hit.entry().memoryId())
+                .toList();
+        if (memoryIds.isEmpty()) {
+            return;
+        }
+        try {
+            store.recordAccess(query, memoryIds, clock.instant());
+        } catch (RuntimeException failure) {
+            try {
+                auditSink.recordAccessFailure(query, memoryIds, failure);
+            } catch (RuntimeException auditFailure) {
+                failure.addSuppressed(auditFailure);
+                LOGGER.log(Level.WARNING, "长期记忆访问审计失败", failure);
+            }
+        }
     }
 
     private float[] embed(String text) {
