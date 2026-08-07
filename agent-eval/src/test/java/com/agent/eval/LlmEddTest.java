@@ -62,7 +62,23 @@ class LlmEddTest {
                                     ChatMessage.assistant("可以围绕仙女湖和仰天岗安排一日游。")),
                             response -> !response.isBlank()),
                     new EddScenario("code.intent", "请修改 src/main/App.java 并运行测试", true,
-                            response -> !response.isBlank()));
+                            response -> !response.isBlank()),
+                    new EddScenario(
+                            "memory.user-preference",
+                            "请按我的项目偏好修改 Java 代码并给出验证命令",
+                            true,
+                            new MemoryContext(
+                                    "用户编码偏好：构建和验证统一使用 Maven，命令必须包含 mvn。",
+                                    1),
+                            response -> response.contains("mvn") || response.contains("Maven")),
+                    new EddScenario(
+                            "memory.bad-case",
+                            "请修复当前代码问题并给出测试计划",
+                            true,
+                            new MemoryContext(
+                                    "历史 Bad Case：禁止全量覆盖文件，必须使用 Unified Diff，并运行测试。",
+                                    1),
+                            response -> response.contains("Diff") || response.contains("测试")));
             List<EddScenarioResult> results = scenarios.stream()
                     .map(scenario -> executeScenario(scenario, router))
                     .toList();
@@ -78,7 +94,7 @@ class LlmEddTest {
         try {
             PlannerNode node = new PlannerNode(
                     router,
-                    ignored -> new MemoryContext("", 0),
+                    ignored -> scenario.memoryContext(),
                     5);
             AgentState state = new AgentState(scenario.history(), Map.of(PlannerNode.TASK_KEY,
                     scenario.prompt()), List.of())
@@ -165,6 +181,7 @@ class LlmEddTest {
             String prompt,
             boolean expectedAgent,
             List<ChatMessage> history,
+            MemoryContext memoryContext,
             java.util.function.Predicate<String> responseGate) {
 
         private EddScenario(
@@ -172,13 +189,32 @@ class LlmEddTest {
                 String prompt,
                 boolean expectedAgent,
                 java.util.function.Predicate<String> responseGate) {
-            this(id, prompt, expectedAgent, List.of(), responseGate);
+            this(id, prompt, expectedAgent, List.of(), new MemoryContext("", 0), responseGate);
+        }
+
+        private EddScenario(
+                String id,
+                String prompt,
+                boolean expectedAgent,
+                List<ChatMessage> history,
+                java.util.function.Predicate<String> responseGate) {
+            this(id, prompt, expectedAgent, history, new MemoryContext("", 0), responseGate);
+        }
+
+        private EddScenario(
+                String id,
+                String prompt,
+                boolean expectedAgent,
+                MemoryContext memoryContext,
+                java.util.function.Predicate<String> responseGate) {
+            this(id, prompt, expectedAgent, List.of(), memoryContext, responseGate);
         }
 
         private EddScenario {
             Objects.requireNonNull(id, "id 不能为空");
             Objects.requireNonNull(prompt, "prompt 不能为空");
             history = List.copyOf(Objects.requireNonNull(history, "history 不能为空"));
+            Objects.requireNonNull(memoryContext, "memoryContext 不能为空");
             Objects.requireNonNull(responseGate, "responseGate 不能为空");
         }
     }

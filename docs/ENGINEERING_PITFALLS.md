@@ -1246,3 +1246,73 @@ Planner -> Coder -> Ops -> Reviewer 集成测试中验证。代码任务必须�
 `PromptCatalogTest`（版本、变量和指纹）、`ContextWindowManagerTest`（预算与保留策略）、
 `ModelIntentClassifierTest`（严格协议与安全回退）、`PlannerNodeTest`（聊天快路径、旧动作词
 和错误堆栈）、生产图集成测试（真实文件修改）及本轮模块全量测试共同构成 2A 的验证证据。
+
+## 第二篇 2B 补充：Memory 生命周期、Runtime 预算与 Harness
+
+### 【问题现象】长期记忆只按检索相关性排序，旧偏好会长期压制架构规则
+
+向量和 BM25 分数只能回答“文本是否相关”，不能回答“这条记忆现在是否仍应生效”。如果用户
+偏好和历史 Bad Case 永不衰减，数月前的临时选择会持续进入 Planner；反过来，如果统一衰减，
+项目架构规则也会随时间失效。
+
+### 【根因分析】
+
+记忆条目缺少重要度、访问频率和最近访问时间，召回层也没有区分动态记忆与长期规则。数据库
+若只更新内容时间，无法审计“被频繁使用但内容未变化”的记忆。
+
+### 【解决方案/代码级实现】
+
+`MemoryEntry`、`MemoryDraft` 和 PostgreSQL V3 增加 `importance`、`accessCount`、
+`lastAccessedAt`。用户偏好使用 30 天半衰期，Bad Case 使用 14 天半衰期，
+`ARCHITECTURE_RULE` 不衰减；最终排序固定为
+`0.8 * retrievalScore + 0.2 * lifecycleScore`。命中后按 repository/user/type/UUID 精确
+范围更新访问次数。访问写回失败只进入 `MemoryAuditSink`，不会丢弃已经完成的召回结果；
+审计端口再次失败时作为 suppressed 保留。
+
+### 【问题现象】最大步数无法治理节点内部卡死和“有 Trace、无业务进展”循环
+
+旧图只在节点之间检查 `maxSteps`。节点内部 HTTP、浏览器或工具等待卡死时永远到不了下一次
+检查；节点每次只追加 trace 时，表面有事件流，实际 `messages/variables` 没有任何变化。
+
+### 【根因分析】
+
+虚拟线程降低阻塞成本，但不提供运行时预算和业务进展判定。把“发布过事件”当成业务进展又会
+让空转循环绕过门禁；把 token 数混入 progress 时钟则会掩盖模型长时间无响应。
+
+### 【解决方案/代码级实现】
+
+`ExecutionBudget` 同时限制总时长、空闲时长、Token、步数和无进展次数。`StateGraph` 在
+`Future.get` 的有界等待循环中按 `MAX_DURATION -> IDLE_TIMEOUT -> TOKEN_BUDGET ->
+MAX_STEPS -> NO_PROGRESS` 固定顺序检查；超时会取消节点 Future。过程摘要只刷新空闲时钟，
+模型响应的 `usage.totalTokens` 由 `ModelRouter` 交给 `NodeExecutionContext.consumeTokens`；
+无进展只比较不可变状态的 `messages` 和 `variables`，明确忽略自然增长的 trace。
+
+预算耗尽写入 `runtime.stopReason`、`runtime.observed`、`runtime.limit` 和
+`runtime.consumedTokens`，随后进入 FAILED Checkpoint 与既有 `TraceEvent.Failed`，恢复和
+Web 前端都读取同一个 PostgreSQL 权威状态。
+
+### 【问题现象】横切治理直接写进节点，观测故障会改变 Agent 决策
+
+若权限、审计、工具计量和日志逻辑散落在 Planner/Ops/Reviewer 内，执行顺序无法复用；如果
+一个日志 Hook 抛异常就终止业务，观测系统会成为新的单点故障。反过来，把权限 Hook 也吞掉，
+危险动作又会越过门禁。
+
+### 【根因分析】
+
+横切能力缺少统一的节点/工具生命周期协议，也没有区分“可隔离的观测失败”和“必须拒绝的治理
+失败”。工具异常被多层 Future 包装后，若 Hook 替换原异常，修复循环会失去根因。
+
+### 【解决方案/代码级实现】
+
+`HarnessHookChain` 按注册顺序发布 `BEFORE_NODE/AFTER_NODE/BEFORE_TOOL/AFTER_TOOL/
+FAILURE/BUDGET_EXHAUSTED`。非关键 Hook 失败进入 `HarnessAuditSink` 后继续，关键 Hook 失败
+立即传播并保留 cause。`NodeExecutionContext.callTool` 对终端和浏览器证据建立统一边界；
+工具失败先发布 FAILURE，再原样抛出，Hook 失败作为 suppressed 附着。生产 Hook 事件通过
+SLF4J 进入已有按日滚动日志，仍由 Checkpoint 而不是日志裁决业务状态。
+
+### 【证据】
+
+`MemoryLifecycleTest`、`MemoryLifecycleManagerTest`、真实 PostgreSQL
+`JdbcMemoryLifecycleIntegrationTest`、`StateGraphBudgetTest`、
+`AgentRunServiceBudgetTest`、`HarnessHookChainTest`、`StateGraphHarnessTest`、Ops/Reviewer
+工具边界测试、`RuntimeHarnessEddTest` 和显式开关的 `LlmEddTest` 共同覆盖 2B。
