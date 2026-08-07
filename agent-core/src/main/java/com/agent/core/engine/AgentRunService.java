@@ -364,6 +364,8 @@ public final class AgentRunService implements AutoCloseable {
                     interruptPublications.remove(initial.runId(), publication);
                 }
             }
+        } catch (ExecutionBudgetExceededException exception) {
+            storeBudgetFailure(current.get(), exception);
         } catch (RuntimeException exception) {
             storeFailure(current.get(), exception);
         }
@@ -504,6 +506,48 @@ public final class AgentRunService implements AutoCloseable {
             }
             persistenceFailure.addSuppressed(exception);
             LOGGER.log(Level.ERROR, "无法保存 Run 失败 Checkpoint", persistenceFailure);
+        }
+    }
+
+    private void storeBudgetFailure(
+            RunCheckpoint current,
+            ExecutionBudgetExceededException exception) {
+        String error = stackTrace(exception);
+        RunCheckpoint latest = checkpointer.loadLatest(current.runId()).orElse(current);
+        if (latest.status() != RunStatus.RUNNING) {
+            return;
+        }
+        AgentState failedState = latest.state()
+                .withVariable("runtime.stopReason", exception.reason().name())
+                .withVariable("runtime.observed", Long.toString(exception.observed()))
+                .withVariable("runtime.limit", Long.toString(exception.limit()))
+                .withVariable(
+                        "runtime.consumedTokens",
+                        Long.toString(exception.consumedTokens()));
+        try {
+            RunCheckpoint failed = checkpointer.append(new CheckpointAppend(
+                    latest.runId(),
+                    latest.version(),
+                    RunStatus.FAILED,
+                    failedState,
+                    null,
+                    null,
+                    null,
+                    null,
+                    error));
+            publish(new TraceEvent.Failed(
+                    UUID.randomUUID(),
+                    failed.runId(),
+                    failed.version(),
+                    Instant.now(),
+                    error));
+        } catch (RuntimeException persistenceFailure) {
+            RunCheckpoint concurrent = checkpointer.loadLatest(current.runId()).orElse(current);
+            if (concurrent.status() != RunStatus.RUNNING) {
+                return;
+            }
+            persistenceFailure.addSuppressed(exception);
+            LOGGER.log(Level.ERROR, "无法保存预算耗尽 Checkpoint", persistenceFailure);
         }
     }
 

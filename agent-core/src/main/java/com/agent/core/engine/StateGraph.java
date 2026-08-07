@@ -1,5 +1,6 @@
 package com.agent.core.engine;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -9,7 +10,10 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 使用 Java 21 虚拟线程逐节点驱动的状态图。
@@ -19,7 +23,9 @@ public final class StateGraph implements AutoCloseable {
     /** 图的唯一终点标识。 */
     public static final String END = "__END__";
 
-    private final int maxSteps;
+    private static final Duration LEGACY_DURATION = Duration.ofDays(3650);
+
+    private final ExecutionBudget budget;
     private final InterruptPolicy interruptPolicy;
     private final ExecutorService executor;
     private final Map<String, Node> nodes = new LinkedHashMap<>();
@@ -35,7 +41,7 @@ public final class StateGraph implements AutoCloseable {
      * @param maxSteps 单次执行允许的最大节点步数
      */
     public StateGraph(int maxSteps) {
-        this(maxSteps, InterruptPolicy.never());
+        this(legacyBudget(maxSteps), InterruptPolicy.never());
     }
 
     /**
@@ -45,10 +51,17 @@ public final class StateGraph implements AutoCloseable {
      * @param interruptPolicy 节点执行前中断策略
      */
     public StateGraph(int maxSteps, InterruptPolicy interruptPolicy) {
-        if (maxSteps <= 0) {
-            throw new IllegalArgumentException("maxSteps 必须大于 0");
-        }
-        this.maxSteps = maxSteps;
+        this(legacyBudget(maxSteps), interruptPolicy);
+    }
+
+    /** 创建受完整执行预算约束的状态图。 */
+    public StateGraph(ExecutionBudget budget) {
+        this(budget, InterruptPolicy.never());
+    }
+
+    /** 创建受完整执行预算和中断策略约束的状态图。 */
+    public StateGraph(ExecutionBudget budget, InterruptPolicy interruptPolicy) {
+        this.budget = Objects.requireNonNull(budget, "budget 不能为空");
         this.interruptPolicy = Objects.requireNonNull(
                 interruptPolicy, "interruptPolicy 不能为空");
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -199,11 +212,11 @@ public final class StateGraph implements AutoCloseable {
         AgentState currentState = request.state();
         boolean bypassInterrupt = request.bypassInterruptAtStart();
         int steps = 0;
+        int noProgress = 0;
+        ExecutionTracker tracker = new ExecutionTracker(budget);
 
         while (!END.equals(currentNode)) {
-            if (steps >= maxSteps) {
-                throw new MaxStepsExceededException(maxSteps);
-            }
+            tracker.checkAll(steps, noProgress);
             if (bypassInterrupt) {
                 bypassInterrupt = false;
             } else {
@@ -224,8 +237,17 @@ public final class StateGraph implements AutoCloseable {
                 }
             }
             listener.onNodeStarted(currentNode, currentState);
-            currentState = executeNode(request.runId(), currentNode, currentState, listener);
+            tracker.markProgress();
+            AgentState previousState = currentState;
+            currentState = executeNode(
+                    request.runId(), currentNode, currentState, listener, tracker);
             steps++;
+            if (sameProgressState(previousState, currentState)) {
+                noProgress++;
+            } else {
+                noProgress = 0;
+                tracker.markProgress();
+            }
             String nextNode = resolveNextNode(currentNode, currentState);
             listener.onNodeCompleted(currentNode, nextNode, currentState);
             currentNode = nextNode;
@@ -237,33 +259,66 @@ public final class StateGraph implements AutoCloseable {
             UUID runId,
             String nodeName,
             AgentState state,
-            GraphExecutionListener listener) {
+            GraphExecutionListener listener,
+            ExecutionTracker tracker) {
         Node node = nodes.get(nodeName);
         if (node == null) {
             throw new IllegalStateException("节点未注册: " + nodeName);
         }
 
         NodeExecutionContext context = new NodeExecutionContext(runId, nodeName);
+        long tokenBase = tracker.consumedTokens();
         Future<AgentState> future = executor.submit(() ->
                 NodeExecutionContext.callWithin(
                         context,
                         summary -> listener.onNodeProgress(nodeName, summary),
+                        nodeTokens -> tracker.recordNodeTokens(tokenBase, nodeTokens),
+                        tracker::markProgress,
                         () -> node.execute(context, state)));
         try {
-            AgentState result = future.get();
-            if (result == null) {
-                throw new NullPointerException("节点返回状态不能为空");
+            while (true) {
+                tracker.checkActive();
+                try {
+                    AgentState result = future.get(
+                            tracker.nextWaitNanos(), TimeUnit.NANOSECONDS);
+                    if (result == null) {
+                        throw new NullPointerException("节点返回状态不能为空");
+                    }
+                    return result;
+                } catch (TimeoutException exception) {
+                    tracker.checkActive();
+                }
             }
-            return result;
         } catch (InterruptedException exception) {
             future.cancel(true);
             Thread.currentThread().interrupt();
             throw new GraphExecutionException(nodeName, exception);
         } catch (ExecutionException exception) {
-            throw new GraphExecutionException(nodeName, exception.getCause());
+            Throwable cause = exception.getCause();
+            if (cause instanceof ExecutionBudgetExceededException budgetFailure) {
+                throw budgetFailure;
+            }
+            throw new GraphExecutionException(nodeName, cause);
+        } catch (ExecutionBudgetExceededException exception) {
+            future.cancel(true);
+            throw exception;
         } catch (RuntimeException exception) {
             throw new GraphExecutionException(nodeName, exception);
         }
+    }
+
+    private boolean sameProgressState(AgentState previous, AgentState current) {
+        return previous.messages().equals(current.messages())
+                && previous.variables().equals(current.variables());
+    }
+
+    private static ExecutionBudget legacyBudget(int maxSteps) {
+        return new ExecutionBudget(
+                LEGACY_DURATION,
+                LEGACY_DURATION,
+                Long.MAX_VALUE,
+                maxSteps,
+                Integer.MAX_VALUE);
     }
 
     private String resolveNextNode(String source, AgentState state) {
@@ -324,6 +379,112 @@ public final class StateGraph implements AutoCloseable {
     }
 
     private record ConditionalTransition(Condition condition, Map<String, String> routes) {
+    }
+
+    private static final class ExecutionTracker {
+
+        private final ExecutionBudget budget;
+        private final long startedAtNanos;
+        private final AtomicLong lastProgressNanos;
+        private final AtomicLong consumedTokens = new AtomicLong();
+
+        private ExecutionTracker(ExecutionBudget budget) {
+            this.budget = budget;
+            this.startedAtNanos = System.nanoTime();
+            this.lastProgressNanos = new AtomicLong(startedAtNanos);
+        }
+
+        private void markProgress() {
+            lastProgressNanos.set(System.nanoTime());
+        }
+
+        private long consumedTokens() {
+            return consumedTokens.get();
+        }
+
+        private void recordNodeTokens(long base, long nodeTokens) {
+            long total;
+            try {
+                total = Math.addExact(base, nodeTokens);
+            } catch (ArithmeticException exception) {
+                throw new IllegalArgumentException("图 token 累计值溢出", exception);
+            }
+            consumedTokens.set(total);
+            if (total > budget.tokenBudget()) {
+                throw failure(
+                        ExecutionStopReason.TOKEN_BUDGET,
+                        total,
+                        budget.tokenBudget());
+            }
+        }
+
+        private void checkAll(int steps, int noProgress) {
+            checkActive();
+            if (steps >= budget.maxSteps()) {
+                throw new MaxStepsExceededException(
+                        steps, budget.maxSteps(), consumedTokens());
+            }
+            if (noProgress >= budget.noProgressLimit()) {
+                throw failure(
+                        ExecutionStopReason.NO_PROGRESS,
+                        noProgress,
+                        budget.noProgressLimit());
+            }
+        }
+
+        private void checkActive() {
+            long now = System.nanoTime();
+            long elapsed = nonNegativeDifference(now, startedAtNanos);
+            long maxDuration = budget.maxDuration().toNanos();
+            if (elapsed >= maxDuration) {
+                throw durationFailure(
+                        ExecutionStopReason.MAX_DURATION, elapsed, maxDuration);
+            }
+            long idle = nonNegativeDifference(now, lastProgressNanos.get());
+            long idleTimeout = budget.idleTimeout().toNanos();
+            if (idle >= idleTimeout) {
+                throw durationFailure(
+                        ExecutionStopReason.IDLE_TIMEOUT, idle, idleTimeout);
+            }
+            long tokens = consumedTokens();
+            if (tokens > budget.tokenBudget()) {
+                throw failure(
+                        ExecutionStopReason.TOKEN_BUDGET,
+                        tokens,
+                        budget.tokenBudget());
+            }
+        }
+
+        private long nextWaitNanos() {
+            long now = System.nanoTime();
+            long durationRemaining = budget.maxDuration().toNanos()
+                    - nonNegativeDifference(now, startedAtNanos);
+            long idleRemaining = budget.idleTimeout().toNanos()
+                    - nonNegativeDifference(now, lastProgressNanos.get());
+            return Math.max(1, Math.min(durationRemaining, idleRemaining));
+        }
+
+        private ExecutionBudgetExceededException durationFailure(
+                ExecutionStopReason reason,
+                long observedNanos,
+                long limitNanos) {
+            long observedMillis = Math.max(1, Duration.ofNanos(observedNanos).toMillis());
+            long limitMillis = Math.max(1, Duration.ofNanos(limitNanos).toMillis());
+            return failure(reason, observedMillis, limitMillis);
+        }
+
+        private ExecutionBudgetExceededException failure(
+                ExecutionStopReason reason,
+                long observed,
+                long limit) {
+            return new ExecutionBudgetExceededException(
+                    reason, observed, limit, consumedTokens());
+        }
+
+        private long nonNegativeDifference(long current, long previous) {
+            long difference = current - previous;
+            return difference < 0 ? Long.MAX_VALUE : difference;
+        }
     }
 
     private enum NoOpGraphExecutionListener implements GraphExecutionListener {
