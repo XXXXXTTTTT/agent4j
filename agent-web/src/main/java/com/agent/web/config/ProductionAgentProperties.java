@@ -25,7 +25,8 @@ public record ProductionAgentProperties(
         int snapshotMaxFiles,
         long snapshotMaxBytes,
         int maxRepairAttempts,
-        int maxSteps) {
+        int maxSteps,
+        int plannerContextMaxTokens) {
 
     /** 冻结配置文本并校验生产图所需的精确值。 */
     public ProductionAgentProperties {
@@ -59,6 +60,9 @@ public record ProductionAgentProperties(
         }
         if (maxSteps < 4) {
             throw new IllegalArgumentException("maxSteps 必须至少为 4");
+        }
+        if (plannerContextMaxTokens < 1) {
+            throw new IllegalArgumentException("plannerContextMaxTokens 必须大于 0");
         }
     }
 

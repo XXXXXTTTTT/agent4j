@@ -50,7 +50,8 @@ class ProductionGraphConfigurationTest {
                 50,
                 32_000,
                 2,
-                12);
+                12,
+                12_000);
 
         GraphFactory factory = new ProductionGraphConfiguration().codeAgentGraph(
                 properties,

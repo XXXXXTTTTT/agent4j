@@ -8,7 +8,10 @@ import com.agent.core.memory.MemoryContextProvider;
 import com.agent.core.nodes.CoderNode;
 import com.agent.core.nodes.OpsNode;
 import com.agent.core.nodes.PlannerNode;
+import com.agent.core.nodes.PlannerPromptTemplates;
 import com.agent.core.nodes.ReviewerNode;
+import com.agent.core.intent.ModelIntentClassifier;
+import com.agent.core.intent.ModelRouterIntentModel;
 import com.agent.core.trace.RunLogPublisher;
 import com.agent.sandbox.ast.AstService;
 import com.agent.sandbox.ast.WorkspaceSnapshotService;
@@ -137,7 +140,18 @@ public class ProductionGraphConfiguration {
             RunLogPublisher logPublisher,
             ObjectMapper objectMapper,
             TerminalTarget target) {
-        PlannerNode planner = new PlannerNode(modelRouter, memoryContextProvider, 5);
+        var promptCatalog = PlannerPromptTemplates.catalog();
+        PlannerNode planner = new PlannerNode(
+                modelRouter,
+                memoryContextProvider,
+                5,
+                promptCatalog,
+                PlannerNode.defaultContextWindowManager(),
+                new ModelIntentClassifier(
+                        new ModelRouterIntentModel(modelRouter),
+                        objectMapper,
+                        promptCatalog),
+                properties.plannerContextMaxTokens());
         CoderNode coder = new CoderNode(astService, modelRouter, objectMapper, snapshotService);
         OpsNode ops = new OpsNode(
                 terminalService, target, properties.commandTimeout(), logPublisher);
