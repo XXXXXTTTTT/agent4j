@@ -94,7 +94,9 @@ class ModelRetrievalEnhancerTest {
                 "{\"query\":\"rewrite\"}",
                 "```json\n[\"rewrite\"]\n```",
                 "[\"rewrite\",\" \"]",
-                "[\"one\",\"two\"]")) {
+                "[\"one\",\"two\"]",
+                "[\"rewrite\"] trailing",
+                "[\"rewrite\"][\"second\"]")) {
             RouterHarness harness = routerHarness();
             harness.quick().server().expect(
                             once(), requestTo(harness.quick().baseUrl() + PATH))

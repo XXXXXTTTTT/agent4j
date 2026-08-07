@@ -6,6 +6,7 @@ import com.agent.core.llm.ModelRouter;
 import com.agent.core.llm.RoutedCompletion;
 import com.agent.core.llm.TaskType;
 import com.agent.core.prompt.RenderedPrompt;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -69,7 +70,9 @@ public final class ModelQueryRewriter implements QueryRewriter {
     }
 
     private List<String> parse(String json, int limit) throws Exception {
-        JsonNode root = objectMapper.readTree(json);
+        JsonNode root = objectMapper.reader()
+                .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                .readTree(json);
         if (root == null || !root.isArray()) {
             throw new IllegalArgumentException("查询改写结果必须是 JSON 数组");
         }
