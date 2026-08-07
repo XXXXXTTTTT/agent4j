@@ -250,6 +250,134 @@ class PlannerNodeTest {
     }
 
     @Test
+    void normalizesRouteExplanationAndAnswersChat() {
+        Endpoint endpoint = endpoint();
+        endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
+                .andRespond(withSuccess("""
+                        {"id":"route-response","object":"chat.completion","created":1,
+                         "model":"planner-model","choices":[{"index":0,
+                         "message":{"role":"assistant","content":"chat，因为这是自然语言问题"},
+                         "finish_reason":"stop"}]}
+                        """, MediaType.APPLICATION_JSON));
+        endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
+                .andRespond(withSuccess("""
+                        {"id":"answer-response","object":"chat.completion","created":1,
+                         "model":"planner-model","choices":[{"index":0,
+                         "message":{"role":"assistant","content":"这是一个自然语言回答。"},
+                         "finish_reason":"stop"}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        PlannerNode node = new PlannerNode(
+                router(endpoint), request -> {
+                    throw new AssertionError("聊天语义路由不应召回代码仓库记忆");
+                }, 7);
+
+        AgentState result = node.execute(AgentState.empty()
+                .withVariable(PlannerNode.TASK_KEY, "按天气规划"));
+
+        assertThat(result.variables())
+                .containsEntry(PlannerNode.ROUTE_KEY, PlannerNode.CHAT_ROUTE)
+                .containsEntry(PlannerNode.FINAL_RESPONSE_KEY, "这是一个自然语言回答。")
+                .doesNotContainKey(PlannerNode.ERROR_KEY);
+    }
+
+    @Test
+    void normalizesMarkdownRouteOutput() {
+        Endpoint endpoint = endpoint();
+        endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
+                .andRespond(withSuccess("""
+                        {"id":"route-response","object":"chat.completion","created":1,
+                         "model":"planner-model","choices":[{"index":0,
+                         "message":{"role":"assistant","content":"```chat```"},
+                         "finish_reason":"stop"}]}
+                        """, MediaType.APPLICATION_JSON));
+        endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
+                .andRespond(withSuccess("""
+                        {"id":"answer-response","object":"chat.completion","created":1,
+                         "model":"planner-model","choices":[{"index":0,
+                         "message":{"role":"assistant","content":"围栏回答"},
+                         "finish_reason":"stop"}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        PlannerNode node = new PlannerNode(
+                router(endpoint), request -> {
+                    throw new AssertionError("聊天语义路由不应召回代码仓库记忆");
+                }, 7);
+
+        AgentState result = node.execute(AgentState.empty()
+                .withVariable(PlannerNode.TASK_KEY, "按天气规划"));
+
+        assertThat(result.variables())
+                .containsEntry(PlannerNode.ROUTE_KEY, PlannerNode.CHAT_ROUTE)
+                .containsEntry(PlannerNode.FINAL_RESPONSE_KEY, "围栏回答")
+                .doesNotContainKey(PlannerNode.ERROR_KEY);
+    }
+
+    @Test
+    void normalizesJsonRouteOutput() {
+        Endpoint endpoint = endpoint();
+        endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
+                .andRespond(withSuccess("""
+                        {"id":"route-response","object":"chat.completion","created":1,
+                         "model":"planner-model","choices":[{"index":0,
+                         "message":{"role":"assistant","content":"{\\"route\\":\\"chat\\"}"},
+                         "finish_reason":"stop"}]}
+                        """, MediaType.APPLICATION_JSON));
+        endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
+                .andRespond(withSuccess("""
+                        {"id":"answer-response","object":"chat.completion","created":1,
+                         "model":"planner-model","choices":[{"index":0,
+                         "message":{"role":"assistant","content":"JSON 路由回答"},
+                         "finish_reason":"stop"}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        PlannerNode node = new PlannerNode(
+                router(endpoint), request -> {
+                    throw new AssertionError("聊天语义路由不应召回代码仓库记忆");
+                }, 7);
+
+        AgentState result = node.execute(AgentState.empty()
+                .withVariable(PlannerNode.TASK_KEY, "按天气规划"));
+
+        assertThat(result.variables())
+                .containsEntry(PlannerNode.ROUTE_KEY, PlannerNode.CHAT_ROUTE)
+                .containsEntry(PlannerNode.FINAL_RESPONSE_KEY, "JSON 路由回答")
+                .doesNotContainKey(PlannerNode.ERROR_KEY);
+    }
+
+    @Test
+    void downgradesSemanticAgentForNaturalLanguageTask() {
+        Endpoint endpoint = endpoint();
+        endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
+                .andRespond(withSuccess("""
+                        {"id":"route-response","object":"chat.completion","created":1,
+                         "model":"planner-model","choices":[{"index":0,
+                         "message":{"role":"assistant","content":"agent"},
+                         "finish_reason":"stop"}]}
+                        """, MediaType.APPLICATION_JSON));
+        endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
+                .andRespond(withSuccess("""
+                        {"id":"answer-response","object":"chat.completion","created":1,
+                         "model":"planner-model","choices":[{"index":0,
+                         "message":{"role":"assistant","content":"天气规划回答"},
+                         "finish_reason":"stop"}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        PlannerNode node = new PlannerNode(
+                router(endpoint), request -> {
+                    throw new AssertionError("自然语言任务不应召回代码仓库记忆");
+                }, 7);
+
+        AgentState result = node.execute(AgentState.empty()
+                .withVariable(PlannerNode.TASK_KEY, "按天气规划"));
+
+        assertThat(result.variables())
+                .containsEntry(PlannerNode.ROUTE_KEY, PlannerNode.CHAT_ROUTE)
+                .containsEntry(PlannerNode.FINAL_RESPONSE_KEY, "天气规划回答")
+                .doesNotContainKey(PlannerNode.ERROR_KEY);
+    }
+
+    @Test
     void preservesFullMemoryFailureStackAndDoesNotWritePlan() {
         MemoryContextProvider provider = request -> {
             throw new IllegalStateException("memory unavailable");

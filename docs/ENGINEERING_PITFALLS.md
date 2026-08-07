@@ -1136,3 +1136,38 @@ OTel 将摘要写入 `agent.node.progress` 事件和 `agent.progress.summary` �
 `WorkspaceSnapshotServiceTest` 覆盖严格快照与有界提示快照；
 `OpenTelemetryRunTracePublisherTest`、`RunTraceControllerTest` 覆盖进度事件的 OTel/SSE 协议；
 `runApi.test.ts` 与 `Workbench.test.tsx` 覆盖 `NODE_PROGRESS` 解码、聊天 `final_response` 渲染和代码路径回归。
+
+### 【问题现象】路由模型返回解释文本后连续对话直接失败，容器日志无法在宿主机审计
+
+真实 EDD 复现了路由模型返回 `chat，因为这是自然语言问题`、Markdown 代码围栏或 JSON 包装时，
+旧实现因全字符串等值比较抛出 `任务路由模型必须精确返回 chat 或 agent`。同时 Logback 虽然已经
+配置了滚动文件，Compose 没有把容器内 `logs` 目录绑定到宿主机，重建容器后日志不便检索。
+
+### 【根因分析】
+
+路由协议要求模型表达一个离散值，但模型输出仍是自然语言通道，格式包装和解释文本是可预期的协议
+偏差；把格式偏差当作网络故障会中断整个问答链。日志文件路径只在应用容器内部存在，部署编排没有
+定义日志目录的宿主机生命周期，控制台输出也无法替代按 Run/Trace/Node/Model 关联的归档审计。
+
+### 【解决方案/代码级实现】
+
+`PlannerNode` 先严格识别精确值，再解析完整 Markdown 围栏、JSON `route` 字段和以单一路由开头的
+标点解释文本；无法证明路由且请求不含代码动作词时安全回退 `chat`，并以 WARN 记录安全截断摘要。
+即使模型明确返回 `agent`，若当前自然语言任务没有任何明确工具/代码动作词，也会再次降级为 `chat`，
+避免连续对话历史把天气规划误带入代码链。真实异常仍写入 `planner.error` 和完整堆栈，网络/HTTP 故障不会被回退掩盖。Planner 的失败日志同时
+带 `runId`、`traceId`、`nodeName`、`modelName` MDC（由节点上下文和 LlmClient 注入）。
+
+Logback 使用 `agent.logging.directory`（环境变量 `AGENT_LOG_DIR`）同时写控制台和
+`agent4j-current.log`，按 `agent4j-%d{yyyy-MM-dd}.log` 归档并保留 30 天；两个 Compose 文件将
+`${AGENT_LOG_HOST_DIR:-./logs}` 挂载至 `/app/logs`，宿主机可以直接留存审计文件，`.gitignore`
+继续排除 `logs/` 和 `*.log`。
+
+EDD 使用真实 OpenAI 兼容端点验证四条预设对话，记录路由、终态、总耗时、响应首字延迟（可用时）、
+错误栈和轨迹门禁，报告写入 `target/edd`。本轮实际结果为 `chat/chat/chat/agent` 全部通过，证明
+“你是什么模型 -> 无车出游 -> 按天气追问”不会再因路由格式偏差中断。
+
+### 【证据】
+
+`PlannerNodeTest` 的路由格式回归用例、`LlmEddTest`（显式 `AGENT_LLM_ENABLED=true`）、
+`docs/superpowers/specs/2026-08-07-edd-observability-design.md`、真实 EDD JSON 报告以及两份
+Compose 的 `config --quiet` 校验。

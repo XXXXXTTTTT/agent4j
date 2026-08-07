@@ -43,11 +43,15 @@ services:
       AGENT_CODE_WORKSPACE: /agent-workspace
       AGENT_CODE_WORKSPACE_SOURCE_CONTAINER: agent4j-web-local
       AGENT_CODE_WORKSPACE_SOURCE_PATH: /agent-workspace
+      AGENT_LOG_DIR: /app/logs
     volumes:
       - type: bind
         source: ${AGENT_CODE_HOST_WORKSPACE:-.}
         target: /agent-workspace
       - /var/run/docker.sock:/var/run/docker.sock
+      - type: bind
+        source: ${AGENT_LOG_HOST_DIR:-./logs}
+        target: /app/logs
 
 volumes:
   agent4j-postgres-data:

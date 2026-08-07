@@ -46,6 +46,7 @@ services:
       AGENT_CODE_WORKSPACE: /agent-workspace
       AGENT_CODE_WORKSPACE_SOURCE_CONTAINER: agent4j-web
       AGENT_CODE_WORKSPACE_SOURCE_PATH: /agent-workspace
+      AGENT_LOG_DIR: /app/logs
     volumes:
       # Agent 读取和修改的 Git 工作区；Docker-Java 仅向一次性沙箱转发这一条 bind。
       - type: bind
@@ -54,6 +55,9 @@ services:
       # 挂载宿主机 Docker Socket
       # 供 agent-sandbox 模块的 Docker-Java 在容器内部调度运行隔离的终端沙箱
       - /var/run/docker.sock:/var/run/docker.sock
+      - type: bind
+        source: ${AGENT_LOG_HOST_DIR:-./logs}
+        target: /app/logs
 
 volumes:
   agent4j-postgres-data:

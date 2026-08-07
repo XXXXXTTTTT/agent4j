@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
+    <springProperty scope="context" name="agentLogDir"
+                    source="agent.logging.directory" defaultValue="logs"/>
     <property name="CONSOLE_PATTERN"
               value="%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] [runId=%X{runId:-} traceId=%X{traceId:-} nodeName=%X{nodeName:-} modelName=%X{modelName:-}] %logger{36} - %msg%n"/>
     <property name="FILE_PATTERN"
@@ -13,9 +15,9 @@
     </appender>
 
     <appender name="ROLLING_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/agent4j-current.log</file>
+        <file>${agentLogDir}/agent4j-current.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>logs/agent4j-%d{yyyy-MM-dd}.log</fileNamePattern>
+            <fileNamePattern>${agentLogDir}/agent4j-%d{yyyy-MM-dd}.log</fileNamePattern>
             <maxHistory>30</maxHistory>
             <totalSizeCap>2GB</totalSizeCap>
         </rollingPolicy>

@@ -11,6 +11,10 @@ import com.agent.core.llm.ModelRequest;
 import com.agent.core.llm.ModelRouter;
 import com.agent.core.llm.RoutedCompletion;
 import com.agent.core.llm.TaskType;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -18,9 +22,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Objects;
+import java.util.Optional;
 
 /** 在规划 Prompt 中注入长期记忆并生成执行计划的节点。 */
 public final class PlannerNode implements Node {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(PlannerNode.class);
+    private static final ObjectMapper ROUTE_OBJECT_MAPPER = new ObjectMapper();
 
     public static final String REPOSITORY_ID_KEY = "planner.repositoryId";
     public static final String USER_ID_KEY = "planner.userId";
@@ -128,6 +136,12 @@ public final class PlannerNode implements Node {
                     .withVariable(ROUTE_KEY, AGENT_ROUTE)
                     .withTraceEntry("planner");
         } catch (Exception exception) {
+            LOGGER.error(
+                    "Planner 节点执行失败 task={} route={} error={}",
+                    safeSummary(state.variables().get(TASK_KEY)),
+                    output.variables().get(ROUTE_KEY),
+                    exception.getMessage(),
+                    exception);
             return output
                     .withVariable(ERROR_KEY, stackTrace(exception))
                     .withVariable(ROUTE_KEY, FAILED_ROUTE)
@@ -180,12 +194,73 @@ public final class PlannerNode implements Node {
         if (!(message.content() instanceof ChatMessage.TextContent textContent)) {
             throw new IllegalStateException("任务路由模型响应 content 必须是 TextContent");
         }
-        String route = textContent.text().trim().toLowerCase(Locale.ROOT);
-        if (!CHAT_ROUTE.equals(route) && !AGENT_ROUTE.equals(route)) {
-            throw new IllegalStateException("任务路由模型必须精确返回 chat 或 agent");
+        String rawRoute = textContent.text();
+        String route = normalizeRoute(rawRoute).orElseGet(() -> {
+            LOGGER.warn(
+                    "任务路由模型输出无法规范化，安全回退 chat rawRoute={}",
+                    safeSummary(rawRoute));
+            return CHAT_ROUTE;
+        });
+        if (AGENT_ROUTE.equals(route) && !containsCodeActionMarker(task)) {
+            LOGGER.warn(
+                    "语义路由将无工具意图任务安全降级 chat task={}",
+                    safeSummary(task));
+            route = CHAT_ROUTE;
         }
         NodeExecutionContext.progress("语义任务分流完成: " + route);
         return route;
+    }
+
+    /** 将路由模型的受控格式归一化；无法证明时由调用方执行安全问答回退。 */
+    private Optional<String> normalizeRoute(String rawRoute) {
+        if (rawRoute == null || rawRoute.isBlank()) {
+            return Optional.empty();
+        }
+        String value = rawRoute.trim().toLowerCase(Locale.ROOT);
+        if (value.startsWith("```") && value.endsWith("```")) {
+            value = value.substring(3, value.length() - 3).trim();
+            if (value.startsWith("chat\n") || value.startsWith("agent\n")) {
+                value = value.substring(value.indexOf('\n') + 1).trim();
+            }
+        }
+        if (value.startsWith("{") && value.endsWith("}")) {
+            try {
+                JsonNode routeNode = ROUTE_OBJECT_MAPPER.readTree(value).get("route");
+                if (routeNode != null && routeNode.isTextual()) {
+                    value = routeNode.textValue().trim().toLowerCase(Locale.ROOT);
+                }
+            } catch (Exception exception) {
+                return Optional.empty();
+            }
+        }
+        if (CHAT_ROUTE.equals(value) || AGENT_ROUTE.equals(value)) {
+            return Optional.of(value);
+        }
+        boolean startsWithRoute = value.matches("^(chat|agent)(?:\\s|[,:;，；。.!！？].*)+.*$");
+        if (!startsWithRoute) {
+            return Optional.empty();
+        }
+        String route = value.startsWith(CHAT_ROUTE) ? CHAT_ROUTE : AGENT_ROUTE;
+        String remainder = value.substring(route.length());
+        if (remainder.contains(CHAT_ROUTE) || remainder.contains(AGENT_ROUTE)) {
+            return Optional.empty();
+        }
+        return Optional.of(route);
+    }
+
+    private String safeSummary(String value) {
+        if (value == null) {
+            return "";
+        }
+        String compact = value.replaceAll("\\s+", " ").trim();
+        return compact.length() <= 160 ? compact : compact.substring(0, 160) + "…";
+    }
+
+    private boolean containsCodeActionMarker(String task) {
+        String normalized = task.toLowerCase(Locale.ROOT);
+        return CODE_ACTION_MARKERS.stream()
+                .map(marker -> marker.toLowerCase(Locale.ROOT))
+                .anyMatch(normalized::contains);
     }
 
     private List<ChatMessage> conversationMessages(

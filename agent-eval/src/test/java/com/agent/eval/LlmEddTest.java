@@ -1,0 +1,233 @@
+package com.agent.eval;
+
+import com.agent.core.engine.AgentState;
+import com.agent.core.llm.LlmClient;
+import com.agent.core.llm.ChatMessage;
+import com.agent.core.llm.ModelEndpoint;
+import com.agent.core.llm.ModelRouter;
+import com.agent.core.llm.TaskType;
+import com.agent.core.memory.MemoryContext;
+import com.agent.core.nodes.PlannerNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.web.client.RestClient;
+
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/** 使用真实 OpenAI 兼容端点执行预设对话 EDD。默认不启用，避免普通构建依赖外部服务。 */
+@Tag("edd")
+class LlmEddTest {
+
+    @Test
+    void evaluatesConversationRoutesAndWritesAuditReport() throws Exception {
+        if (!Boolean.parseBoolean(System.getenv().getOrDefault("AGENT_LLM_ENABLED", "false"))) {
+            return;
+        }
+        EddConfiguration configuration = EddConfiguration.fromEnvironment();
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        RestClient restClient = RestClient.builder()
+                .baseUrl(configuration.baseUrl())
+                .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + configuration.apiKey())
+                .build();
+        try (LlmClient client = new LlmClient(
+                restClient,
+                objectMapper,
+                configuration.chatCompletionsPath(),
+                configuration.baseUrl() + configuration.chatCompletionsPath())) {
+            ModelRouter router = router(configuration, client);
+            List<EddScenario> scenarios = List.of(
+                    new EddScenario("model.identity", "你是什么模型", false,
+                            response -> !response.isBlank()),
+                    new EddScenario("travel.without.car",
+                            "我在江西新余高新区，没有车只有电瓶车，请规划明天一日游", false,
+                            response -> response.contains("新余") || response.contains("电瓶车")),
+                    new EddScenario("weather.followup", "按天气规划", false,
+                            List.of(
+                                    ChatMessage.user("我在江西新余高新区，没有车只有电瓶车"),
+                                    ChatMessage.assistant("可以围绕仙女湖和仰天岗安排一日游。")),
+                            response -> !response.isBlank()),
+                    new EddScenario("code.intent", "请修改 src/main/App.java 并运行测试", true,
+                            response -> !response.isBlank()));
+            List<EddScenarioResult> results = scenarios.stream()
+                    .map(scenario -> executeScenario(scenario, router))
+                    .toList();
+            writeReport(configuration, results, objectMapper);
+            assertThat(results).allSatisfy(result -> assertThat(result.passed())
+                    .as(result.id() + " EDD 失败: " + result.error())
+                    .isTrue());
+        }
+    }
+
+    private EddScenarioResult executeScenario(EddScenario scenario, ModelRouter router) {
+        Instant started = Instant.now();
+        try {
+            PlannerNode node = new PlannerNode(
+                    router,
+                    ignored -> new MemoryContext("", 0),
+                    5);
+            AgentState state = new AgentState(scenario.history(), Map.of(PlannerNode.TASK_KEY,
+                    scenario.prompt()), List.of())
+                    .withVariable(PlannerNode.TASK_KEY, scenario.prompt());
+            if (scenario.expectedAgent()) {
+                state = state
+                        .withVariable(PlannerNode.REPOSITORY_ID_KEY, "edd-repository")
+                        .withVariable(PlannerNode.USER_ID_KEY, "edd-user");
+            }
+            AgentState result = node.execute(state);
+            String route = result.variables().get(PlannerNode.ROUTE_KEY);
+            String response = scenario.expectedAgent()
+                    ? result.variables().getOrDefault(PlannerNode.PLAN_KEY, "")
+                    : result.variables().getOrDefault(PlannerNode.FINAL_RESPONSE_KEY, "");
+            boolean passed = scenario.expectedAgent() ? PlannerNode.AGENT_ROUTE.equals(route)
+                    : PlannerNode.CHAT_ROUTE.equals(route);
+            passed = passed && scenario.responseGate().test(response)
+                    && !result.variables().containsKey(PlannerNode.ERROR_KEY);
+            return new EddScenarioResult(
+                    scenario.id(), passed, route, responsePreview(response),
+                    Duration.between(started, Instant.now()).toMillis(), "");
+        } catch (Throwable throwable) {
+            return new EddScenarioResult(
+                    scenario.id(), false, "", "",
+                    Duration.between(started, Instant.now()).toMillis(), stackTrace(throwable));
+        }
+    }
+
+    private void writeReport(
+            EddConfiguration configuration,
+            List<EddScenarioResult> results,
+            ObjectMapper objectMapper) {
+        try {
+            Path directory = Path.of("target", "edd");
+            Files.createDirectories(directory);
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(
+                    directory.resolve("llm-edd-" + Instant.now().toEpochMilli() + ".json").toFile(),
+                    new EddReport(configuration.baseUrl(), Instant.now(), results));
+        } catch (Exception exception) {
+            throw new IllegalStateException("写入 LLM EDD 报告失败", exception);
+        }
+    }
+
+    private ModelRouter router(EddConfiguration configuration, LlmClient client) {
+        EnumMap<TaskType, List<ModelEndpoint>> routes = new EnumMap<>(TaskType.class);
+        for (TaskType taskType : TaskType.values()) {
+            routes.put(taskType, List.of(
+                    endpoint(taskType.name().toLowerCase() + "-primary",
+                            modelFor(taskType, configuration), client),
+                    endpoint(taskType.name().toLowerCase() + "-fallback",
+                            configuration.fallbackModel(), client)));
+        }
+        return new ModelRouter(routes);
+    }
+
+    private String modelFor(TaskType taskType, EddConfiguration configuration) {
+        return switch (taskType) {
+            case CODE -> configuration.codeModel();
+            case VISION -> configuration.visionModel();
+            case QUICK_CLASSIFICATION -> configuration.quickClassificationModel();
+        };
+    }
+
+    private ModelEndpoint endpoint(String name, String model, LlmClient client) {
+        return new ModelEndpoint(name, model, client, CircuitBreaker.ofDefaults(name));
+    }
+
+    private String responsePreview(String response) {
+        if (response == null) {
+            return "";
+        }
+        String compact = response.replaceAll("\\s+", " ").trim();
+        return compact.length() <= 500 ? compact : compact.substring(0, 500) + "…";
+    }
+
+    private static String stackTrace(Throwable throwable) {
+        StringWriter writer = new StringWriter();
+        throwable.printStackTrace(new PrintWriter(writer));
+        return writer.toString();
+    }
+
+    private record EddScenario(
+            String id,
+            String prompt,
+            boolean expectedAgent,
+            List<ChatMessage> history,
+            java.util.function.Predicate<String> responseGate) {
+
+        private EddScenario(
+                String id,
+                String prompt,
+                boolean expectedAgent,
+                java.util.function.Predicate<String> responseGate) {
+            this(id, prompt, expectedAgent, List.of(), responseGate);
+        }
+
+        private EddScenario {
+            Objects.requireNonNull(id, "id 不能为空");
+            Objects.requireNonNull(prompt, "prompt 不能为空");
+            history = List.copyOf(Objects.requireNonNull(history, "history 不能为空"));
+            Objects.requireNonNull(responseGate, "responseGate 不能为空");
+        }
+    }
+
+    private record EddScenarioResult(
+            String id,
+            boolean passed,
+            String route,
+            String responsePreview,
+            long durationMs,
+            String error) {
+    }
+
+    private record EddReport(
+            String endpoint,
+            Instant generatedAt,
+            List<EddScenarioResult> scenarios) {
+    }
+
+    private record EddConfiguration(
+            String baseUrl,
+            String apiKey,
+            String chatCompletionsPath,
+            String codeModel,
+            String visionModel,
+            String quickClassificationModel,
+            String fallbackModel) {
+
+        private static EddConfiguration fromEnvironment() {
+            return new EddConfiguration(
+                    required("AGENT_LLM_BASE_URL"),
+                    required("AGENT_LLM_API_KEY"),
+                    valueOrDefault("AGENT_LLM_CHAT_COMPLETIONS_PATH", "/v1/chat/completions"),
+                    required("AGENT_LLM_CODE_MODEL"),
+                    required("AGENT_LLM_VISION_MODEL"),
+                    required("AGENT_LLM_QUICK_CLASSIFICATION_MODEL"),
+                    required("AGENT_LLM_FALLBACK_MODEL"));
+        }
+
+        private static String required(String name) {
+            String value = System.getenv(name);
+            if (value == null || value.isBlank()) {
+                throw new IllegalStateException(name + " 未配置");
+            }
+            return value.trim();
+        }
+
+        private static String valueOrDefault(String name, String defaultValue) {
+            String value = System.getenv(name);
+            return value == null || value.isBlank() ? defaultValue : value.trim();
+        }
+    }
+}
