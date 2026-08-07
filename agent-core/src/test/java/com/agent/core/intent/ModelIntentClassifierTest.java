@@ -31,6 +31,22 @@ class ModelIntentClassifierTest {
     }
 
     @Test
+    void routesDirectQuestionWithoutSemanticModelCall() {
+        ModelIntentClassifier classifier = classifier(messages -> {
+            throw new AssertionError("明确问答不应调用语义模型");
+        });
+
+        TaskDecision decision = classifier.classify(List.of(), "你是什么模型");
+
+        assertThat(decision).isEqualTo(new TaskDecision(
+                TaskRoute.CHAT,
+                TaskKind.CHAT,
+                TaskComplexity.SIMPLE,
+                Set.of(),
+                "检测到明确自然语言问答"));
+    }
+
+    @Test
     void parsesExactSemanticDecisionJson() {
         ModelIntentClassifier classifier = classifier(messages -> """
                 {"route":"CHAT","taskKind":"CHAT","complexity":"SIMPLE",

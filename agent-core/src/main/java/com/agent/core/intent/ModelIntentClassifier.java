@@ -57,6 +57,10 @@ public final class ModelIntentClassifier implements IntentClassifier {
         if (fastDecision != null) {
             return fastDecision;
         }
+        TaskDecision questionDecision = classifyDirectQuestion(task);
+        if (questionDecision != null) {
+            return questionDecision;
+        }
         RenderedPrompt prompt = promptCatalog.render(
                 ROUTE_PROMPT_NAME, ROUTE_PROMPT_VERSION, java.util.Map.of("task", task));
         List<ChatMessage> messages = new ArrayList<>(exactHistory.size() + 2);
@@ -101,6 +105,30 @@ public final class ModelIntentClassifier implements IntentClassifier {
                 complexity,
                 capabilities,
                 "检测到明确执行动作");
+    }
+
+    private TaskDecision classifyDirectQuestion(String task) {
+        String normalized = task.toLowerCase(Locale.ROOT);
+        boolean question = task.endsWith("?")
+                || task.endsWith("？")
+                || normalized.startsWith("what ")
+                || normalized.startsWith("why ")
+                || normalized.startsWith("how ")
+                || task.startsWith("你是什么")
+                || task.startsWith("什么是")
+                || task.startsWith("为什么")
+                || task.startsWith("如何")
+                || task.startsWith("请解释")
+                || task.startsWith("介绍");
+        if (!question) {
+            return null;
+        }
+        return new TaskDecision(
+                TaskRoute.CHAT,
+                TaskKind.CHAT,
+                TaskComplexity.SIMPLE,
+                Set.of(),
+                "检测到明确自然语言问答");
     }
 
     private TaskDecision parseOrFallback(String response) {
