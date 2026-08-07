@@ -1171,3 +1171,78 @@ EDD 使用真实 OpenAI 兼容端点验证四条预设对话，记录路由、�
 `PlannerNodeTest` 的路由格式回归用例、`LlmEddTest`（显式 `AGENT_LLM_ENABLED=true`）、
 `docs/superpowers/specs/2026-08-07-edd-observability-design.md`、真实 EDD JSON 报告以及两份
 Compose 的 `config --quiet` 校验。
+
+## 第二篇 2A 补充：Prompt、Context 与 Intent 边界
+
+### 【问题现象】Prompt 散落在节点代码中，无法审计版本和变量来源
+
+Planner 的系统提示、路由提示和回答提示曾直接写在方法体内。提示词一旦调整，无法回答
+“本次 Run 使用了哪一版指令”，也无法复现同一输入的模型行为。
+
+### 【根因分析】
+
+Prompt 被当作普通字符串，而不是 Agent 运行协议的一部分；静态指令、动态变量和模型输入
+没有明确边界，节点状态也没有记录指纹。
+
+### 【解决方案/代码级实现】
+
+`PromptTemplate`、`RenderedPrompt` 与 `PromptCatalog` 将 Prompt 按精确名称和版本注册，
+静态内容与动态变量分区渲染，并以 SHA-256 生成稳定指纹。缺失变量、重复注册和未知版本
+都立即失败；Planner 将路由和回答 Prompt 的名称、版本及指纹写入状态，审计可沿
+`runId/traceId` 重放确切输入。
+
+### 【问题现象】用字符数限制上下文，模型仍可能因 token 超预算失败
+
+不同语言、代码和 JSON 的 token 密度不同，固定字符上限不能代表模型上下文窗口；简单截断
+还可能丢掉系统约束、当前问题或最新工具错误。
+
+### 【根因分析】
+
+上下文预算被错误地当成字符串长度问题，且没有为摘要和关键消息保留硬预算。
+
+### 【解决方案/代码级实现】
+
+`ContextWindowManager` 通过 `TokenEstimator` 计算估算 token，按系统消息、当前用户消息、
+最新工具错误和最近历史的固定优先级构造窗口，并为摘要预留预算。超限时返回明确的
+`ContextWindow` 元数据（估算 token、丢弃消息数、是否摘要），使 Planner 能把上下文决策
+写入状态和 Trace，而不是静默丢消息。
+
+### 【问题现象】自由文本路由把连续追问误送入代码链
+
+用户先问“你是什么模型”，再追问“按天气规划”，旧 Planner 可能要求模型精确输出
+`chat`/`agent`，一旦模型附带解释就抛异常；或者把没有代码动作的自然语言误判为 Agent，
+随后 Coder/Ops 因缺少工作区或命令失败。
+
+### 【根因分析】
+
+路由协议是离散枚举，却直接消费不可信自然语言；同时路由没有把任务类型、复杂度和所需
+能力作为结构化决策，连续对话上下文也没有安全的聊天快路径。
+
+### 【解决方案/代码级实现】
+
+`TaskRoute`、`TaskKind`、`TaskComplexity`、`RequiredCapability` 和 `TaskDecision` 组成
+强类型意图协议。明确动作词优先进入 Agent；直接问答走无副作用 Chat 快路径；语义路由只
+接受五字段 JSON，格式错误或无代码动作的 `agent` 结果安全回退 Chat。Chat 直接写入
+`final_response` 并结束图，避免无关的 Coder/Ops 执行。
+
+### 【问题现象】旧动作词遗漏导致真实代码任务没有进入 Coder
+
+生产集成中“把 value.txt 改成 after 并验证”被当成聊天，因为新增动作词集合遗漏了中文
+动作词“改”；任务没有修改文件，失败原因直到端到端测试才暴露。
+
+### 【根因分析】
+
+快路由词表属于兼容性协议，重构时只按新示例补词，未对照旧 Planner 的精确动作标记和真实
+任务集建立回归矩阵。
+
+### 【解决方案/代码级实现】
+
+保留旧动作标记并增加回归测试，动作词识别结果在 Planner 测试和真实
+Planner -> Coder -> Ops -> Reviewer 集成测试中验证。代码任务必须实际产生
+`coder.updatedFiles`，不能仅凭路由字段判定成功。
+
+### 【证据】
+
+`PromptCatalogTest`（版本、变量和指纹）、`ContextWindowManagerTest`（预算与保留策略）、
+`ModelIntentClassifierTest`（严格协议与安全回退）、`PlannerNodeTest`（聊天快路径、旧动作词
+和错误堆栈）、生产图集成测试（真实文件修改）及本轮模块全量测试共同构成 2A 的验证证据。
