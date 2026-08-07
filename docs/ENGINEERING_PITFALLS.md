@@ -1032,6 +1032,39 @@ Reviewer 和 Trace 均可见。真实网关在修正重复 /v1 后仍对已列�
 
 ## 本轮补充：可观测问答闭环与有界执行
 
+## 本轮补充：会话持久化、工作区边界与 Run 投影
+
+### 【问题现象】刷新页面或发送第二个问题后，上一次对话消失
+
+早期工作台只持有当前 Run 的 React 状态。页面重新加载后只恢复一个 Run 快照，无法找到
+用户、项目工作区和历史轮次；浏览器若把 `userId` 放在请求体中，还会让客户端伪造身份。
+
+### 【根因分析】
+
+Run 是一次执行，不是对话本身。把两者混用会导致“执行证据存在但聊天记忆不存在”，也无法
+定义工作区权限。仅依赖 `localStorage` 又无法提供跨设备一致性、并发写入裁决和服务端审计。
+
+### 【解决方案/代码级实现】
+
+PostgreSQL 新增 `agent_users`、`agent_workspaces`、`agent_workspace_members`、
+`agent_conversations` 和 `agent_conversation_turns`。会话以 `(user, workspace)` 为边界，
+成员权限精确分为 `VIEWER`、`OPERATOR`、`OWNER`；工作区路径在真实目录和配置根目录内校验。
+轮次通过 `PENDING -> RUNNING -> COMPLETED/FAILED` 状态机、唯一活动轮次和行锁保证顺序，
+首轮标题由服务端生成。浏览器只传 `content`/`reviewerUrl`，身份从 `ActorResolver` 获取。
+
+`ConversationContextProvider` 只向 Planner 注入最近 20 个已完成轮次且不超过 32,000 个 Java
+字符，并始终按用户/助手成对截断。`ConversationRunProjector` 监听 Run 终态事件，把
+`final_response`、`reviewer.feedback`、`reviewer.summary` 或 `planner.response` 投影回当前
+轮次；重复终态事件幂等处理，Run 启动异常保留完整堆栈。前端 URL 保存会话 ID，刷新时重新读取
+服务端 turns；Run 仍负责 Trace、终端、Diff 和审批证据，二者不再互相替代。
+
+### 【证据】
+
+`JdbcConversationRepositoryIntegrationTest` 覆盖成员隔离、禁用用户、两轮顺序、并发活动轮次、
+归档冲突和 Unicode 标题截断；`ConversationControllerTest` 覆盖严格 JSON 字段与错误映射；
+`conversationApi.test.ts`、`useConversationWorkspace.test.tsx` 和 `Workbench.test.tsx` 覆盖
+浏览器身份、工作区切换、刷新恢复、历史轮次提交和 Run 跟随连接。
+
 ### 【问题现象】简单问题误入代码链
 
 用户只询问模型身份或架构说明时，流程仍然进入 Coder/Ops，最终因为缺少

@@ -150,6 +150,37 @@ Production graph IDs are the exact names of registered `GraphFactory` beans. Doc
 the production `code-agent` graph by default. The deterministic `demo-agent` graph remains
 available for protocol debugging; the task-first endpoint is POST /api/runs/code-agent.
 
+### Persistent conversations
+
+The web workbench is conversation-first. On first load it resolves the configured identity, lists
+the workspaces that identity can access, and restores `conversationId` from the URL. A conversation
+belongs to exactly one workspace; its turns and the associated Run checkpoints are persisted in
+PostgreSQL, so a browser refresh or a later visit does not discard context.
+
+Use the sidebar to select a workspace, search or archive a conversation, and create a new one. Send
+the first message from the composer; every later message is submitted to the same conversation and
+the Planner receives the bounded completed-turn history. The response stays linked to its Run, so
+Trace, ANSI terminal output, Diff, Reviewer evidence and HITL approval remain available beside the
+chat. The browser never sends `userId`; identity and workspace permission come from the server.
+
+Conversation endpoints:
+
+```text
+GET  /api/identity
+GET  /api/workspaces
+POST /api/workspaces
+GET  /api/workspaces/{workspaceId}/conversations?query=...
+POST /api/workspaces/{workspaceId}/conversations
+GET  /api/conversations/{conversationId}
+GET  /api/conversations/{conversationId}/turns
+POST /api/conversations/{conversationId}/turns
+POST /api/conversations/{conversationId}/archive
+```
+
+The service rejects cross-workspace access, disabled users, archived conversation writes and
+concurrent active turns. PostgreSQL is the source of truth; WebSocket and SSE streams are delivery
+channels only.
+
 ## Configuration
 
 [`.env.example`](.env.example) is the safe, committed template. Copy it to `.env` for local Compose use. The application currently binds these groups:
