@@ -121,6 +121,33 @@ class RagKnowledgeContextProviderTest {
     }
 
     @Test
+    void recordsAllRagStagesWhenProjectRulesConsumeTheRemainingBudget() throws Exception {
+        Path root = workspace("rules");
+        TokenEstimator estimator = message -> 5;
+        RagKnowledgeContextProvider provider = provider(
+                estimator,
+                pipeline(query -> {
+                    throw new AssertionError("预算耗尽时不应调用基础 RAG");
+                }, (query, limit) -> List.of()),
+                true);
+
+        KnowledgeContext context = provider.load(request(root, "query", 5));
+
+        assertThat(context.evidence()).extracting(item -> item.source())
+                .containsSubsequence(
+                        "QUERY_REWRITE",
+                        "HYDE",
+                        "BASELINE_RETRIEVAL",
+                        "FUSION",
+                        "RERANK",
+                        "TOKEN_BUDGET");
+        assertThat(context.evidence()).filteredOn(item ->
+                        item.kind() == KnowledgeEvidenceKind.RAG_STAGE)
+                .allSatisfy(item -> assertThat(item.status())
+                        .isEqualTo(KnowledgeEvidenceStatus.SKIPPED));
+    }
+
+    @Test
     void fallsBackToProjectRulesOnBaseRagFailureOnlyWhenNonStrict() throws Exception {
         Path root = workspace("rules");
         IllegalArgumentException failure = new IllegalArgumentException("database unavailable");

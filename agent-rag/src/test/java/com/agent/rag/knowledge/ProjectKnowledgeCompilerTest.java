@@ -72,6 +72,16 @@ class ProjectKnowledgeCompilerTest {
     }
 
     @Test
+    void requiresRootAgentsAsTheMandatoryProjectRule() throws IOException {
+        Path root = Files.createDirectory(tempDir.resolve("missing-root-agents"));
+        Files.writeString(root.resolve("SOUL.md"), "optional", StandardCharsets.UTF_8);
+
+        assertThatThrownBy(() -> compiler().compile(root, root, 1_000))
+                .isInstanceOf(ProjectKnowledgeException.class)
+                .hasMessageContaining("AGENTS.md");
+    }
+
+    @Test
     void rejectsInvalidUtf8AndPreservesDecoderCause() throws IOException {
         Path root = Files.createDirectory(tempDir.resolve("repo"));
         Files.write(root.resolve("AGENTS.md"), new byte[] {(byte) 0xC3, 0x28});
@@ -184,6 +194,21 @@ class ProjectKnowledgeCompilerTest {
         ProjectKnowledgeContext changed = compiler.compile(root, root, 1_000);
         assertThat(changed).isNotSameAs(first);
         assertThat(changed.fingerprint()).isNotEqualTo(first.fingerprint());
+    }
+
+    @Test
+    void cacheKeyUsesExactActivePathEvenWhenFilesShareOneDirectory() throws IOException {
+        Path root = Files.createDirectory(tempDir.resolve("active-path-cache"));
+        Path firstFile = Files.writeString(root.resolve("First.java"), "class First {}", StandardCharsets.UTF_8);
+        Path secondFile = Files.writeString(root.resolve("Second.java"), "class Second {}", StandardCharsets.UTF_8);
+        Files.writeString(root.resolve("AGENTS.md"), "rules", StandardCharsets.UTF_8);
+        ProjectKnowledgeCompiler compiler = compiler();
+
+        ProjectKnowledgeContext first = compiler.compile(root, firstFile, 1_000);
+        ProjectKnowledgeContext second = compiler.compile(root, secondFile, 1_000);
+
+        assertThat(second).isNotSameAs(first);
+        assertThat(second).isEqualTo(first);
     }
 
     private ProjectKnowledgeCompiler compiler() {

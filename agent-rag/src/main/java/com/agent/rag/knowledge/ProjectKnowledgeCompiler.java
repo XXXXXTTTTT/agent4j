@@ -37,7 +37,7 @@ public final class ProjectKnowledgeCompiler {
     }
 
     /** 加载根目录至 activePath 的完整项目知识文件。 */
-    public ProjectKnowledgeContext compile(
+    public synchronized ProjectKnowledgeContext compile(
             Path workspaceRoot,
             Path activePath,
             int maxTokens) {
@@ -61,11 +61,17 @@ public final class ProjectKnowledgeCompiler {
             }
             List<Path> directories = hierarchy(realRoot, activeDirectory);
             List<LoadedSource> loaded = loadSources(realRoot, directories);
+            boolean hasRootAgents = loaded.stream()
+                    .anyMatch(source -> source.metadata().fileType() == KnowledgeFileType.AGENTS
+                            && source.metadata().depth() == 0);
+            if (!hasRootAgents) {
+                throw new ProjectKnowledgeException("缺少根 AGENTS.md 项目规则文件");
+            }
             List<KnowledgeSource> discoveredSources = loaded.stream()
                     .map(LoadedSource::metadata)
                     .toList();
             String discoveredFingerprint = fingerprint(discoveredSources);
-            CacheKey key = new CacheKey(realRoot, activeDirectory, maxTokens);
+            CacheKey key = new CacheKey(realRoot, realActive, maxTokens);
             CacheEntry cached = cache.get(key);
             if (cached != null && cached.discoveredFingerprint().equals(discoveredFingerprint)) {
                 return cached.context();
@@ -302,7 +308,7 @@ public final class ProjectKnowledgeCompiler {
     private record LoadedSource(KnowledgeSource metadata, String content) {
     }
 
-    private record CacheKey(Path workspaceRoot, Path activeDirectory, int maxTokens) {
+    private record CacheKey(Path workspaceRoot, Path activePath, int maxTokens) {
     }
 
     private record CacheEntry(String discoveredFingerprint, ProjectKnowledgeContext context) {

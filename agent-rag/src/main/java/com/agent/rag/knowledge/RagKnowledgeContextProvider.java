@@ -14,6 +14,7 @@ import com.agent.rag.pipeline.RagRetrievalPipeline;
 import com.agent.rag.pipeline.RagRetrievalPolicy;
 import com.agent.rag.pipeline.RagRetrievalRequest;
 import com.agent.rag.pipeline.RagRetrievalResult;
+import com.agent.rag.pipeline.RagStage;
 import com.agent.rag.pipeline.RagStageEvidence;
 import com.agent.rag.pipeline.RagStageStatus;
 
@@ -84,12 +85,15 @@ public final class RagKnowledgeContextProvider implements KnowledgeContextProvid
 
         int remainingTokens = request.maxTokens() - project.estimatedTokens();
         if (remainingTokens <= 0) {
-            evidence.add(new KnowledgeEvidence(
-                    KnowledgeEvidenceKind.RAG_STAGE,
-                    "RAG_PIPELINE",
-                    KnowledgeEvidenceStatus.SKIPPED,
-                    "项目规则已占用全部 token 预算",
-                    null));
+            for (RagStage stage : RagStage.values()) {
+                evidence.add(new KnowledgeEvidence(
+                        KnowledgeEvidenceKind.RAG_STAGE,
+                        stage.name(),
+                        KnowledgeEvidenceStatus.SKIPPED,
+                        "项目规则已占用全部 token 预算",
+                        null));
+            }
+            NodeExecutionContext.progress("RAG 检索完成: 0 个代码证据");
             return buildContext(project, List.of(), evidence, request.maxTokens());
         }
 
