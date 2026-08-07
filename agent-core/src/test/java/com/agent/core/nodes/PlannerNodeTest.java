@@ -409,6 +409,36 @@ class PlannerNodeTest {
         assertThat(result.trace()).containsExactly("planner");
     }
 
+    @Test
+    void recordsTypedIntentPromptAndContextEvidenceForChat() {
+        Endpoint endpoint = endpoint();
+        endpoint.server().expect(once(), requestTo(endpoint.baseUrl() + PATH))
+                .andRespond(withSuccess("""
+                        {"id":"answer-response","object":"chat.completion","created":1,
+                         "model":"planner-model","choices":[{"index":0,
+                         "message":{"role":"assistant","content":"我是一个 AI 助手。"},
+                         "finish_reason":"stop"}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        PlannerNode node = new PlannerNode(
+                router(endpoint), request -> new MemoryContext("", 0), 7);
+
+        AgentState result = node.execute(AgentState.empty()
+                .withVariable(PlannerNode.TASK_KEY, "你是什么模型"));
+
+        assertThat(result.variables())
+                .containsEntry("planner.taskKind", "CHAT")
+                .containsEntry("planner.complexity", "SIMPLE")
+                .containsEntry("planner.requiredCapabilities", "")
+                .containsKey("planner.routeReason")
+                .containsEntry("planner.responsePromptName", "planner.chat")
+                .containsEntry("planner.responsePromptVersion", "1")
+                .containsKey("planner.responsePromptFingerprint")
+                .containsKey("planner.contextEstimatedTokens")
+                .containsKey("planner.contextDroppedMessages")
+                .containsEntry("planner.contextSummarized", "false");
+    }
+
     private ModelRouter router(Endpoint endpoint) {
         Map<TaskType, List<ModelEndpoint>> routes = new EnumMap<>(TaskType.class);
         for (TaskType type : TaskType.values()) {
