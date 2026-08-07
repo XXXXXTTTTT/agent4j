@@ -454,7 +454,11 @@ public final class JdbcConversationRepository implements WorkspaceRepository, Co
     @Override
     public Optional<ConversationTurnRecord> findTurnByRunId(UUID runId) {
         Objects.requireNonNull(runId, "runId 不能为空");
-        return jdbcClient.sql(turnSelect() + """
+        return jdbcClient.sql("""
+                select turn.turn_id, turn.conversation_id, turn.turn_index, turn.user_content,
+                       turn.assistant_content, turn.run_id, turn.status, turn.error,
+                       turn.created_at, turn.completed_at
+                from agent_conversation_turns turn
                 where turn.run_id = :runId
                 """)
                 .param("runId", runId)

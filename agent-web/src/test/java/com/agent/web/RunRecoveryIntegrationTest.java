@@ -76,7 +76,9 @@ class RunRecoveryIntegrationTest {
         DataSource dataSource = dataSource();
         Flyway.configure().dataSource(dataSource).load().migrate();
         jdbcClient = JdbcClient.create(dataSource);
-        jdbcClient.sql("truncate table agent_checkpoints, agent_runs").update();
+        jdbcClient.sql("""
+                truncate table agent_conversation_turns, agent_checkpoints, agent_runs
+                """).update();
         checkpointer = new JdbcCheckpointer(
                 jdbcClient,
                 new TransactionTemplate(new DataSourceTransactionManager(dataSource)),

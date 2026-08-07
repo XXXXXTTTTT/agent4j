@@ -24,6 +24,7 @@ import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 /**
  * 基于虚拟线程驱动持久化 Run 生命周期。
@@ -68,9 +69,25 @@ public final class AgentRunService implements AutoCloseable {
      * @return 版本 0 快照
      */
     public RunCheckpoint start(String graphId, AgentState initialState) {
+        return start(graphId, initialState, checkpoint -> { });
+    }
+
+    /**
+     * 创建 Run，在调度虚拟线程前同步完成外部身份绑定。
+     *
+     * @param graphId 图标识
+     * @param initialState 初始不可变状态
+     * @param beforeDispatch 调度前同步回调
+     * @return 版本 0 快照
+     */
+    public RunCheckpoint start(
+            String graphId,
+            AgentState initialState,
+            Consumer<RunCheckpoint> beforeDispatch) {
         ensureOpen();
         requireText(graphId, "graphId");
         Objects.requireNonNull(initialState, "initialState 不能为空");
+        Objects.requireNonNull(beforeDispatch, "beforeDispatch 不能为空");
 
         StateGraph graph = graphRegistry.create(graphId);
         RunCheckpoint created;
@@ -79,6 +96,13 @@ public final class AgentRunService implements AutoCloseable {
                     UUID.randomUUID(), graphId, initialState, graph.entryPoint());
         } catch (RuntimeException exception) {
             graph.close();
+            throw exception;
+        }
+        try {
+            beforeDispatch.accept(created);
+        } catch (RuntimeException exception) {
+            graph.close();
+            storeFailure(created, exception);
             throw exception;
         }
         dispatch(created, false, graph);

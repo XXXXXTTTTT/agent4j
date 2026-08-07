@@ -9,6 +9,7 @@ import com.agent.web.identity.ActorResolver;
 import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspacePermission;
 import com.agent.web.workspace.WorkspaceRecord;
+import com.agent.web.validation.ReviewerUrlValidator;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -17,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** 绑定用户和工作区的会话应用服务。 */
 public final class ConversationService {
@@ -88,6 +90,7 @@ public final class ConversationService {
             String reviewerUrl) {
         Actor actor = actorResolver.current();
         requireText(content, "content");
+        String exactReviewerUrl = ReviewerUrlValidator.validateOptional(reviewerUrl);
         ConversationRecord conversation = repository.findConversation(conversationId, actor.userId())
                 .orElseThrow(() -> new ConversationNotFoundException(conversationId));
         WorkspaceRecord workspace = workspaceAccess.requireWorkspace(
@@ -113,11 +116,14 @@ public final class ConversationService {
                             "conversation.id", conversation.conversationId().toString(),
                             "conversation.turnId", pending.turnId().toString()),
                     List.of());
-            if (reviewerUrl != null && !reviewerUrl.isBlank()) {
-                state = state.withVariable("reviewer.url", reviewerUrl);
+            if (!exactReviewerUrl.isBlank()) {
+                state = state.withVariable("reviewer.url", exactReviewerUrl);
             }
-            RunCheckpoint started = runStarter.start(GRAPH_ID, state);
-            return repository.markTurnRunning(pending.turnId(), started.runId(), clock.instant());
+            AtomicReference<ConversationTurnRecord> running = new AtomicReference<>();
+            runStarter.start(GRAPH_ID, state, checkpoint -> running.set(
+                    repository.markTurnRunning(
+                            pending.turnId(), checkpoint.runId(), clock.instant())));
+            return Objects.requireNonNull(running.get(), "Run 启动前未绑定会话轮次");
         } catch (RuntimeException exception) {
             try {
                 repository.markTurnFailed(pending.turnId(), stackTrace(exception), clock.instant());
@@ -131,7 +137,9 @@ public final class ConversationService {
     /** 归档当前用户可操作的会话。 */
     public ConversationRecord archive(UUID conversationId) {
         Actor actor = actorResolver.current();
-        getConversation(conversationId);
+        ConversationRecord conversation = getConversation(conversationId);
+        workspaceAccess.requireWorkspace(
+                conversation.workspaceId(), actor.userId(), WorkspacePermission.OPERATOR);
         return repository.archiveConversation(conversationId, actor.userId(), clock.instant());
     }
 

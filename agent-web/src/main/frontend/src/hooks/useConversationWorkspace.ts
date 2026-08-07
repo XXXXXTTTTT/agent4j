@@ -96,6 +96,7 @@ export function useConversationWorkspace(
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<Error | null>(null)
   const operationRef = useRef(0)
+  const conversationListOperationRef = useRef(0)
 
   const activeWorkspace = workspaces.find((item) => item.workspaceId === activeWorkspaceId) ?? null
   const activeConversation = conversations.find((item) => item.conversationId === activeConversationId) ?? null
@@ -115,10 +116,12 @@ export function useConversationWorkspace(
     }
   }, [])
 
-  const loadWorkspaceConversations = useCallback(async (workspaceId: string, query = ''): Promise<Conversation[]> => {
+  const loadWorkspaceConversations = useCallback(async (workspaceId: string, query = ''): Promise<Conversation[] | null> => {
+    const operation = ++conversationListOperationRef.current
     const loaded = query.trim().length === 0
       ? await apiRef.current.listConversations(workspaceId)
       : await apiRef.current.searchConversations(workspaceId, query)
+    if (operation !== conversationListOperationRef.current) return null
     setConversations(loaded)
     return loaded
   }, [])
@@ -138,6 +141,7 @@ export function useConversationWorkspace(
     setLoading(true)
     try {
       const loaded = await loadWorkspaceConversations(exactId, searchQuery)
+      if (loaded === null) return
       setActiveWorkspaceId(exactId)
       const selected = loaded.find((item) => item.conversationId === activeConversationId) ?? loaded[0] ?? null
       setActiveConversationId(selected?.conversationId ?? null)
@@ -158,6 +162,7 @@ export function useConversationWorkspace(
     setError(null)
     try {
       const loaded = await loadWorkspaceConversations(activeWorkspaceId, searchQuery)
+      if (loaded === null) return
       const selected = loaded.find((item) => item.conversationId === activeConversationId) ?? loaded[0] ?? null
       setActiveConversationId(selected?.conversationId ?? null)
       writeConversationId(selected?.conversationId ?? null)

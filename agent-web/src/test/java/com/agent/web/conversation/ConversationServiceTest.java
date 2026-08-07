@@ -21,6 +21,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -121,7 +122,7 @@ class ConversationServiceTest {
                 repository, access, (id, userId, maxTurns, maxCharacters) ->
                         new ConversationContext(List.of(), 0, false),
                 () -> resolved,
-                (graphId, state) -> {
+                (graphId, state, beforeDispatch) -> {
                     throw new IllegalStateException("启动失败");
                 },
                 Clock.fixed(NOW, ZoneOffset.UTC));
@@ -131,15 +132,71 @@ class ConversationServiceTest {
         assertThat(repository.failedError).contains("启动失败");
     }
 
+    @Test
+    void viewerCannotArchiveConversation() {
+        Actor viewer = new Actor("viewer-user", "Viewer");
+        FakeConversationRepository repository = new FakeConversationRepository();
+        repository.conversation = new ConversationRecord(
+                CONVERSATION_ID, WORKSPACE_ID, "owner", "标题",
+                ConversationStatus.ACTIVE, NOW, NOW);
+        WorkspaceAccessService access = new WorkspaceAccessService(
+                new TestWorkspaceRepository(viewer, WorkspacePermission.VIEWER),
+                Path.of("D:/agent4j"), Clock.fixed(NOW, ZoneOffset.UTC));
+        ConversationService service = new ConversationService(
+                repository, access,
+                (id, userId, maxTurns, maxCharacters) ->
+                        new ConversationContext(List.of(), 0, false),
+                () -> viewer,
+                new CapturingStarter(),
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        assertThatThrownBy(() -> service.archive(CONVERSATION_ID))
+                .isInstanceOf(WorkspaceAccessService.WorkspaceAccessDeniedException.class);
+    }
+
+    @Test
+    void rejectsNonHttpReviewerUrlBeforeCreatingRun() {
+        Actor operator = new Actor("operator-user", "Operator");
+        FakeConversationRepository repository = new FakeConversationRepository();
+        repository.conversation = new ConversationRecord(
+                CONVERSATION_ID, WORKSPACE_ID, operator.userId(), "标题",
+                ConversationStatus.ACTIVE, NOW, NOW);
+        repository.pending = new ConversationTurnRecord(
+                UUID.randomUUID(), CONVERSATION_ID, 1, "问题", null, null,
+                ConversationTurnStatus.PENDING, null, NOW, null);
+        CapturingStarter starter = new CapturingStarter();
+        ConversationService service = new ConversationService(
+                repository,
+                new WorkspaceAccessService(
+                        new TestWorkspaceRepository(operator), Path.of("D:/agent4j"),
+                        Clock.fixed(NOW, ZoneOffset.UTC)),
+                (id, userId, maxTurns, maxCharacters) ->
+                        new ConversationContext(List.of(), 0, false),
+                () -> operator,
+                starter,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        assertThatThrownBy(() -> service.submitTurn(
+                CONVERSATION_ID, "问题", "file:///etc/passwd"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reviewerUrl");
+        assertThat(starter.state).isNull();
+    }
+
     private static final class CapturingStarter implements ConversationRunStarter {
         private AgentState state;
 
         @Override
-        public RunCheckpoint start(String graphId, AgentState initialState) {
+        public RunCheckpoint start(
+                String graphId,
+                AgentState initialState,
+                Consumer<RunCheckpoint> beforeDispatch) {
             state = initialState;
-            return new RunCheckpoint(
+            RunCheckpoint checkpoint = new RunCheckpoint(
                     UUID.randomUUID(), 0, graphId, RunStatus.RUNNING, initialState,
                     "planner", null, null, null, null, NOW);
+            beforeDispatch.accept(checkpoint);
+            return checkpoint;
         }
     }
 
@@ -196,9 +253,15 @@ class ConversationServiceTest {
 
     private static final class TestWorkspaceRepository implements WorkspaceRepository {
         private final Actor actor;
+        private final WorkspacePermission permission;
 
         private TestWorkspaceRepository(Actor actor) {
+            this(actor, WorkspacePermission.OPERATOR);
+        }
+
+        private TestWorkspaceRepository(Actor actor, WorkspacePermission permission) {
             this.actor = actor;
+            this.permission = permission;
         }
 
         @Override
@@ -206,7 +269,7 @@ class ConversationServiceTest {
             return workspaceId.equals(WORKSPACE_ID) && userId.equals(actor.userId())
                     ? Optional.of(new WorkspaceRecord(
                             WORKSPACE_ID, actor.userId(), "工作区", Path.of("D:/agent4j"),
-                            "repo-exact", WorkspacePermission.OPERATOR, NOW, NOW))
+                            "repo-exact", permission, NOW, NOW))
                     : Optional.empty();
         }
 

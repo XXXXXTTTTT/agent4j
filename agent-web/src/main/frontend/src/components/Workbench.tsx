@@ -38,12 +38,17 @@ const TABS: Array<{ id: WorkbenchTab; label: string; icon: typeof Code2 }> = [
 export function Workbench({ controller, onTerminalReady, conversation }: WorkbenchProps) {
   const [activeTab, setActiveTab] = useState<WorkbenchTab>('code')
   const [reviewOpened, setReviewOpened] = useState(false)
-  const diff = controller.run?.state.variables['coder.unifiedDiff']
-  const latestTrace = controller.traceEvents.at(-1)
+  const belongsToConversation = conversation === undefined
+    || controller.run === null
+    || conversation.turns.some((turn) => turn.runId === controller.run?.runId)
+  const run = belongsToConversation ? controller.run : null
+  const history = belongsToConversation ? controller.history : []
+  const traceEvents = belongsToConversation ? controller.traceEvents : []
+  const diff = run?.state.variables['coder.unifiedDiff']
+  const latestTrace = traceEvents.at(-1)
   const currentNode = latestTrace?.type === 'NODE_STARTED'
     ? latestTrace.nodeName
-    : controller.run?.nextNode ?? null
-  const run = controller.run
+    : run?.nextNode ?? null
 
   useEffect(() => {
     if (conversation === undefined || run === null) return
@@ -126,14 +131,16 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
             <div id="review-view" role="tabpanel" hidden={activeTab !== 'review'}>
               {reviewOpened ? (
                 <Suspense fallback={<div className="empty-tool-state">正在加载编辑器</div>}>
-                  <ReviewEvidencePanel run={controller.run} history={controller.history} />
+                  <ReviewEvidencePanel run={run} history={history} />
                 </Suspense>
               ) : null}
             </div>
             <div id="trace-view" role="tabpanel" hidden={activeTab !== 'trace'}>
               <TraceTimeline
-                events={controller.traceEvents}
-                connectionState={controller.connectionState}
+                events={traceEvents}
+                connectionState={belongsToConversation
+                  ? controller.connectionState
+                  : { trace: null, terminal: null }}
                 persistedNodes={run?.state.trace ?? []}
               />
             </div>

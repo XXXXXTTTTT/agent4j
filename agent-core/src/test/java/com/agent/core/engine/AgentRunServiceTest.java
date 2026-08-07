@@ -33,6 +33,31 @@ class AgentRunServiceTest {
     private static final Duration AWAIT_TIMEOUT = Duration.ofSeconds(5);
 
     @Test
+    void bindsCreatedCheckpointBeforeDispatchingGraph() {
+        InMemoryCheckpointer checkpointer = new InMemoryCheckpointer();
+        AtomicBoolean bound = new AtomicBoolean();
+        GraphRegistry registry = new GraphRegistry(Map.of("flow", () ->
+                new StateGraph(1)
+                        .addNode("done", state -> {
+                            assertThat(bound).isTrue();
+                            return state;
+                        })
+                        .addEdge("done", StateGraph.END)
+                        .setEntryPoint("done")));
+
+        try (AgentRunService service = new AgentRunService(
+                checkpointer, registry, event -> { })) {
+            RunCheckpoint started = service.start(
+                    "flow", AgentState.empty(), checkpoint -> bound.set(true));
+
+            assertThat(checkpointer.awaitStatus(
+                    started.runId(), RunStatus.COMPLETED, AWAIT_TIMEOUT).status())
+                    .isEqualTo(RunStatus.COMPLETED);
+            assertThat(bound).isTrue();
+        }
+    }
+
+    @Test
     void startsAndCompletesRunWithVersionedTraceAndClosedGraph() {
         InMemoryCheckpointer checkpointer = new InMemoryCheckpointer();
         List<TraceEvent> events = new CopyOnWriteArrayList<>();

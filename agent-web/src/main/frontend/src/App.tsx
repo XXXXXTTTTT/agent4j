@@ -15,9 +15,13 @@ export function App() {
   const conversation = useConversationWorkspace()
   const latestRunId = conversation.turns.at(-1)?.runId ?? null
   useEffect(() => {
-    if (latestRunId === null || controller.run?.runId === latestRunId) return
+    if (latestRunId === null) {
+      if (controller.run !== null) controller.clearRun()
+      return
+    }
+    if (controller.run?.runId === latestRunId) return
     void controller.followRun(latestRunId).catch(() => undefined)
-  }, [controller.followRun, controller.run?.runId, latestRunId])
+  }, [controller.clearRun, controller.followRun, controller.run, latestRunId])
   return (
     <Workbench
       controller={controller}

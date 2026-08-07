@@ -4,6 +4,7 @@ import com.agent.core.engine.AgentRunService;
 import com.agent.core.engine.AgentState;
 import com.agent.web.config.ProductionAgentProperties;
 import com.agent.web.identity.ActorResolver;
+import com.agent.web.validation.ReviewerUrlValidator;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.ResponseEntity;
@@ -65,8 +66,8 @@ public final class RunController {
                         properties.workspace()));
         String reviewerUrl = choose(request.reviewerUrl(), properties.reviewerUrl());
         if (!reviewerUrl.isBlank()) {
-            validateReviewerUrl(reviewerUrl);
-            state = state.withVariable("reviewer.url", reviewerUrl);
+            state = state.withVariable(
+                    "reviewer.url", ReviewerUrlValidator.validateOptional(reviewerUrl));
         }
         RunView view = RunView.from(runService.start("code-agent", state));
         return ResponseEntity.accepted().body(view);
@@ -115,11 +116,4 @@ public final class RunController {
         }
     }
 
-    private void validateReviewerUrl(String value) {
-        java.net.URI uri = java.net.URI.create(value);
-        String scheme = uri.getScheme();
-        if (!uri.isAbsolute() || !("http".equals(scheme) || "https".equals(scheme))) {
-            throw new IllegalArgumentException("reviewerUrl 必须是绝对 HTTP/HTTPS URI");
-        }
-    }
 }

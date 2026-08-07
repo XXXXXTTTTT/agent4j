@@ -49,6 +49,7 @@ function controller(
     start: vi.fn(async () => undefined),
     startTask: vi.fn(async () => undefined),
     followRun: vi.fn(async () => undefined),
+    clearRun: vi.fn(),
     reload: vi.fn(async () => undefined),
     decide: vi.fn(async () => undefined),
     ...overrides,
@@ -119,6 +120,72 @@ describe('Workbench', () => {
     expect(conversations.submit).toHaveBeenCalledWith('继续说明')
     expect(runs.followRun).toHaveBeenCalledWith('run-2')
   })
+
+  it('当前 Run 轮次只渲染一次用户消息并使用实时执行视图', () => {
+    const currentTurn: ConversationTurn = {
+      turnId: 'turn-current',
+      conversationId: 'conv-1',
+      turnIndex: 1,
+      userContent: '验证工作台审批与执行证据',
+      assistantContent: null,
+      runId: RUN_ID,
+      status: 'RUNNING',
+      error: null,
+      createdAt: '2026-08-07T01:00:06Z',
+      completedAt: null,
+    }
+    render(
+      <Workbench
+        controller={controller({
+          run: runView({
+            status: 'RUNNING',
+            state: {
+              messages: [],
+              variables: { 'planner.task': currentTurn.userContent },
+              trace: [],
+            },
+          }),
+        })}
+        conversation={conversationController({ turns: [currentTurn] })}
+        onTerminalReady={() => undefined}
+      />,
+    )
+
+    const conversation = screen.getByLabelText('Agent 会话')
+    expect(within(conversation).getAllByText(currentTurn.userContent)).toHaveLength(1)
+    expect(within(conversation).queryByText('正在处理这条消息。')).not.toBeInTheDocument()
+    expect(within(conversation).getByText('正在读取任务并建立执行计划。')).toBeVisible()
+  })
+
+  it('不展示不属于当前会话的旧 Run 与审批证据', () => {
+    render(
+      <Workbench
+        controller={controller({
+          run: runView({
+            status: 'WAITING_APPROVAL',
+            state: {
+              messages: [],
+              variables: { 'planner.task': '旧会话任务' },
+              trace: [],
+            },
+            interruptRequest: {
+              interruptId: '1a51de42-e150-40cc-93b1-f4c09d58ece4',
+              nodeName: 'ops',
+              reason: '旧会话审批',
+              details: { 'ops.command': 'mvn test' },
+            },
+          }),
+        })}
+        conversation={conversationController()}
+        onTerminalReady={() => undefined}
+      />,
+    )
+
+    expect(screen.getByText('你是什么模型')).toBeVisible()
+    expect(screen.queryByText('旧会话任务')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: '操作审批' })).not.toBeInTheDocument()
+  })
+
   it('在聊天快路径展示 final_response 而不是代码执行占位', () => {
     render(
       <Workbench

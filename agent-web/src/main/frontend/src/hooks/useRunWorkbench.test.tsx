@@ -143,6 +143,32 @@ describe('useRunWorkbench', () => {
     ])
   })
 
+  it('清空当前 Run 时关闭连接并移除全部执行证据', async () => {
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/runs/${RUN_ID_1}`) return jsonResponse(runningRun(RUN_ID_1), 200)
+      if (url.endsWith('/history')) return jsonResponse([runningRun(RUN_ID_1)])
+      throw new Error(`未处理请求: ${url}`)
+    })
+    const { sockets, factory } = socketHarness()
+    const onTerminalReset = vi.fn()
+    const { result } = renderHook(() => useRunWorkbench({
+      fetcher: fetchSpy as typeof fetch,
+      webSocketFactory: factory,
+      onTerminalReset,
+      onTerminalData: vi.fn(),
+    }))
+    await act(() => result.current.followRun(RUN_ID_1))
+
+    act(() => result.current.clearRun())
+
+    expect(result.current.run).toBeNull()
+    expect(result.current.history).toEqual([])
+    expect(result.current.traceEvents).toEqual([])
+    expect(sockets.every((socket) => socket.close.mock.calls.length === 1)).toBe(true)
+    expect(onTerminalReset).toHaveBeenCalled()
+  })
+
   it('启动后读取历史并打开两条连接，切换 Run 和卸载时清理旧连接', async () => {
     let startCount = 0
     const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

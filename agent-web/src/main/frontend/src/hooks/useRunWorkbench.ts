@@ -43,6 +43,7 @@ export interface UseRunWorkbenchResult {
   start(graphId: string, initialState: AgentState): Promise<void>
   startTask(task: string): Promise<void>
   followRun(runId: string): Promise<void>
+  clearRun(): void
   reload(): Promise<void>
   decide(command: ApprovalCommand): Promise<void>
 }
@@ -235,6 +236,18 @@ export function useRunWorkbench(
     [connect, fetcher],
   )
 
+  const clearRun = useCallback((): void => {
+    operationRef.current += 1
+    closeConnections()
+    setRun(null)
+    runRef.current = null
+    setHistory([])
+    setTraceEvents([])
+    setConnectionState({ trace: null, terminal: null })
+    setError(null)
+    optionsRef.current.onTerminalReset()
+  }, [closeConnections])
+
   const reload = useCallback(async (): Promise<void> => {
     const current = runRef.current
     if (current === null) throw new Error('当前没有 Run')
@@ -301,6 +314,7 @@ export function useRunWorkbench(
     start,
     startTask,
     followRun,
+    clearRun,
     reload,
     decide,
   }

@@ -59,4 +59,34 @@ describe('useConversationWorkspace', () => {
     expect(api.submitConversationTurn).toHaveBeenCalledWith('conv-1', { content: '继续说明' })
     expect(result.current.turns).toEqual([pending])
   })
+
+  it('连续搜索时忽略较早请求的迟到响应', async () => {
+    let resolveFirst!: (value: Conversation[]) => void
+    let resolveSecond!: (value: Conversation[]) => void
+    const firstResult = [{ ...conversation, conversationId: 'conv-first', title: 'first' }]
+    const secondResult = [{ ...conversation, conversationId: 'conv-second', title: 'second' }]
+    const api = {
+      getIdentity: vi.fn(async () => actor), listWorkspaces: vi.fn(async () => [workspace]),
+      listConversations: vi.fn(async () => [conversation]), listConversationTurns: vi.fn(async () => [turn]),
+      searchConversations: vi.fn((_workspaceId: string, query: string) => new Promise<Conversation[]>((resolve) => {
+        if (query === 'first') resolveFirst = resolve
+        else resolveSecond = resolve
+      })),
+      createConversation: vi.fn(async () => conversation), submitConversationTurn: vi.fn(), archiveConversation: vi.fn(),
+    }
+    const { result } = renderHook(() => useConversationWorkspace({ api }))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    let firstSearch!: Promise<void>
+    let secondSearch!: Promise<void>
+    act(() => {
+      firstSearch = result.current.search('first')
+      secondSearch = result.current.search('second')
+    })
+    await act(async () => { resolveSecond(secondResult); await secondSearch })
+    await act(async () => { resolveFirst(firstResult); await firstSearch })
+
+    expect(result.current.searchQuery).toBe('second')
+    expect(result.current.conversations).toEqual(secondResult)
+  })
 })

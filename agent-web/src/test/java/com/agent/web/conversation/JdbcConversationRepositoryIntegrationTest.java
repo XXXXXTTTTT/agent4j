@@ -163,6 +163,33 @@ class JdbcConversationRepositoryIntegrationTest {
     }
 
     @Test
+    void systemRunLookupReturnsOneTurnWhenWorkspaceHasMultipleMembers() {
+        Actor owner = new Actor("projection-owner", "Owner");
+        repository.ensureDefaultWorkspace(
+                WORKSPACE_ID, owner, "项目工作区", Path.of("D:/agent4j"), "repo-owner", NOW);
+        Actor viewer = new Actor("projection-viewer", "Viewer");
+        repository.ensureUser(viewer, NOW);
+        repository.grantMember(WORKSPACE_ID, viewer.userId(), WorkspacePermission.VIEWER, NOW);
+        UUID conversationId = UUID.randomUUID();
+        repository.createConversation(conversationId, WORKSPACE_ID, owner, "投影", NOW);
+        ConversationTurnRecord pending = repository.createPendingTurn(
+                conversationId, owner.userId(), "问题", NOW);
+        UUID runId = UUID.randomUUID();
+        jdbc.sql("""
+                insert into agent_runs (
+                    run_id, graph_id, status, latest_version, created_at, updated_at
+                ) values (:runId, 'code-agent', 'RUNNING', 0, :createdAt, :updatedAt)
+                """)
+                .param("runId", runId)
+                .param("createdAt", java.sql.Timestamp.from(NOW))
+                .param("updatedAt", java.sql.Timestamp.from(NOW))
+                .update();
+        ConversationTurnRecord running = repository.markTurnRunning(pending.turnId(), runId, NOW);
+
+        assertThat(repository.findTurnByRunId(runId)).contains(running);
+    }
+
+    @Test
     void rejectsConcurrentActiveTurnAndArchivedConversation() {
         Actor owner = new Actor("conversation-conflict-owner", "Owner");
         repository.ensureDefaultWorkspace(

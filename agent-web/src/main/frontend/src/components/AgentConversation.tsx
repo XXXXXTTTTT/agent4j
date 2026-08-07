@@ -176,14 +176,19 @@ export function AgentConversation({ run, currentNode, turns = [] }: AgentConvers
   )
   const hasFailureEvidence = timedOut === 'true' || executionErrors.length > 0 || run.error !== null
   const hasUserMessage = messages.some((message) => message.role === 'user')
+  const currentTurn = turns.find((turn) => turn.runId === run.runId)
+  const historicalTurns = turns.filter((turn) => turn.runId !== run.runId)
+  const currentTask = turns.length > 0
+    ? currentTurn?.userContent ?? task
+    : hasUserMessage ? undefined : task
 
   return (
     <section className="conversation-stream" aria-label="Agent 会话">
-      {turns.length > 0 ? <PersistedTurns turns={turns} /> : messages.length > 0 ? <PersistedMessages messages={messages} /> : null}
-      {!hasUserMessage && task !== undefined ? (
+      {turns.length > 0 ? <PersistedTurns turns={historicalTurns} /> : messages.length > 0 ? <PersistedMessages messages={messages} /> : null}
+      {currentTask !== undefined ? (
         <article className="conversation-message user-message">
           <span className="message-avatar"><User aria-hidden="true" size={16} /></span>
-          <div><span className="message-author">你</span><p>{task}</p></div>
+          <div><span className="message-author">你</span><p>{currentTask}</p></div>
         </article>
       ) : null}
 

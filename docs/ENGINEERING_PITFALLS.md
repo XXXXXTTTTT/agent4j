@@ -1058,12 +1058,20 @@ PostgreSQL 新增 `agent_users`、`agent_workspaces`、`agent_workspace_members`
 轮次；重复终态事件幂等处理，Run 启动异常保留完整堆栈。前端 URL 保存会话 ID，刷新时重新读取
 服务端 turns；Run 仍负责 Trace、终端、Diff 和审批证据，二者不再互相替代。
 
+这里还暴露了一个典型的异步提交竞态：若 `AgentRunService` 创建 Checkpoint 后立即调度虚拟线程，
+而应用层随后才把 `run_id` 写入轮次，极快 Run 的终态事件会先于绑定到达，投影器查询为空后事件
+永久丢失。修复是在核心启动 API 中增加同步 `beforeDispatch` 边界，严格执行“创建 Run -> 绑定
+轮次 -> 调度图”。系统级 `findTurnByRunId` 直接查询 `agent_conversation_turns`，不复用带成员联结
+的授权查询，避免多人工作区把唯一轮次放大为多行。归档再次通过 `WorkspaceAccessService` 要求
+`OPERATOR`，前端则以当前会话 turns 中的精确 `runId` 隔离审批和执行证据，并主动关闭旧连接。
+
 ### 【证据】
 
-`JdbcConversationRepositoryIntegrationTest` 覆盖成员隔离、禁用用户、两轮顺序、并发活动轮次、
-归档冲突和 Unicode 标题截断；`ConversationControllerTest` 覆盖严格 JSON 字段与错误映射；
+`AgentRunServiceTest` 覆盖绑定先于虚拟线程调度；`JdbcConversationRepositoryIntegrationTest`
+覆盖成员隔离、多人工作区系统投影、禁用用户、两轮顺序、并发活动轮次、归档冲突和 Unicode
+标题截断；`ConversationControllerTest` 覆盖严格 JSON 字段与错误映射；
 `conversationApi.test.ts`、`useConversationWorkspace.test.tsx` 和 `Workbench.test.tsx` 覆盖
-浏览器身份、工作区切换、刷新恢复、历史轮次提交和 Run 跟随连接。
+浏览器身份、工作区切换、迟到响应丢弃、刷新恢复、历史轮次提交、Run 跟随连接和跨会话证据隔离。
 
 ### 【问题现象】简单问题误入代码链
 
