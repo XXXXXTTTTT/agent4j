@@ -57,6 +57,16 @@ class HybridRagRetrieverTest {
     }
 
     @Test
+    void implementsTheBaseRetrievalPort() {
+        RagRetriever retriever = new HybridRagRetriever(
+                new InMemoryStore(List.of(), List.of(), 0, 0, Map.of()),
+                model());
+
+        assertThat(retriever.search(
+                new RagQuery("repo", "query", new float[8], 10))).isEmpty();
+    }
+
+    @Test
     void usesStablePathOrdinalAndChildIdTieOrdering() {
         ParentChunk parentA = parent(PARENT_A, "src/A.java", null);
         ParentChunk parentB = parent(PARENT_B, "src/B.java", null);

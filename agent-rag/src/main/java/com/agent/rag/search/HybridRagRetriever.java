@@ -21,7 +21,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /** 合并向量、BM25 和符号分的三层代码检索器。 */
-public final class HybridRagRetriever {
+public final class HybridRagRetriever implements RagRetriever {
 
     private static final int EMBEDDING_DIMENSIONS = ChildChunk.EMBEDDING_DIMENSIONS;
     private static final double VECTOR_WEIGHT = 0.55;
@@ -44,6 +44,7 @@ public final class HybridRagRetriever {
     }
 
     /** 返回最多 limit 条稳定排序的混合命中。 */
+    @Override
     public List<RagHit> search(RagQuery query) {
         Objects.requireNonNull(query, "query 不能为空");
         float[] queryEmbedding = query.queryEmbedding();
