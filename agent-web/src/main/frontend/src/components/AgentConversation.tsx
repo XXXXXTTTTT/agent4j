@@ -9,11 +9,12 @@ import {
   User,
 } from 'lucide-react'
 
-import type { ChatMessage, RunView } from '../api/contracts'
+import type { ChatMessage, ConversationTurn, RunView } from '../api/contracts'
 
 interface AgentConversationProps {
   run: RunView | null
   currentNode: string | null
+  turns?: ConversationTurn[]
 }
 
 const STAGES = [
@@ -77,6 +78,38 @@ function MessageIcon({ role }: { role: ChatMessage['role'] }) {
   return role === 'user' ? <User aria-hidden="true" size={16} /> : role === 'tool' ? <Terminal aria-hidden="true" size={16} /> : <Bot aria-hidden="true" size={16} />
 }
 
+function TurnStatus({ status }: { status: ConversationTurn['status'] }) {
+  if (status === 'PENDING' || status === 'RUNNING') return <span className="turn-status is-running">执行中</span>
+  if (status === 'FAILED') return <span className="turn-status is-failed">失败</span>
+  return <span className="turn-status is-complete">已完成</span>
+}
+
+function PersistedTurns({ turns }: { turns: ConversationTurn[] }) {
+  return (
+    <>
+      {turns.map((turn) => (
+        <div className="persisted-turn" key={turn.turnId}>
+          <article className="conversation-message user-message">
+            <span className="message-avatar"><User aria-hidden="true" size={16} /></span>
+            <div className="message-body"><span className="message-author">你</span><p>{turn.userContent}</p></div>
+          </article>
+          {turn.assistantContent === null && turn.error === null ? (
+            <article className="conversation-message agent-message">
+              <span className="message-avatar agent-avatar"><Bot aria-hidden="true" size={17} /></span>
+              <div className="message-body"><div className="agent-message-heading"><span className="message-author">Agent4J</span><TurnStatus status={turn.status} /></div><p className="agent-progress-copy">正在处理这条消息。</p></div>
+            </article>
+          ) : (
+            <article className={`conversation-message agent-message ${turn.status === 'FAILED' ? 'is-failed' : ''}`}>
+              <span className="message-avatar agent-avatar"><Bot aria-hidden="true" size={17} /></span>
+              <div className="message-body"><div className="agent-message-heading"><span className="message-author">Agent4J</span><TurnStatus status={turn.status} /></div><p>{turn.assistantContent ?? turn.error}</p></div>
+            </article>
+          )}
+        </div>
+      ))}
+    </>
+  )
+}
+
 function PersistedMessages({ messages }: { messages: ChatMessage[] }) {
   return (
     <>
@@ -97,14 +130,18 @@ function PersistedMessages({ messages }: { messages: ChatMessage[] }) {
 }
 
 /** 将权威 Run 状态转换为用户可读的连续 Agent 会话。 */
-export function AgentConversation({ run, currentNode }: AgentConversationProps) {
-  if (run === null) {
+export function AgentConversation({ run, currentNode, turns = [] }: AgentConversationProps) {
+  if (run === null && turns.length === 0) {
     return (
       <section className="conversation-empty" aria-label="Agent 会话">
         <span className="empty-agent-mark"><Bot aria-hidden="true" size={28} /></span>
         <h2>今天要让 Agent 完成什么？</h2>
       </section>
     )
+  }
+
+  if (run === null) {
+    return <section className="conversation-stream" aria-label="Agent 会话"><PersistedTurns turns={turns} /></section>
   }
 
   const variables = run.state.variables
@@ -142,7 +179,7 @@ export function AgentConversation({ run, currentNode }: AgentConversationProps) 
 
   return (
     <section className="conversation-stream" aria-label="Agent 会话">
-      {messages.length > 0 ? <PersistedMessages messages={messages} /> : null}
+      {turns.length > 0 ? <PersistedTurns turns={turns} /> : messages.length > 0 ? <PersistedMessages messages={messages} /> : null}
       {!hasUserMessage && task !== undefined ? (
         <article className="conversation-message user-message">
           <span className="message-avatar"><User aria-hidden="true" size={16} /></span>

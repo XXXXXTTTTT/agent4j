@@ -526,7 +526,6 @@ export interface CodeAgentStartCommand {
   task: string
   workspacePath?: string
   repositoryId?: string
-  userId?: string
   reviewerUrl?: string
 }
 
@@ -542,9 +541,6 @@ export async function createCodeAgentRun(
   }
   if (command.repositoryId !== undefined && command.repositoryId.trim().length > 0) {
     body.repositoryId = command.repositoryId.trim()
-  }
-  if (command.userId !== undefined && command.userId.trim().length > 0) {
-    body.userId = command.userId.trim()
   }
   if (command.reviewerUrl !== undefined && command.reviewerUrl.trim().length > 0) {
     body.reviewerUrl = command.reviewerUrl.trim()

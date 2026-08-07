@@ -2,7 +2,8 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { RunView, TraceEvent } from '../api/contracts'
+import type { Actor, Conversation, ConversationTurn, RunView, TraceEvent, Workspace } from '../api/contracts'
+import type { UseConversationWorkspaceResult } from '../hooks/useConversationWorkspace'
 import type { UseRunWorkbenchResult } from '../hooks/useRunWorkbench'
 import { Workbench } from './Workbench'
 
@@ -53,6 +54,26 @@ function controller(
   }
 }
 
+function conversationController(
+  overrides: Partial<UseConversationWorkspaceResult> = {},
+): UseConversationWorkspaceResult {
+  return {
+    identity: { userId: 'user-1', displayName: 'Alice' } satisfies Actor,
+    workspaces: [{
+      workspaceId: 'ws-1', ownerUserId: 'user-1', displayName: 'Agent4J', workspacePath: 'D:/agent4j', repositoryId: 'agent4j', permission: 'OWNER', createdAt: '2026-08-07T01:00:00Z', updatedAt: '2026-08-07T01:00:00Z',
+    } satisfies Workspace],
+    activeWorkspace: {
+      workspaceId: 'ws-1', ownerUserId: 'user-1', displayName: 'Agent4J', workspacePath: 'D:/agent4j', repositoryId: 'agent4j', permission: 'OWNER', createdAt: '2026-08-07T01:00:00Z', updatedAt: '2026-08-07T01:00:00Z',
+    } satisfies Workspace,
+    conversations: [{ conversationId: 'conv-1', workspaceId: 'ws-1', createdBy: 'user-1', title: '模型咨询', status: 'ACTIVE', createdAt: '2026-08-07T01:00:00Z', updatedAt: '2026-08-07T01:00:00Z' } satisfies Conversation],
+    activeConversation: { conversationId: 'conv-1', workspaceId: 'ws-1', createdBy: 'user-1', title: '模型咨询', status: 'ACTIVE', createdAt: '2026-08-07T01:00:00Z', updatedAt: '2026-08-07T01:00:00Z' } satisfies Conversation,
+    turns: [{ turnId: 'turn-1', conversationId: 'conv-1', turnIndex: 0, userContent: '你是什么模型', assistantContent: '我是 AI。', runId: 'run-1', status: 'COMPLETED', error: null, createdAt: '2026-08-07T01:00:00Z', completedAt: '2026-08-07T01:00:05Z' } satisfies ConversationTurn],
+    searchQuery: '', loading: false, submitting: false, error: null,
+    selectWorkspace: vi.fn(async () => undefined), selectConversation: vi.fn(async () => undefined), search: vi.fn(async () => undefined), createConversation: vi.fn(async () => undefined), submit: vi.fn(async () => ({ turnId: 'turn-2', conversationId: 'conv-1', turnIndex: 1, userContent: '继续', assistantContent: null, runId: 'run-2', status: 'PENDING', error: null, createdAt: '2026-08-07T01:00:06Z', completedAt: null })), archive: vi.fn(async () => undefined), reload: vi.fn(async () => undefined),
+    ...overrides,
+  }
+}
+
 function traceEvents(): TraceEvent[] {
   const common = {
     eventId: 'c890db6f-322d-42ec-960b-62d5782a6b75',
@@ -82,6 +103,21 @@ function traceEvents(): TraceEvent[] {
 }
 
 describe('Workbench', () => {
+  it('展示持久化会话侧栏、历史轮次并将新轮次接入 Run 证据', async () => {
+    const user = userEvent.setup()
+    const conversations = conversationController()
+    const runs = controller({ followRun: vi.fn(async () => undefined) })
+    render(<Workbench controller={runs} conversation={conversations} onTerminalReady={() => undefined} />)
+
+    expect(screen.getByLabelText('会话与工作区')).toBeVisible()
+    expect(screen.getByRole('option', { name: 'Agent4J' })).toBeVisible()
+    expect(screen.getByText('你是什么模型')).toBeVisible()
+    const input = screen.getByRole('textbox', { name: '发送消息' })
+    await user.type(input, '继续说明')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    expect(conversations.submit).toHaveBeenCalledWith('继续说明')
+    expect(runs.followRun).toHaveBeenCalledWith('run-2')
+  })
   it('在聊天快路径展示 final_response 而不是代码执行占位', () => {
     render(
       <Workbench

@@ -42,6 +42,7 @@ export interface UseRunWorkbenchResult {
   error: Error | null
   start(graphId: string, initialState: AgentState): Promise<void>
   startTask(task: string): Promise<void>
+  followRun(runId: string): Promise<void>
   reload(): Promise<void>
   decide(command: ApprovalCommand): Promise<void>
 }
@@ -210,6 +211,30 @@ export function useRunWorkbench(
     [connect, fetcher],
   )
 
+  const followRun = useCallback(
+    async (runId: string): Promise<void> => {
+      const exactRunId = runId.trim()
+      if (exactRunId.length === 0) throw new Error('runId 不能为空')
+      const operation = ++operationRef.current
+      setError(null)
+      try {
+        const [latest, loadedHistory] = await Promise.all([
+          getRun(exactRunId, fetcher()),
+          getRunHistory(exactRunId, fetcher()),
+        ])
+        if (!mountedRef.current || operation !== operationRef.current) return
+        setRun(latest)
+        runRef.current = latest
+        setHistory(loadedHistory)
+        connect(exactRunId)
+      } catch (failure) {
+        if (mountedRef.current && operation === operationRef.current) setError(asError(failure))
+        throw failure
+      }
+    },
+    [connect, fetcher],
+  )
+
   const reload = useCallback(async (): Promise<void> => {
     const current = runRef.current
     if (current === null) throw new Error('当前没有 Run')
@@ -275,6 +300,7 @@ export function useRunWorkbench(
     error,
     start,
     startTask,
+    followRun,
     reload,
     decide,
   }

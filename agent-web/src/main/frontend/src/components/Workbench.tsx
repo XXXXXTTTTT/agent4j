@@ -1,12 +1,16 @@
 import { Activity, Code2, Globe2, RefreshCw, Terminal } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
+import { useEffect } from 'react'
 
 import type { UseRunWorkbenchResult } from '../hooks/useRunWorkbench'
 import { AgentConversation } from './AgentConversation'
 import { ApprovalDialog } from './ApprovalDialog'
+import { ConversationComposer } from './ConversationComposer'
+import { ConversationSidebar } from './ConversationSidebar'
 import { RunLauncher } from './RunLauncher'
 import { TerminalPanel, type TerminalPanelHandle } from './TerminalPanel'
 import { TraceTimeline } from './TraceTimeline'
+import type { UseConversationWorkspaceResult } from '../hooks/useConversationWorkspace'
 
 const CodeDiffPanel = lazy(() => import('./CodeDiffPanel').then((module) => ({
   default: module.CodeDiffPanel,
@@ -18,6 +22,7 @@ const ReviewEvidencePanel = lazy(() => import('./ReviewEvidencePanel').then((mod
 interface WorkbenchProps {
   controller: UseRunWorkbenchResult
   onTerminalReady(terminal: TerminalPanelHandle | null): void
+  conversation?: UseConversationWorkspaceResult
 }
 
 type WorkbenchTab = 'code' | 'terminal' | 'review' | 'trace'
@@ -30,7 +35,7 @@ const TABS: Array<{ id: WorkbenchTab; label: string; icon: typeof Code2 }> = [
 ]
 
 /** 编排对话式任务流与执行证据检查器。 */
-export function Workbench({ controller, onTerminalReady }: WorkbenchProps) {
+export function Workbench({ controller, onTerminalReady, conversation }: WorkbenchProps) {
   const [activeTab, setActiveTab] = useState<WorkbenchTab>('code')
   const [reviewOpened, setReviewOpened] = useState(false)
   const diff = controller.run?.state.variables['coder.unifiedDiff']
@@ -39,6 +44,12 @@ export function Workbench({ controller, onTerminalReady }: WorkbenchProps) {
     ? latestTrace.nodeName
     : controller.run?.nextNode ?? null
   const run = controller.run
+
+  useEffect(() => {
+    if (conversation === undefined || run === null) return
+    if (run.status !== 'COMPLETED' && run.status !== 'FAILED' && run.status !== 'REJECTED') return
+    void conversation.reload().catch(() => undefined)
+  }, [conversation?.reload, run?.runId, run?.status])
 
   return (
     <div className="workbench-shell" data-testid="workbench-shell">
@@ -67,13 +78,14 @@ export function Workbench({ controller, onTerminalReady }: WorkbenchProps) {
         </div>
       </header>
 
-      <div className="agent-layout">
+      <div className={`agent-layout ${conversation === undefined ? '' : 'has-conversation-sidebar'}`}>
+        {conversation === undefined ? null : <ConversationSidebar controller={conversation} />}
         <main className="conversation-column" data-testid="workspace-main">
           <div className="conversation-scroll">
-            <AgentConversation run={run} currentNode={currentNode} />
+            <AgentConversation run={run} currentNode={currentNode} turns={conversation?.turns} />
             {run === null ? null : <ApprovalDialog run={run} decide={controller.decide} />}
           </div>
-          <RunLauncher controller={controller} />
+          {conversation === undefined ? <RunLauncher controller={controller} /> : <ConversationComposer conversation={conversation} runController={controller} />}
         </main>
 
         <aside className="execution-inspector" aria-label="执行检查器">

@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 
 import { useRunWorkbench } from './hooks/useRunWorkbench'
+import { useConversationWorkspace } from './hooks/useConversationWorkspace'
 import type { TerminalPanelHandle } from './components/TerminalPanel'
 import { Workbench } from './components/Workbench'
 
@@ -11,9 +12,11 @@ export function App() {
     onTerminalReset: () => terminalRef.current?.reset(),
     onTerminalData: (text) => terminalRef.current?.write(text),
   })
+  const conversation = useConversationWorkspace()
   return (
     <Workbench
       controller={controller}
+      conversation={conversation}
       onTerminalReady={(terminal) => { terminalRef.current = terminal }}
     />
   )

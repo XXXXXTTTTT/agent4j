@@ -119,6 +119,30 @@ describe('useRunWorkbench', () => {
     expect(sockets).toHaveLength(2)
   })
 
+  it('followRun 读取持久化会话关联的 Run 并建立实时证据连接', async () => {
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/runs/${RUN_ID_1}`) return jsonResponse(runningRun(RUN_ID_1), 200)
+      if (url.endsWith('/history')) return jsonResponse([runningRun(RUN_ID_1)])
+      throw new Error(`未处理请求: ${url}`)
+    })
+    const { sockets, factory } = socketHarness()
+    const { result } = renderHook(() => useRunWorkbench({
+      fetcher: fetchSpy as typeof fetch,
+      webSocketFactory: factory,
+      onTerminalReset: vi.fn(),
+      onTerminalData: vi.fn(),
+    }))
+
+    await act(() => result.current.followRun(RUN_ID_1))
+
+    expect(result.current.run?.runId).toBe(RUN_ID_1)
+    expect(sockets.map((socket) => new URL(socket.url).pathname)).toEqual([
+      `/ws/runs/${RUN_ID_1}/trace`,
+      `/ws/runs/${RUN_ID_1}/terminal`,
+    ])
+  })
+
   it('启动后读取历史并打开两条连接，切换 Run 和卸载时清理旧连接', async () => {
     let startCount = 0
     const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -1,0 +1,180 @@
+import type {
+  Actor,
+  Conversation,
+  ConversationStatus,
+  ConversationTurn,
+  ConversationTurnStatus,
+  Workspace,
+  WorkspacePermission,
+} from './contracts'
+
+type JsonObject = Record<string, unknown>
+
+const WORKSPACE_PERMISSIONS = new Set<WorkspacePermission>(['VIEWER', 'OPERATOR', 'OWNER'])
+const CONVERSATION_STATUSES = new Set<ConversationStatus>(['ACTIVE', 'ARCHIVED'])
+const TURN_STATUSES = new Set<ConversationTurnStatus>(['PENDING', 'RUNNING', 'COMPLETED', 'FAILED'])
+
+export class ConversationApiError extends Error {
+  constructor(message: string, readonly status: number, readonly responseBody: string) {
+    super(message)
+    this.name = 'ConversationApiError'
+  }
+}
+
+function objectAt(value: unknown, path: string): JsonObject {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${path} 必须是对象`)
+  return value as JsonObject
+}
+
+function exactKeys(value: JsonObject, expected: readonly string[], path: string): void {
+  const expectedSet = new Set(expected)
+  const unknown = Object.keys(value).filter((key) => !expectedSet.has(key))
+  if (unknown.length > 0) throw new TypeError(`${path} 包含未知字段: ${unknown.join(', ')}`)
+}
+
+function stringAt(value: unknown, path: string): string {
+  if (typeof value !== 'string') throw new TypeError(`${path} 必须是字符串`)
+  return value
+}
+
+function nonBlankStringAt(value: unknown, path: string): string {
+  const result = stringAt(value, path)
+  if (result.trim().length === 0) throw new TypeError(`${path} 不能为空`)
+  return result
+}
+
+function nullableStringAt(value: unknown, path: string): string | null {
+  return value === null ? null : stringAt(value, path)
+}
+
+function nonNegativeIntegerAt(value: unknown, path: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) throw new TypeError(`${path} 必须是非负整数`)
+  return value
+}
+
+function enumAt<T extends string>(value: unknown, values: ReadonlySet<T>, path: string): T {
+  const result = stringAt(value, path)
+  if (!values.has(result as T)) throw new TypeError(`${path} 包含未知值: ${result}`)
+  return result as T
+}
+
+export function decodeActor(value: unknown, path = 'actor'): Actor {
+  const object = objectAt(value, path)
+  exactKeys(object, ['userId', 'displayName'], path)
+  return { userId: nonBlankStringAt(object.userId, `${path}.userId`), displayName: nonBlankStringAt(object.displayName, `${path}.displayName`) }
+}
+
+export function decodeWorkspace(value: unknown, path = 'workspace'): Workspace {
+  const object = objectAt(value, path)
+  exactKeys(object, ['workspaceId', 'ownerUserId', 'displayName', 'workspacePath', 'repositoryId', 'permission', 'createdAt', 'updatedAt'], path)
+  return {
+    workspaceId: nonBlankStringAt(object.workspaceId, `${path}.workspaceId`),
+    ownerUserId: nonBlankStringAt(object.ownerUserId, `${path}.ownerUserId`),
+    displayName: nonBlankStringAt(object.displayName, `${path}.displayName`),
+    workspacePath: nonBlankStringAt(object.workspacePath, `${path}.workspacePath`),
+    repositoryId: nonBlankStringAt(object.repositoryId, `${path}.repositoryId`),
+    permission: enumAt(object.permission, WORKSPACE_PERMISSIONS, `${path}.permission`),
+    createdAt: stringAt(object.createdAt, `${path}.createdAt`),
+    updatedAt: stringAt(object.updatedAt, `${path}.updatedAt`),
+  }
+}
+
+export function decodeConversation(value: unknown, path = 'conversation'): Conversation {
+  const object = objectAt(value, path)
+  exactKeys(object, ['conversationId', 'workspaceId', 'createdBy', 'title', 'status', 'createdAt', 'updatedAt'], path)
+  return {
+    conversationId: nonBlankStringAt(object.conversationId, `${path}.conversationId`),
+    workspaceId: nonBlankStringAt(object.workspaceId, `${path}.workspaceId`),
+    createdBy: nonBlankStringAt(object.createdBy, `${path}.createdBy`),
+    title: nonBlankStringAt(object.title, `${path}.title`),
+    status: enumAt(object.status, CONVERSATION_STATUSES, `${path}.status`),
+    createdAt: stringAt(object.createdAt, `${path}.createdAt`),
+    updatedAt: stringAt(object.updatedAt, `${path}.updatedAt`),
+  }
+}
+
+export function decodeConversationTurn(value: unknown, path = 'turn'): ConversationTurn {
+  const object = objectAt(value, path)
+  exactKeys(object, ['turnId', 'conversationId', 'turnIndex', 'userContent', 'assistantContent', 'runId', 'status', 'error', 'createdAt', 'completedAt'], path)
+  return {
+    turnId: nonBlankStringAt(object.turnId, `${path}.turnId`),
+    conversationId: nonBlankStringAt(object.conversationId, `${path}.conversationId`),
+    turnIndex: nonNegativeIntegerAt(object.turnIndex, `${path}.turnIndex`),
+    userContent: nonBlankStringAt(object.userContent, `${path}.userContent`),
+    assistantContent: nullableStringAt(object.assistantContent, `${path}.assistantContent`),
+    runId: nullableStringAt(object.runId, `${path}.runId`),
+    status: enumAt(object.status, TURN_STATUSES, `${path}.status`),
+    error: nullableStringAt(object.error, `${path}.error`),
+    createdAt: stringAt(object.createdAt, `${path}.createdAt`),
+    completedAt: nullableStringAt(object.completedAt, `${path}.completedAt`),
+  }
+}
+
+async function requestJson(url: string, init: RequestInit, fetcher: typeof fetch): Promise<unknown> {
+  const response = await fetcher(url, init)
+  const text = await response.text()
+  if (!response.ok) throw new ConversationApiError(`Conversation API 请求失败: HTTP ${response.status}`, response.status, text)
+  try {
+    return JSON.parse(text) as unknown
+  } catch (error) {
+    throw new TypeError(`Conversation API 返回了非法 JSON: ${(error as Error).message}`)
+  }
+}
+
+function decodeArray<T>(value: unknown, decoder: (item: unknown, path: string) => T, path: string): T[] {
+  if (!Array.isArray(value)) throw new TypeError(`${path} 必须是数组`)
+  return value.map((item, index) => decoder(item, `${path}[${index}]`))
+}
+
+export async function getIdentity(fetcher: typeof fetch = globalThis.fetch): Promise<Actor> {
+  return decodeActor(await requestJson('/api/identity', { method: 'GET' }, fetcher))
+}
+
+export async function listWorkspaces(fetcher: typeof fetch = globalThis.fetch): Promise<Workspace[]> {
+  return decodeArray(await requestJson('/api/workspaces', { method: 'GET' }, fetcher), decodeWorkspace, 'workspaces')
+}
+
+export interface CreateWorkspaceCommand { displayName: string; workspacePath: string; repositoryId: string }
+
+export async function createWorkspace(command: CreateWorkspaceCommand, fetcher: typeof fetch = globalThis.fetch): Promise<Workspace> {
+  const body = {
+    displayName: nonBlankStringAt(command.displayName, 'displayName'),
+    workspacePath: nonBlankStringAt(command.workspacePath, 'workspacePath'),
+    repositoryId: nonBlankStringAt(command.repositoryId, 'repositoryId'),
+  }
+  return decodeWorkspace(await requestJson('/api/workspaces', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, fetcher))
+}
+
+export async function listConversations(workspaceId: string, fetcher: typeof fetch = globalThis.fetch): Promise<Conversation[]> {
+  const id = nonBlankStringAt(workspaceId, 'workspaceId')
+  return decodeArray(await requestJson(`/api/workspaces/${encodeURIComponent(id)}/conversations`, { method: 'GET' }, fetcher), decodeConversation, 'conversations')
+}
+
+export async function searchConversations(workspaceId: string, query: string, fetcher: typeof fetch = globalThis.fetch): Promise<Conversation[]> {
+  const id = nonBlankStringAt(workspaceId, 'workspaceId')
+  return decodeArray(await requestJson(`/api/workspaces/${encodeURIComponent(id)}/conversations?query=${encodeURIComponent(query)}`, { method: 'GET' }, fetcher), decodeConversation, 'conversations')
+}
+
+export async function createConversation(workspaceId: string, fetcher: typeof fetch = globalThis.fetch): Promise<Conversation> {
+  const id = nonBlankStringAt(workspaceId, 'workspaceId')
+  return decodeConversation(await requestJson(`/api/workspaces/${encodeURIComponent(id)}/conversations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, fetcher))
+}
+
+export interface SubmitConversationTurnCommand { content: string; reviewerUrl?: string }
+
+export async function submitConversationTurn(conversationId: string, command: SubmitConversationTurnCommand, fetcher: typeof fetch = globalThis.fetch): Promise<ConversationTurn> {
+  const id = nonBlankStringAt(conversationId, 'conversationId')
+  const body: Record<string, string> = { content: nonBlankStringAt(command.content, 'content') }
+  if (command.reviewerUrl !== undefined && command.reviewerUrl.trim().length > 0) body.reviewerUrl = command.reviewerUrl.trim()
+  return decodeConversationTurn(await requestJson(`/api/conversations/${encodeURIComponent(id)}/turns`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, fetcher))
+}
+
+export async function listConversationTurns(conversationId: string, fetcher: typeof fetch = globalThis.fetch): Promise<ConversationTurn[]> {
+  const id = nonBlankStringAt(conversationId, 'conversationId')
+  return decodeArray(await requestJson(`/api/conversations/${encodeURIComponent(id)}/turns`, { method: 'GET' }, fetcher), decodeConversationTurn, 'turns')
+}
+
+export async function archiveConversation(conversationId: string, fetcher: typeof fetch = globalThis.fetch): Promise<Conversation> {
+  const id = nonBlankStringAt(conversationId, 'conversationId')
+  return decodeConversation(await requestJson(`/api/conversations/${encodeURIComponent(id)}/archive`, { method: 'POST' }, fetcher))
+}

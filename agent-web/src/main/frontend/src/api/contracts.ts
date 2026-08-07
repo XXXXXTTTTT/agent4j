@@ -121,3 +121,48 @@ export type TraceEvent =
 export type TraceFrame =
   | { kind: 'SNAPSHOT'; run: RunView }
   | { kind: 'EVENT'; event: TraceEvent }
+
+export interface Actor {
+  userId: string
+  displayName: string
+}
+
+export type WorkspacePermission = 'VIEWER' | 'OPERATOR' | 'OWNER'
+
+export interface Workspace {
+  workspaceId: string
+  ownerUserId: string
+  displayName: string
+  workspacePath: string
+  repositoryId: string
+  permission: WorkspacePermission
+  createdAt: string
+  updatedAt: string
+}
+
+export type ConversationStatus = 'ACTIVE' | 'ARCHIVED'
+
+export interface Conversation {
+  conversationId: string
+  workspaceId: string
+  createdBy: string
+  title: string
+  status: ConversationStatus
+  createdAt: string
+  updatedAt: string
+}
+
+export type ConversationTurnStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+
+export interface ConversationTurn {
+  turnId: string
+  conversationId: string
+  turnIndex: number
+  userContent: string
+  assistantContent: string | null
+  runId: string | null
+  status: ConversationTurnStatus
+  error: string | null
+  createdAt: string
+  completedAt: string | null
+}

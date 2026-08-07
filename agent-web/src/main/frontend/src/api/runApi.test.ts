@@ -149,7 +149,6 @@ describe('Run API HTTP 请求', () => {
     const run = await createCodeAgentRun({
       task: '修复登录超时并运行测试',
       repositoryId: 'repo-1',
-      userId: 'user-1',
       reviewerUrl: 'https://application.test',
     }, fetcher)
 
@@ -160,7 +159,6 @@ describe('Run API HTTP 请求', () => {
       body: JSON.stringify({
         task: '修复登录超时并运行测试',
         repositoryId: 'repo-1',
-        userId: 'user-1',
         reviewerUrl: 'https://application.test',
       }),
     })
