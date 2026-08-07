@@ -65,13 +65,52 @@ public interface HypotheticalDocumentGenerator {
 }
 
 public interface RagReranker {
-    List<RerankedHit> rerank(String query, List<RagHit> hits, int limit);
+    List<RerankedHit> rerank(String query, List<FusedHit> hits, int limit);
 }
+
+public record RagRetrievalRequest(
+        String repositoryId,
+        String query,
+        TaskComplexity complexity,
+        RagRetrievalPolicy policy) {}
+
+public record FusedHit(RagHit hit, double score) {}
+
+public record RerankedHit(UUID childId, double score) {}
+
+public record RagStageEvidence(
+        RagStage stage,
+        RagStageStatus status,
+        int inputCount,
+        int outputCount,
+        int estimatedTokens,
+        String detail,
+        String errorStack) {}
+
+public record RagContextDocument(
+        UUID childId,
+        UUID parentId,
+        String path,
+        String symbol,
+        int startLine,
+        int endLine,
+        String content,
+        RagContentSource contentSource,
+        double retrievalScore,
+        double rerankScore,
+        int estimatedTokens) {}
+
+public record RagRetrievalResult(
+        List<RagContextDocument> documents,
+        List<RagStageEvidence> evidence,
+        int estimatedTokens,
+        boolean degraded) {}
 ```
 
-`rewriteLimit` 取值 `1..3`，原始查询始终保留并排在第一位；改写结果去除空白、完全重复项后
-不得超过该上限。HyDE 文本只用于生成向量，不参与 BM25 或符号匹配，避免假设内容污染精确
-关键词召回。
+`rewriteLimit` 取值 `1..3`，表示包含原始查询在内的查询总数。原始查询始终保留并排在第一位；
+流水线调用 `QueryRewriter.rewrite` 时传入 `rewriteLimit - 1`，改写结果去除空白、完全重复项后与
+原始查询的总数不得超过该上限。HyDE 文本只用于生成向量，不参与 BM25 或符号匹配，避免假设
+内容污染精确关键词召回。
 
 ### 3.2 流水线顺序与融合
 
@@ -85,8 +124,10 @@ public interface RagReranker {
 5. `RERANK`：只处理融合后的前 `retrievalLimit` 条，输出最多 `rerankLimit` 条。
 6. `TOKEN_BUDGET`：按排序选择父块；同一 `parentId` 只注入一次。
 
-`RagContextDocument` 保存 `childId`、`parentId`、`path`、`symbol`、实际注入内容、融合分、
-rerank 分、内容来源和估算 token。内容来源只含 `PARENT` 与 `CHILD`。预算优先注入完整父块；
+`RagTokenBudgetSelector.select(List<FusedHit>, List<RerankedHit>, int maxTokens)` 先按
+`RerankedHit` 的 childId 将分数映射回冻结的 `FusedHit`。`RagContextDocument` 保存
+`childId`、`parentId`、`path`、`symbol`、实际注入内容、融合分、rerank 分、内容来源和估算
+token。内容来源只含 `PARENT` 与 `CHILD`。预算优先注入完整父块；
 单个父块超过剩余预算时退为对应子块；子块仍超限则跳过。若第一条子块本身超过总预算，抛出
 `RagContextBudgetExceededException`，禁止返回空证据伪装成功。
 
@@ -103,9 +144,8 @@ token 估算复用 `agent-core.context.TokenEstimator`，生产使用现有 `Utf
 - `RERANK`
 - `TOKEN_BUDGET`
 
-`RagStageStatus` 只含 `APPLIED`、`SKIPPED`、`DEGRADED`。每个
-`RagStageEvidence` 保存 stage、status、inputCount、outputCount、estimatedTokens、detail 和
-errorStack。`errorStack` 无错误时为空字符串，有错误时保存完整堆栈。
+`RagStageStatus` 只含 `APPLIED`、`SKIPPED`、`DEGRADED`。`detail` 与 `errorStack` 均不得为
+null；`errorStack` 无错误时为空字符串，有错误时保存完整堆栈。
 
 改写、HyDE 或 rerank 失败时：
 
