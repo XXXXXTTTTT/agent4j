@@ -1064,6 +1064,9 @@ PostgreSQL 新增 `agent_users`、`agent_workspaces`、`agent_workspace_members`
 轮次 -> 调度图”。系统级 `findTurnByRunId` 直接查询 `agent_conversation_turns`，不复用带成员联结
 的授权查询，避免多人工作区把唯一轮次放大为多行。归档再次通过 `WorkspaceAccessService` 要求
 `OPERATOR`，前端则以当前会话 turns 中的精确 `runId` 隔离审批和执行证据，并主动关闭旧连接。
+若进程仍在终态事件发布窗口退出，读取轮次或提交下一轮前会对 `RUNNING` Turn 的 `run_id` 查询
+PostgreSQL Checkpoint；发现 `COMPLETED`、`FAILED` 或 `REJECTED` 后复用同一幂等投影逻辑补写
+轮次终态，避免活动轮次冲突永久阻断对话。
 
 ### 【证据】
 

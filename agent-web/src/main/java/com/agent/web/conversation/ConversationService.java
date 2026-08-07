@@ -32,6 +32,7 @@ public final class ConversationService {
     private final ConversationContextProvider contextProvider;
     private final ActorResolver actorResolver;
     private final ConversationRunStarter runStarter;
+    private final ConversationRunProjector conversationProjector;
     private final Clock clock;
 
     /** 创建会话应用服务。 */
@@ -42,11 +43,24 @@ public final class ConversationService {
             ActorResolver actorResolver,
             ConversationRunStarter runStarter,
             Clock clock) {
+        this(repository, workspaceAccess, contextProvider, actorResolver, runStarter, null, clock);
+    }
+
+    /** 创建带终态对账能力的会话应用服务。 */
+    public ConversationService(
+            ConversationRepository repository,
+            WorkspaceAccessService workspaceAccess,
+            ConversationContextProvider contextProvider,
+            ActorResolver actorResolver,
+            ConversationRunStarter runStarter,
+            ConversationRunProjector conversationProjector,
+            Clock clock) {
         this.repository = Objects.requireNonNull(repository, "repository 不能为空");
         this.workspaceAccess = Objects.requireNonNull(workspaceAccess, "workspaceAccess 不能为空");
         this.contextProvider = Objects.requireNonNull(contextProvider, "contextProvider 不能为空");
         this.actorResolver = Objects.requireNonNull(actorResolver, "actorResolver 不能为空");
         this.runStarter = Objects.requireNonNull(runStarter, "runStarter 不能为空");
+        this.conversationProjector = conversationProjector;
         this.clock = Objects.requireNonNull(clock, "clock 不能为空");
     }
 
@@ -80,7 +94,22 @@ public final class ConversationService {
     public List<ConversationTurnRecord> listTurns(UUID conversationId) {
         Actor actor = actorResolver.current();
         getConversation(conversationId);
-        return repository.findTurns(conversationId, actor.userId());
+        return reconcileTurns(conversationId, actor.userId());
+    }
+
+    private List<ConversationTurnRecord> reconcileTurns(UUID conversationId, String userId) {
+        List<ConversationTurnRecord> turns = repository.findTurns(conversationId, userId);
+        if (conversationProjector == null) {
+            return turns;
+        }
+        boolean hasActiveRun = turns.stream()
+                .anyMatch(turn -> turn.status() == ConversationTurnStatus.RUNNING
+                        && turn.runId() != null);
+        if (!hasActiveRun) {
+            return turns;
+        }
+        turns.forEach(conversationProjector::reconcile);
+        return repository.findTurns(conversationId, userId);
     }
 
     /** 提交一轮任务，创建独立 Run 并把其身份绑定到当前用户和工作区。 */
@@ -95,6 +124,7 @@ public final class ConversationService {
                 .orElseThrow(() -> new ConversationNotFoundException(conversationId));
         WorkspaceRecord workspace = workspaceAccess.requireWorkspace(
                 conversation.workspaceId(), actor.userId(), WorkspacePermission.OPERATOR);
+        reconcileTurns(conversation.conversationId(), actor.userId());
         ConversationContext context = contextProvider.load(
                 conversation.conversationId(), actor.userId(),
                 CONTEXT_MAX_TURNS, CONTEXT_MAX_CHARACTERS);

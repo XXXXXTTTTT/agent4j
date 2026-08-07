@@ -130,6 +130,7 @@ public class HarnessConfiguration {
             ConversationContextProvider conversationContextProvider,
             ActorResolver actorResolver,
             AgentRunService agentRunService,
+            ConversationRunProjector conversationRunProjector,
             Clock harnessClock) {
         return new ConversationService(
                 repository,
@@ -137,6 +138,7 @@ public class HarnessConfiguration {
                 conversationContextProvider,
                 actorResolver,
                 agentRunService::start,
+                conversationRunProjector,
                 harnessClock);
     }
 

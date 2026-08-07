@@ -7,6 +7,7 @@ import com.agent.core.trace.TraceEvent;
 import com.agent.core.trace.TraceEventPublisher;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -37,6 +38,27 @@ public final class ConversationRunProjector implements TraceEventPublisher {
         this.repository = Objects.requireNonNull(repository, "repository 不能为空");
         this.checkpointer = null;
         this.clock = Clock.systemUTC();
+    }
+
+    /**
+     * 从权威 Checkpoint 补偿尚未收到终态事件的运行轮次。
+     *
+     * @param turn 待读取的会话轮次
+     */
+    public void reconcile(ConversationTurnRecord turn) {
+        Objects.requireNonNull(turn, "turn 不能为空");
+        if (checkpointer == null
+                || turn.status() != ConversationTurnStatus.RUNNING
+                || turn.runId() == null) {
+            return;
+        }
+        checkpointer.loadLatest(turn.runId())
+                .ifPresent(checkpoint -> {
+                    TraceEvent terminal = terminalEvent(checkpoint);
+                    if (terminal != null) {
+                        project(terminal, checkpoint.state());
+                    }
+                });
     }
 
     /** 接收 Run 终态事件并从权威 Checkpoint 读取最终状态。 */
@@ -84,6 +106,25 @@ public final class ConversationRunProjector implements TraceEventPublisher {
             projected.remove(event.runId());
             throw exception;
         }
+    }
+
+    private TraceEvent terminalEvent(RunCheckpoint checkpoint) {
+        UUID eventId = UUID.randomUUID();
+        Instant occurredAt = clock.instant();
+        return switch (checkpoint.status()) {
+            case COMPLETED -> new TraceEvent.Completed(
+                    eventId, checkpoint.runId(), checkpoint.version(), occurredAt);
+            case FAILED -> new TraceEvent.Failed(
+                    eventId, checkpoint.runId(), checkpoint.version(), occurredAt,
+                    Objects.requireNonNull(checkpoint.error(), "FAILED Checkpoint 缺少 error"));
+            case REJECTED -> new TraceEvent.Rejected(
+                    eventId, checkpoint.runId(), checkpoint.version(), occurredAt,
+                    Objects.requireNonNull(checkpoint.interruptRequest(),
+                            "REJECTED Checkpoint 缺少 interruptRequest").nodeName(),
+                    Objects.requireNonNull(checkpoint.approvalReason(),
+                            "REJECTED Checkpoint 缺少 approvalReason"));
+            case RUNNING, WAITING_APPROVAL -> null;
+        };
     }
 
     private String resolveAssistant(AgentState state) {

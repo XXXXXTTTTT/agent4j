@@ -136,8 +136,9 @@ public interface ConversationContextProvider {
 4. 构造 `AgentState`：历史写入 `messages`；当前输入写入精确键 `planner.task`；工作区写入
    `coder.workspacePath`；仓库和用户写入既有 `planner.repositoryId`、`planner.userId`；新增精确键
    `conversation.id` 和 `conversation.turnId`。
-5. `AgentRunService.start("code-agent", state)` 创建独立 Run。Turn 随后更新为 `RUNNING` 并关联
-   `run_id`；启动失败则更新为 `FAILED` 并保存完整堆栈。
+5. `AgentRunService.start("code-agent", state, beforeDispatch)` 创建独立 Run Checkpoint，并在调度
+   虚拟线程前同步通过 `beforeDispatch` 将 Turn 更新为 `RUNNING`、关联 `run_id`；绑定或启动失败
+   则更新为 `FAILED` 并保存完整堆栈。
 6. `PlannerNode` 使用历史 `state.messages` 加本轮用户消息构造模型请求。快速问答响应和代码任务
    规划均把本轮用户消息及助手消息追加回不可变 `AgentState.messages`。
 7. `ConversationRunProjector` 监听现有 Run 终态 Trace。`COMPLETED` 时按顺序解析
@@ -145,8 +146,9 @@ public interface ConversationContextProvider {
    `assistant_content`；`FAILED`/`REJECTED` 写入 Turn 状态和完整错误。
 8. 前端通过现有 Run Trace 获得实时过程，通过 Conversation API 重新加载权威轮次。
 
-如果终态事件投影失败，异常必须进入应用日志；读取 Conversation 时执行幂等对账：对仍为
-`RUNNING` 且已有终态 Run 的 Turn 重新投影，避免进程在事件发布窗口崩溃造成永久缺口。
+如果终态事件投影失败，异常必须进入应用日志；读取轮次或提交下一轮前执行幂等对账：对仍为
+`RUNNING` 且已有终态 Run 的 Turn 重新投影，避免进程在事件发布窗口崩溃造成永久缺口，也避免
+活动轮次冲突阻断连续对话。
 
 ## REST 协议
 

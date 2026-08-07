@@ -3,6 +3,8 @@ package com.agent.web.conversation;
 import com.agent.core.conversation.ConversationContext;
 import com.agent.core.conversation.ConversationContextProvider;
 import com.agent.core.engine.AgentState;
+import com.agent.core.engine.Checkpointer;
+import com.agent.core.engine.CheckpointAppend;
 import com.agent.core.engine.RunCheckpoint;
 import com.agent.core.engine.RunStatus;
 import com.agent.core.llm.ChatMessage;
@@ -183,6 +185,81 @@ class ConversationServiceTest {
         assertThat(starter.state).isNull();
     }
 
+    @Test
+    void listTurnsReconcilesTerminalRunBeforeReturningConversationHistory() {
+        Actor resolved = new Actor("reconcile-user", "Reconcile");
+        FakeConversationRepository repository = new FakeConversationRepository();
+        repository.conversation = new ConversationRecord(
+                CONVERSATION_ID, WORKSPACE_ID, resolved.userId(), "标题",
+                ConversationStatus.ACTIVE, NOW, NOW);
+        UUID runId = UUID.randomUUID();
+        repository.turns = List.of(new ConversationTurnRecord(
+                UUID.randomUUID(), CONVERSATION_ID, 1, "问题", null, runId,
+                ConversationTurnStatus.RUNNING, null, NOW, null));
+        RunCheckpoint completed = new RunCheckpoint(
+                runId, 3, "code-agent", RunStatus.COMPLETED,
+                AgentState.empty().withVariable("final_response", "补偿回答"),
+                null, null, null, null, null, NOW);
+        ConversationRunProjector projector = new ConversationRunProjector(
+                repository, new FixedCheckpointer(completed), Clock.fixed(NOW, ZoneOffset.UTC));
+        ConversationService service = new ConversationService(
+                repository, new WorkspaceAccessService(
+                        new TestWorkspaceRepository(resolved), Path.of("D:/agent4j"),
+                        Clock.fixed(NOW, ZoneOffset.UTC)),
+                (id, userId, maxTurns, maxCharacters) ->
+                        new ConversationContext(List.of(), 0, false),
+                () -> resolved, new CapturingStarter(), projector,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        List<ConversationTurnRecord> turns = service.listTurns(CONVERSATION_ID);
+
+        assertThat(turns).singleElement()
+                .extracting(ConversationTurnRecord::assistantContent)
+                .isEqualTo("补偿回答");
+        assertThat(repository.findTurnsCalls).isEqualTo(2);
+    }
+
+    @Test
+    void submissionReconcilesPreviousTerminalRunBeforeLoadingConversationContext() {
+        Actor resolved = new Actor("continue-user", "Continue");
+        FakeConversationRepository repository = new FakeConversationRepository();
+        repository.conversation = new ConversationRecord(
+                CONVERSATION_ID, WORKSPACE_ID, resolved.userId(), "标题",
+                ConversationStatus.ACTIVE, NOW, NOW);
+        UUID previousRunId = UUID.randomUUID();
+        repository.turns = List.of(new ConversationTurnRecord(
+                UUID.randomUUID(), CONVERSATION_ID, 1, "上一问", null, previousRunId,
+                ConversationTurnStatus.RUNNING, null, NOW, null));
+        repository.pending = new ConversationTurnRecord(
+                UUID.randomUUID(), CONVERSATION_ID, 2, "下一问", null, null,
+                ConversationTurnStatus.PENDING, null, NOW, null);
+        RunCheckpoint completed = new RunCheckpoint(
+                previousRunId, 3, "code-agent", RunStatus.COMPLETED,
+                AgentState.empty().withVariable("final_response", "上一答"),
+                null, null, null, null, null, NOW);
+        ConversationRunProjector projector = new ConversationRunProjector(
+                repository, new FixedCheckpointer(completed), Clock.fixed(NOW, ZoneOffset.UTC));
+        ConversationContextProvider contextProvider = (id, userId, maxTurns, maxCharacters) -> {
+            assertThat(repository.turns).singleElement()
+                    .extracting(ConversationTurnRecord::status)
+                    .isEqualTo(ConversationTurnStatus.COMPLETED);
+            return new ConversationContext(
+                    List.of(ChatMessage.user("上一问"), ChatMessage.assistant("上一答")),
+                    1, false);
+        };
+        ConversationService service = new ConversationService(
+                repository, new WorkspaceAccessService(
+                        new TestWorkspaceRepository(resolved), Path.of("D:/agent4j"),
+                        Clock.fixed(NOW, ZoneOffset.UTC)),
+                contextProvider, () -> resolved, new CapturingStarter(), projector,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        ConversationTurnRecord submitted = service.submitTurn(
+                CONVERSATION_ID, "下一问", "");
+
+        assertThat(submitted.status()).isEqualTo(ConversationTurnStatus.RUNNING);
+    }
+
     private static final class CapturingStarter implements ConversationRunStarter {
         private AgentState state;
 
@@ -204,6 +281,8 @@ class ConversationServiceTest {
         private ConversationRecord conversation;
         private ConversationTurnRecord pending;
         private ConversationTurnRecord running;
+        private List<ConversationTurnRecord> turns = List.of();
+        private int findTurnsCalls;
 
         @Override
         public Optional<ConversationRecord> findConversation(UUID conversationId, String userId) {
@@ -223,6 +302,13 @@ class ConversationServiceTest {
                     conversation.conversationId(), conversation.workspaceId(), conversation.createdBy(),
                     title, conversation.status(), conversation.createdAt(), now);
             return conversation;
+        }
+
+        @Override
+        public Optional<ConversationTurnRecord> findTurnByRunId(UUID runId) {
+            return turns.stream()
+                    .filter(turn -> runId.equals(turn.runId()))
+                    .findFirst();
         }
 
         @Override
@@ -246,8 +332,56 @@ class ConversationServiceTest {
         }
 
         @Override
+        public ConversationTurnRecord markTurnCompleted(UUID turnId, String assistantContent, Instant now) {
+            ConversationTurnRecord current = turns.stream()
+                    .filter(turn -> turn.turnId().equals(turnId))
+                    .findFirst()
+                    .orElseThrow();
+            ConversationTurnRecord completed = new ConversationTurnRecord(
+                    current.turnId(), current.conversationId(), current.turnIndex(),
+                    current.userContent(), assistantContent, current.runId(),
+                    ConversationTurnStatus.COMPLETED, null, current.createdAt(), now);
+            turns = List.of(completed);
+            return completed;
+        }
+
+        @Override
         public List<ConversationTurnRecord> findTurns(UUID conversationId, String userId) {
-            return List.of();
+            findTurnsCalls++;
+            return turns;
+        }
+    }
+
+    private static final class FixedCheckpointer implements Checkpointer {
+        private final RunCheckpoint checkpoint;
+
+        private FixedCheckpointer(RunCheckpoint checkpoint) {
+            this.checkpoint = checkpoint;
+        }
+
+        @Override
+        public RunCheckpoint create(UUID runId, String graphId, AgentState initialState, String entryNode) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public RunCheckpoint append(CheckpointAppend append) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Optional<RunCheckpoint> loadLatest(UUID runId) {
+            return runId.equals(checkpoint.runId()) ? Optional.of(checkpoint) : Optional.empty();
+        }
+
+        @Override
+        public List<RunCheckpoint> loadHistory(UUID runId) {
+            return List.of(checkpoint);
+        }
+
+        @Override
+        public List<RunCheckpoint> loadLatestByStatus(RunStatus status) {
+            return checkpoint.status() == status ? List.of(checkpoint) : List.of();
         }
     }
 

@@ -1,8 +1,11 @@
 package com.agent.web.conversation;
 
 import com.agent.core.engine.AgentState;
+import com.agent.core.engine.Checkpointer;
+import com.agent.core.engine.CheckpointAppend;
+import com.agent.core.engine.RunCheckpoint;
+import com.agent.core.engine.RunStatus;
 import com.agent.core.trace.TraceEvent;
-import com.agent.web.persistence.JdbcConversationRepository;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -46,6 +49,23 @@ class ConversationRunProjectorTest {
         assertThat(repository.failedErrors).containsExactly("完整堆栈", "用户拒绝");
     }
 
+    @Test
+    void reconcilesMissedCompletedEventFromAuthoritativeCheckpointIdempotently() {
+        FakeRepository repository = new FakeRepository();
+        AgentState state = AgentState.empty().withVariable("final_response", "补偿回答");
+        RunCheckpoint completed = new RunCheckpoint(
+                RUN_ID, 4, "code-agent", RunStatus.COMPLETED, state,
+                null, null, null, null, null, NOW);
+        ConversationRunProjector projector = new ConversationRunProjector(
+                repository, new FixedCheckpointer(completed), java.time.Clock.fixed(
+                        NOW, java.time.ZoneOffset.UTC));
+
+        projector.reconcile(repository.turn);
+        projector.reconcile(repository.turn);
+
+        assertThat(repository.completedContents).containsExactly("补偿回答");
+    }
+
     private static final class FakeRepository implements ConversationRepository {
         private final ConversationTurnRecord turn = new ConversationTurnRecord(
                 TURN_ID, CONVERSATION_ID, 1, "问题", null, RUN_ID,
@@ -78,6 +98,39 @@ class ConversationRunProjectorTest {
         @Override
         public List<ConversationTurnRecord> findTurns(UUID conversationId, String userId) {
             return List.of();
+        }
+    }
+
+    private static final class FixedCheckpointer implements Checkpointer {
+        private final RunCheckpoint checkpoint;
+
+        private FixedCheckpointer(RunCheckpoint checkpoint) {
+            this.checkpoint = checkpoint;
+        }
+
+        @Override
+        public RunCheckpoint create(UUID runId, String graphId, AgentState initialState, String entryNode) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public RunCheckpoint append(CheckpointAppend append) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Optional<RunCheckpoint> loadLatest(UUID runId) {
+            return runId.equals(checkpoint.runId()) ? Optional.of(checkpoint) : Optional.empty();
+        }
+
+        @Override
+        public List<RunCheckpoint> loadHistory(UUID runId) {
+            return List.of(checkpoint);
+        }
+
+        @Override
+        public List<RunCheckpoint> loadLatestByStatus(RunStatus status) {
+            return checkpoint.status() == status ? List.of(checkpoint) : List.of();
         }
     }
 }
