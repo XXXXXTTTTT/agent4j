@@ -14,6 +14,7 @@ import com.agent.web.conversation.JdbcConversationContextProvider;
 import com.agent.web.identity.ActorResolver;
 import com.agent.web.identity.ConfiguredActorResolver;
 import com.agent.web.workspace.WorkspaceAccessService;
+import com.agent.web.workspace.WorkspaceBootstrap;
 import com.agent.web.trace.InMemoryTraceEventBus;
 import com.agent.web.trace.RunLifecycleEventPublisher;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -21,6 +22,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -36,6 +39,7 @@ import com.agent.rag.memory.RunBadCaseAttributor;
 
 /** 装配 Harness 的持久化、图注册、Trace 与运行服务。 */
 @Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties(ProductionAgentProperties.class)
 public class HarnessConfiguration {
 
     /** 提供持久化 Checkpoint 使用的 UTC 时钟。 */
@@ -67,7 +71,7 @@ public class HarnessConfiguration {
 
     /** 创建会话和工作区共用的 JDBC 权威仓储。 */
     @Bean
-    @ConditionalOnBean(ProductionAgentProperties.class)
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
     JdbcConversationRepository conversationRepository(
             JdbcClient jdbcClient,
             PlatformTransactionManager transactionManager,
@@ -88,14 +92,14 @@ public class HarnessConfiguration {
 
     /** 单机配置身份边界；后续可替换为网关认证主体。 */
     @Bean
-    @ConditionalOnBean(ProductionAgentProperties.class)
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
     ActorResolver actorResolver(ProductionAgentProperties properties) {
         return new ConfiguredActorResolver(properties.userId(), properties.userId());
     }
 
     /** 工作区路径与成员权限门禁。 */
     @Bean
-    @ConditionalOnBean(ProductionAgentProperties.class)
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
     WorkspaceAccessService workspaceAccessService(
             JdbcConversationRepository repository,
             ProductionAgentProperties properties,
@@ -103,9 +107,23 @@ public class HarnessConfiguration {
         return new WorkspaceAccessService(repository, properties.workspace(), harnessClock);
     }
 
+    /** 启动时幂等创建配置用户和默认 OWNER 工作区。 */
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    WorkspaceBootstrap workspaceBootstrap(
+            WorkspaceAccessService workspaceAccessService,
+            ActorResolver actorResolver,
+            ProductionAgentProperties properties) {
+        return new WorkspaceBootstrap(
+                workspaceAccessService,
+                actorResolver,
+                properties.workspace(),
+                properties.repositoryId());
+    }
+
     /** 绑定当前会话的 Run 启动服务。 */
     @Bean
-    @ConditionalOnBean({ProductionAgentProperties.class, AgentRunService.class})
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
     ConversationService conversationService(
             JdbcConversationRepository repository,
             WorkspaceAccessService workspaceAccessService,
@@ -124,7 +142,7 @@ public class HarnessConfiguration {
 
     /** 将 Run 终态投影回会话轮次。 */
     @Bean
-    @ConditionalOnBean({ProductionAgentProperties.class, JdbcConversationRepository.class})
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
     ConversationRunProjector conversationRunProjector(
             JdbcConversationRepository repository,
             Checkpointer checkpointer,
