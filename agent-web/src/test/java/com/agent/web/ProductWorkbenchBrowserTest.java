@@ -55,7 +55,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ProductWorkbenchBrowserTest {
 
-    private static final String GRAPH_ID = "product-workbench-browser";
+    private static final String GRAPH_ID = "code-agent";
     private static final String ANSI_LOG = "\u001b[32mtests passed\u001b[0m\r\n";
     private static final String UNIFIED_DIFF = """
             diff --git a/src/App.java b/src/App.java
@@ -117,12 +117,13 @@ class ProductWorkbenchBrowserTest {
             page.navigate("http://127.0.0.1:"
                     + application.getWebServer().getPort() + "/");
 
-            page.getByLabel("任务描述").fill("验证工作台审批与执行证据");
             page.getByRole(com.microsoft.playwright.options.AriaRole.BUTTON,
-                    new Page.GetByRoleOptions().setName("高级运行参数")).click();
-            page.getByLabel("图 ID").fill(GRAPH_ID);
+                    new Page.GetByRoleOptions().setName("新建会话")).click();
+            page.getByRole(com.microsoft.playwright.options.AriaRole.TEXTBOX,
+                    new Page.GetByRoleOptions().setName("发送消息"))
+                    .fill("验证工作台审批与执行证据");
             page.getByRole(com.microsoft.playwright.options.AriaRole.BUTTON,
-                    new Page.GetByRoleOptions().setName("运行 Agent")).click();
+                    new Page.GetByRoleOptions().setName("发送消息")).click();
             try {
                 page.getByTestId("approval-dialog").waitFor();
             } catch (PlaywrightException exception) {
@@ -230,6 +231,14 @@ class ProductWorkbenchBrowserTest {
             assertThat(page.getByTestId("trace-timeline").textContent())
                     .contains("完成");
 
+            String conversationUrl = page.url();
+            assertThat(conversationUrl).contains("conversationId=");
+            page.reload();
+            page.getByTestId("workspace-main")
+                    .getByText("验证工作台审批与执行证据").waitFor();
+            page.getByTestId("workspace-main").getByText("无需修改").waitFor();
+            assertThat(page.url()).isEqualTo(conversationUrl);
+
             Path desktopScreenshot = screenshotDirectory.resolve("desktop.png");
             page.screenshot(new Page.ScreenshotOptions()
                     .setPath(desktopScreenshot)
@@ -261,7 +270,11 @@ class ProductWorkbenchBrowserTest {
                 "--server.port=0",
                 "--spring.datasource.url=" + POSTGRES.getJdbcUrl(),
                 "--spring.datasource.username=" + POSTGRES.getUsername(),
-                "--spring.datasource.password=" + POSTGRES.getPassword());
+                "--spring.datasource.password=" + POSTGRES.getPassword(),
+                "--agent.production.enabled=true",
+                "--agent.production.workspace=" + Path.of(".").toAbsolutePath().normalize(),
+                "--agent.production.repository-id=browser-test",
+                "--agent.production.user-id=browser-user");
     }
 
     private LayoutReference readReference(String fileName) throws IOException {

@@ -48,6 +48,7 @@ function controller(
     error: null,
     start: vi.fn(async () => undefined),
     startTask: vi.fn(async () => undefined),
+    followRun: vi.fn(async () => undefined),
     reload: vi.fn(async () => undefined),
     decide: vi.fn(async () => undefined),
     ...overrides,
@@ -69,7 +70,7 @@ function conversationController(
     activeConversation: { conversationId: 'conv-1', workspaceId: 'ws-1', createdBy: 'user-1', title: '模型咨询', status: 'ACTIVE', createdAt: '2026-08-07T01:00:00Z', updatedAt: '2026-08-07T01:00:00Z' } satisfies Conversation,
     turns: [{ turnId: 'turn-1', conversationId: 'conv-1', turnIndex: 0, userContent: '你是什么模型', assistantContent: '我是 AI。', runId: 'run-1', status: 'COMPLETED', error: null, createdAt: '2026-08-07T01:00:00Z', completedAt: '2026-08-07T01:00:05Z' } satisfies ConversationTurn],
     searchQuery: '', loading: false, submitting: false, error: null,
-    selectWorkspace: vi.fn(async () => undefined), selectConversation: vi.fn(async () => undefined), search: vi.fn(async () => undefined), createConversation: vi.fn(async () => undefined), submit: vi.fn(async () => ({ turnId: 'turn-2', conversationId: 'conv-1', turnIndex: 1, userContent: '继续', assistantContent: null, runId: 'run-2', status: 'PENDING', error: null, createdAt: '2026-08-07T01:00:06Z', completedAt: null })), archive: vi.fn(async () => undefined), reload: vi.fn(async () => undefined),
+    selectWorkspace: vi.fn(async () => undefined), selectConversation: vi.fn(async () => undefined), search: vi.fn(async () => undefined), createConversation: vi.fn(async () => undefined), submit: vi.fn(async (): Promise<ConversationTurn> => ({ turnId: 'turn-2', conversationId: 'conv-1', turnIndex: 1, userContent: '继续', assistantContent: null, runId: 'run-2', status: 'PENDING', error: null, createdAt: '2026-08-07T01:00:06Z', completedAt: null })), archive: vi.fn(async () => undefined), reload: vi.fn(async () => undefined),
     ...overrides,
   }
 }

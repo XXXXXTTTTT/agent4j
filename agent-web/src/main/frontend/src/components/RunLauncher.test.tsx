@@ -14,6 +14,7 @@ function controller(startTask = vi.fn(async () => undefined)): UseRunWorkbenchRe
     error: null,
     start: vi.fn(async () => undefined),
     startTask,
+    followRun: vi.fn(async () => undefined),
     reload: vi.fn(async () => undefined),
     decide: vi.fn(async () => undefined),
   }

@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 
 import { useRunWorkbench } from './hooks/useRunWorkbench'
 import { useConversationWorkspace } from './hooks/useConversationWorkspace'
@@ -13,6 +13,11 @@ export function App() {
     onTerminalData: (text) => terminalRef.current?.write(text),
   })
   const conversation = useConversationWorkspace()
+  const latestRunId = conversation.turns.at(-1)?.runId ?? null
+  useEffect(() => {
+    if (latestRunId === null || controller.run?.runId === latestRunId) return
+    void controller.followRun(latestRunId).catch(() => undefined)
+  }, [controller.followRun, controller.run?.runId, latestRunId])
   return (
     <Workbench
       controller={controller}

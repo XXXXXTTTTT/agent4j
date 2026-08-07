@@ -27,7 +27,7 @@ export function ConversationComposer({ conversation, runController }: Conversati
   }
 
   return (
-    <section className="run-launcher conversation-composer" aria-label="会话输入">
+    <section className="run-launcher conversation-composer" data-testid="run-launcher" aria-label="会话输入">
       <form onSubmit={(event) => void submit(event)}>
         <label className="sr-only" htmlFor="conversation-message">发送消息</label>
         <textarea id="conversation-message" value={content} onChange={(event) => setContent(event.target.value)} rows={3} placeholder={conversation.activeConversation === null ? '先新建或选择一个会话' : '输入消息，继续这个项目的对话'} disabled={conversation.activeConversation === null || conversation.submitting} />
@@ -39,6 +39,7 @@ export function ConversationComposer({ conversation, runController }: Conversati
           </button>
         </div>
       </form>
+      <span className="sr-only" data-testid="run-status" aria-live="polite">{runController.run?.status ?? 'IDLE'}</span>
     </section>
   )
 }
