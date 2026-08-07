@@ -22,13 +22,18 @@ public final class ModelIntentClassifier implements IntentClassifier {
     private static final Set<String> EXACT_FIELDS = Set.of(
             "route", "taskKind", "complexity", "requiredCapabilities", "reason");
     private static final List<String> CODE_ACTION_MARKERS = List.of(
-            "修改", "改", "写代码", "生成代码", "实现", "修复", "重构", "补充测试",
-            "文件", "源码", "代码", "git", "docker", "code", "fix", "implement",
-            "refactor", "test", "build");
-    private static final List<String> COMMAND_MARKERS = List.of(
-            "运行测试", "执行测试", "执行命令", "运行命令", "编译", "docker", "build");
-    private static final List<String> BROWSER_MARKERS = List.of(
-            "浏览器", "网页", "页面", "截图", "dom", "playwright", "browser");
+            "修改", "改成", "写代码", "生成代码", "实现", "修复", "重构", "补充测试",
+            "fix ", "implement ", "refactor ");
+    private static final List<String> COMMAND_ACTION_MARKERS = List.of(
+            "运行测试", "执行测试", "执行命令", "运行命令", "运行构建", "执行构建", "编译",
+            "run tests", "run test", "execute command", "run command", "build project");
+    private static final List<String> BROWSER_ACTION_MARKERS = List.of(
+            "点击页面", "点击按钮", "打开网页", "导航到", "截取页面", "页面截图", "操作浏览器",
+            "click page", "click button", "open page", "navigate to", "take screenshot");
+    private static final List<String> PROJECT_REFERENCE_MARKERS = List.of(
+            "当前项目", "这个项目", "本项目", "当前仓库", "这个仓库", "本仓库",
+            "当前代码库", "这个代码库", "本代码库", "this project", "this repository",
+            "this codebase");
     private static final List<String> EXPLANATION_MARKERS = List.of(
             "解释", "说明", "分析", "介绍", "为什么", "explain", "why");
 
@@ -58,6 +63,10 @@ public final class ModelIntentClassifier implements IntentClassifier {
         if (fastDecision != null) {
             return fastDecision;
         }
+        TaskDecision knowledgeDecision = classifyProjectQuestion(task);
+        if (knowledgeDecision != null) {
+            return knowledgeDecision;
+        }
         TaskDecision questionDecision = classifyDirectQuestion(task);
         if (questionDecision != null) {
             return questionDecision;
@@ -75,8 +84,8 @@ public final class ModelIntentClassifier implements IntentClassifier {
     private TaskDecision classifyExplicitAction(String task) {
         String normalized = task.toLowerCase(Locale.ROOT);
         boolean code = containsAny(normalized, CODE_ACTION_MARKERS);
-        boolean command = containsAny(normalized, COMMAND_MARKERS);
-        boolean browser = containsAny(normalized, BROWSER_MARKERS);
+        boolean command = containsAny(normalized, COMMAND_ACTION_MARKERS);
+        boolean browser = containsAny(normalized, BROWSER_ACTION_MARKERS);
         if (!code && !command && !browser) {
             return null;
         }
@@ -108,9 +117,35 @@ public final class ModelIntentClassifier implements IntentClassifier {
                 "检测到明确执行动作");
     }
 
+    private TaskDecision classifyProjectQuestion(String task) {
+        String normalized = task.toLowerCase(Locale.ROOT);
+        if (!containsAny(normalized, PROJECT_REFERENCE_MARKERS)
+                || !isQuestionOrExplanation(task, normalized)) {
+            return null;
+        }
+        return new TaskDecision(
+                TaskRoute.KNOWLEDGE,
+                TaskKind.PROJECT_QUERY,
+                TaskComplexity.STANDARD,
+                Set.of(RequiredCapability.CODE_READ),
+                "检测到当前项目只读知识问答");
+    }
+
     private TaskDecision classifyDirectQuestion(String task) {
         String normalized = task.toLowerCase(Locale.ROOT);
-        boolean question = task.endsWith("?")
+        if (!isQuestionOrExplanation(task, normalized)) {
+            return null;
+        }
+        return new TaskDecision(
+                TaskRoute.CHAT,
+                TaskKind.CHAT,
+                TaskComplexity.SIMPLE,
+                Set.of(),
+                "检测到明确自然语言问答");
+    }
+
+    private boolean isQuestionOrExplanation(String task, String normalized) {
+        return task.endsWith("?")
                 || task.endsWith("？")
                 || normalized.startsWith("what ")
                 || normalized.startsWith("why ")
@@ -121,15 +156,6 @@ public final class ModelIntentClassifier implements IntentClassifier {
                 || task.startsWith("如何")
                 || task.startsWith("请解释")
                 || task.startsWith("介绍");
-        if (!question) {
-            return null;
-        }
-        return new TaskDecision(
-                TaskRoute.CHAT,
-                TaskKind.CHAT,
-                TaskComplexity.SIMPLE,
-                Set.of(),
-                "检测到明确自然语言问答");
     }
 
     private TaskDecision parseOrFallback(String response) {

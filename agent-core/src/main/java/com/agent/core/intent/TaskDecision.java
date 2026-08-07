@@ -24,13 +24,28 @@ public record TaskDecision(
         if (reason == null || reason.isBlank()) {
             throw new IllegalArgumentException("reason 不能为空");
         }
-        if (route == TaskRoute.CHAT
-                && (taskKind != TaskKind.CHAT || !requiredCapabilities.isEmpty())) {
-            throw new IllegalArgumentException("CHAT 路线必须使用 CHAT 类型且不声明执行能力");
-        }
-        if (route == TaskRoute.AGENT
-                && (taskKind == TaskKind.CHAT || requiredCapabilities.isEmpty())) {
-            throw new IllegalArgumentException("AGENT 路线必须声明非 CHAT 类型和执行能力");
+        switch (route) {
+            case CHAT -> {
+                if (taskKind != TaskKind.CHAT || !requiredCapabilities.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "CHAT 路线必须使用 CHAT 类型且不声明执行能力");
+                }
+            }
+            case KNOWLEDGE -> {
+                if (taskKind != TaskKind.PROJECT_QUERY
+                        || !requiredCapabilities.equals(Set.of(RequiredCapability.CODE_READ))) {
+                    throw new IllegalArgumentException(
+                            "KNOWLEDGE 路线必须使用 PROJECT_QUERY 类型且仅声明 CODE_READ 能力");
+                }
+            }
+            case AGENT -> {
+                if (taskKind == TaskKind.CHAT
+                        || taskKind == TaskKind.PROJECT_QUERY
+                        || requiredCapabilities.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "AGENT 路线必须声明执行类型和非空执行能力");
+                }
+            }
         }
     }
 }
