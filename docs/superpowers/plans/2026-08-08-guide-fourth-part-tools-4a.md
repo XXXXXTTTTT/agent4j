@@ -238,7 +238,7 @@
 - Review: all files changed since `eba8090`
 - Modify: `docs/superpowers/plans/2026-08-08-guide-fourth-part-tools-4a.md`
 
-- [ ] **Step 1: 运行完整门禁**：
+- [x] **Step 1: 运行完整门禁**：
 
   ```powershell
   $env:JAVA_HOME='C:\Program Files\Java\jdk-21'
@@ -253,12 +253,12 @@
   git diff --check
   ```
 
-- [ ] **Step 2: 运行安全扫描**：只扫描根/模块 POM 与 `agent-*/src`，确认没有 `langchain4j/langgraph4j`；确认 `.env`、日志、`target`、JAR、IDE 文件未暂存；受管 Docker 容器列表为空。
-- [ ] **Step 3: 独立审查**：逐项对照 4A 规格；确认没有提前实现 MCP、Skills 或 AST/PTY/Playwright 适配器；无 Critical/Important 后才提交计划状态。
-- [ ] **Step 4: 提交门禁状态**：
+- [x] **Step 2: 运行安全扫描**：只扫描根/模块 POM 与 `agent-*/src`，确认没有 `langchain4j/langgraph4j`；确认 `.env`、日志、`target`、JAR、IDE 文件未暂存；受管 Docker 容器列表为空。
+- [x] **Step 3: 独立审查**：逐项对照 4A 规格；确认没有提前实现 MCP、Skills 或 AST/PTY/Playwright 适配器；无 Critical/Important 后才提交计划状态。
+- [x] **Step 4: 提交门禁状态**：
 
   ```text
   docs(tool): complete core tool registry milestone
   ```
 
-- [ ] **Step 5: 提交后重跑核心测试**：在最终 HEAD 运行 `mvn -pl agent-core,agent-eval -am test`，检查 `git status --short` 为空；保留当前 worktree 和分支，不自动合并、推送或切换。
+- [x] **Step 5: 提交后重跑核心测试**：在最终 HEAD 运行 `mvn -pl agent-core,agent-eval -am test`，检查 `git status --short` 为空；保留当前 worktree 和分支，不自动合并、推送或切换。
