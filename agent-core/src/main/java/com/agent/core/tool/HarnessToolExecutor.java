@@ -27,7 +27,7 @@ public final class HarnessToolExecutor {
         }
         String riskLevel = registry.find(call.name())
                 .map(definition -> definition.riskLevel().name())
-                .orElse("UNKNOWN");
+                .orElse("");
         Map<String, String> metadata = Map.of(
                 "toolName", call.name(),
                 "callId", call.callId(),

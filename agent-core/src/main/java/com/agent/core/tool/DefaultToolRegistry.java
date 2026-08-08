@@ -111,14 +111,14 @@ public final class DefaultToolRegistry implements ToolRegistry {
         if (definition == null) {
             ToolNotFoundException exception = new ToolNotFoundException(call.name());
             return finish(call, context, Optional.empty(), ToolResultStatus.FAILED,
-                    NullNode.getInstance(), exception, started, false);
+                    NullNode.getInstance(), exception, started, false, argumentsSha256);
         }
 
         try {
             schemaValidator.validateArguments(definition.inputSchema(), call.arguments());
         } catch (Throwable exception) {
             return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.DENIED,
-                    NullNode.getInstance(), exception, started, false);
+                    NullNode.getInstance(), exception, started, false, argumentsSha256);
         }
 
         ToolAuthorization authorization;
@@ -127,7 +127,7 @@ public final class DefaultToolRegistry implements ToolRegistry {
                     authorizer.authorize(definition, call, context), "授权器不得返回 null");
         } catch (Throwable exception) {
             return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.DENIED,
-                    NullNode.getInstance(), exception, started, false);
+                    NullNode.getInstance(), exception, started, false, argumentsSha256);
         }
         if (authorization.decision() != ToolAuthorizationDecision.ALLOWED) {
             ToolException exception = authorization.decision() == ToolAuthorizationDecision.DENIED
@@ -136,7 +136,7 @@ public final class DefaultToolRegistry implements ToolRegistry {
             ToolResultStatus status = authorization.decision() == ToolAuthorizationDecision.DENIED
                     ? ToolResultStatus.DENIED : ToolResultStatus.APPROVAL_REQUIRED;
             return finish(call, context, Optional.of(definition.riskLevel()), status,
-                    NullNode.getInstance(), exception, started, false);
+                    NullNode.getInstance(), exception, started, false, argumentsSha256);
         }
 
         Future<JsonNode> future = executor.submit(() -> definition.handler().execute(call, context));
@@ -146,26 +146,26 @@ public final class DefaultToolRegistry implements ToolRegistry {
                 throw new IllegalArgumentException("工具 handler 必须返回 JSON object 或 array");
             }
             return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.SUCCEEDED,
-                    output, null, started, false);
+                    output, null, started, false, argumentsSha256);
         } catch (TimeoutException exception) {
             boolean cancellationRequested = future.cancel(true);
             ToolTimeoutException timeout = new ToolTimeoutException(definition.name(), definition.timeout());
             return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.TIMED_OUT,
-                    NullNode.getInstance(), timeout, started, cancellationRequested);
+                    NullNode.getInstance(), timeout, started, cancellationRequested, argumentsSha256);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
-                    NullNode.getInstance(), exception, started, future.cancel(true));
+                    NullNode.getInstance(), exception, started, future.cancel(true), argumentsSha256);
         } catch (CancellationException exception) {
             return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
-                    NullNode.getInstance(), exception, started, false);
+                    NullNode.getInstance(), exception, started, false, argumentsSha256);
         } catch (ExecutionException exception) {
             Throwable cause = exception.getCause() == null ? exception : exception.getCause();
             return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
-                    NullNode.getInstance(), cause, started, false);
+                    NullNode.getInstance(), cause, started, false, argumentsSha256);
         } catch (Throwable exception) {
             return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
-                    NullNode.getInstance(), exception, started, false);
+                    NullNode.getInstance(), exception, started, false, argumentsSha256);
         }
     }
 
@@ -184,15 +184,16 @@ public final class DefaultToolRegistry implements ToolRegistry {
             JsonNode output,
             Throwable failure,
             long started,
-            boolean cancellationRequested) {
+            boolean cancellationRequested,
+            String argumentsSha256) {
         Throwable error = failure;
         long durationMs = durationMillis(started);
         String errorStack = failure == null ? "" : stackTrace(failure);
         ToolResult result = new ToolResult(call.callId(), call.name(), status,
                 status == ToolResultStatus.SUCCEEDED ? output : NullNode.getInstance(), errorStack, durationMs);
         ToolAuditEvent event = new ToolAuditEvent(context.runId(), context.nodeName(), context.userId(),
-                call.callId(), call.name(), riskLevel, status, durationMs, sha256(call.arguments()),
-                failure == null ? "" : failure.getClass().getSimpleName(), cancellationRequested);
+                call.callId(), call.name(), riskLevel, status, durationMs, argumentsSha256,
+                failure == null ? "" : errorType(failure), cancellationRequested);
         try {
             auditSink.record(event);
         } catch (Throwable auditFailure) {
@@ -248,6 +249,11 @@ public final class DefaultToolRegistry implements ToolRegistry {
         StringWriter writer = new StringWriter();
         throwable.printStackTrace(new PrintWriter(writer));
         return writer.toString();
+    }
+
+    private static String errorType(Throwable throwable) {
+        String simpleName = throwable.getClass().getSimpleName();
+        return simpleName.isBlank() ? throwable.getClass().getName() : simpleName;
     }
 
     private void ensureOpen() {
