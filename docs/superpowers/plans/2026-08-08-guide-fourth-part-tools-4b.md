@@ -52,11 +52,11 @@
 - Create: `agent-core/src/main/java/com/agent/core/tool/mcp/McpClient.java`
 - Create: `agent-core/src/test/java/com/agent/core/tool/mcp/McpClientTest.java`
 
-- [ ] **Step 1: Write failing fake-transport tests**: verify initialize request then initialized notification, single initialization, listTools exact fields and duplicate rejection, uninitialized rejection, callTool object arguments, and remote `isError` preservation.
-- [ ] **Step 2: Run red test** with `mvn -pl agent-core -am -Dtest=McpClientTest -Dsurefire.failIfNoSpecifiedTests=false test`.
-- [ ] **Step 3: Implement client**: serialize exact methods `initialize`, `notifications/initialized`, `tools/list`, `tools/call`; validate response IDs and result shapes; expose immutable tool list and raw content.
-- [ ] **Step 4: Run green test and core regression**.
-- [ ] **Step 5: Commit** `feat(tool): implement mcp client discovery`.
+- [x] **Step 1: Write failing fake-transport tests**: verify initialize request then initialized notification, single initialization, listTools exact fields and duplicate rejection, uninitialized rejection, callTool object arguments, and remote `isError` preservation.
+- [x] **Step 2: Run red test** with `mvn -pl agent-core -am -Dtest=McpClientTest -Dsurefire.failIfNoSpecifiedTests=false test`.
+- [x] **Step 3: Implement client**: serialize exact methods `initialize`, `notifications/initialized`, `tools/list`, `tools/call`; validate response IDs and result shapes; expose immutable tool list and raw content.
+- [x] **Step 4: Run green test and core regression**: client 5 项通过，core 回归通过。
+- [x] **Step 5: Commit** `feat(tool): implement mcp client discovery`.
 
 ### Task 4: Registry adapter and governance regression
 
