@@ -111,6 +111,7 @@ public class ProductionGraphConfiguration {
     @Bean("code-agent")
     GraphFactory codeAgentGraph(
             ProductionAgentProperties properties,
+            KnowledgeProperties knowledgeProperties,
             ModelRouter modelRouter,
             MemoryContextProvider memoryContextProvider,
             KnowledgeContextProvider knowledgeContextProvider,
@@ -122,6 +123,8 @@ public class ProductionGraphConfiguration {
             ObjectMapper objectMapper,
             HarnessHookChain harness) {
         Objects.requireNonNull(properties, "properties 不能为空");
+        Objects.requireNonNull(knowledgeProperties, "knowledgeProperties 不能为空");
+        knowledgeProperties.validate();
         Objects.requireNonNull(modelRouter, "modelRouter 不能为空");
         Objects.requireNonNull(memoryContextProvider, "memoryContextProvider 不能为空");
         Objects.requireNonNull(knowledgeContextProvider, "knowledgeContextProvider 不能为空");
@@ -145,7 +148,35 @@ public class ProductionGraphConfiguration {
                 logPublisher,
                 objectMapper,
                 harness,
-                target);
+                target,
+                knowledgeProperties.maxTokens());
+    }
+
+    GraphFactory codeAgentGraph(
+            ProductionAgentProperties properties,
+            ModelRouter modelRouter,
+            MemoryContextProvider memoryContextProvider,
+            KnowledgeContextProvider knowledgeContextProvider,
+            SandboxTerminalService terminalService,
+            BrowserAutomation browserAutomation,
+            AstService astService,
+            WorkspaceSnapshotService snapshotService,
+            RunLogPublisher logPublisher,
+            ObjectMapper objectMapper,
+            HarnessHookChain harness) {
+        return codeAgentGraph(
+                properties,
+                new KnowledgeProperties(true, 4_000),
+                modelRouter,
+                memoryContextProvider,
+                knowledgeContextProvider,
+                terminalService,
+                browserAutomation,
+                astService,
+                snapshotService,
+                logPublisher,
+                objectMapper,
+                harness);
     }
 
     GraphFactory codeAgentGraph(
@@ -232,14 +263,15 @@ public class ProductionGraphConfiguration {
             RunLogPublisher logPublisher,
             ObjectMapper objectMapper,
             HarnessHookChain harness,
-            TerminalTarget target) {
+            TerminalTarget target,
+            int knowledgeMaxTokens) {
         var promptCatalog = PlannerPromptTemplates.catalog();
         PlannerNode planner = new PlannerNode(
                 modelRouter,
                 memoryContextProvider,
                 5,
                 knowledgeContextProvider,
-                4_000,
+                knowledgeMaxTokens,
                 objectMapper,
                 promptCatalog,
                 PlannerNode.defaultContextWindowManager(),

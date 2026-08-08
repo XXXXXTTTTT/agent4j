@@ -1549,3 +1549,33 @@ SHA-256；`CodebaseChunker` 与 `CodebaseIngestionService` 只消费该不可变
 超时、执行失败与中断传播。Task 6 指定测试连续三轮通过；随后 `agent-sandbox` 43、
 `agent-core` 168、`agent-rag` 115 个测试全量通过，0 failures、0 errors。2 个 skip 均为
 Windows 无符号链接权限的明确 assumption，真实 pgvector 集成测试未跳过。
+
+### 【问题现象】第二个 Flyway Bean 会让 Web 主迁移自动配置退场
+
+RAG 的迁移文件同样从 V1 开始。如果把 `db/migration` 与 `db/rag-migration` 合并到一个历史表，
+Flyway 会遇到重复版本；如果直接注册另一个 `Flyway` Bean，Spring Boot 的默认 Flyway 又会因
+`@ConditionalOnMissingBean` 不再创建，Web 的 Run、Checkpoint 和 Conversation 表失去迁移。
+
+### 【根因分析】
+
+Web schema 与 RAG schema 是两个独立版本空间，但共享同一 DataSource。Flyway 的 migration
+location、history table 和 Spring Boot Bean 条件必须同时隔离，不能只改 SQL 路径。
+
+### 【解决方案/代码级实现】
+
+Boot 默认 Flyway 继续使用 `classpath:db/migration` 与 `flyway_schema_history`。RAG 不注册第二个
+`Flyway` 类型 Bean，而是注册独立 `FlywayMigrationInitializer`；其内部 Flyway 精确使用
+`classpath:db/rag-migration` 和 `flyway_rag_schema_history`。`JdbcRagStore` 明确依赖该
+initializer，避免应用接流量时表结构尚未完成。
+
+### 【问题现象】Embedding 日志可能泄漏源码或密钥，维度漂移会污染索引
+
+Embedding 请求携带真实源码。如果直接记录请求体或带 Authorization 的请求对象，滚动日志会
+持久化代码和 API Key；端点忽略 `dimensions` 或返回多个向量时，错误数据还会在写库阶段才暴露。
+
+### 【解决方案/代码级实现】
+
+`OpenAiEmbeddingModel` 请求固定发送单项 `input`、精确模型名与 `dimensions=8`，响应必须只有
+一个 `index=0` 项、八个有限数且没有尾随 JSON。日志只记录完整 URL、model、inputCount、
+HTTP 状态和 durationMs，不记录 input 正文或 Bearer。配置沿用 `AGENT_LLM_BASE_URL` 与
+`AGENT_LLM_API_KEY`，RAG 只新增路径、模型和策略开关，避免重复密钥来源。
