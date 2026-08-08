@@ -174,9 +174,9 @@ old/new path 做标准化并验证仍在根目录；之后才把同一字节交�
 
 **【解决方案/代码级实现】** `PtyCommandExecutor` 从 pty4j 明确提供的 `pid()` 和
 `WinPtyProcess.getChildProcessId()` 构造包装进程与真实 Bash 子进程的
-`ProcessHandle` 快照；Windows 超时路径用 `LinkedHashSet` 对 PID 去重后执行一次
-`taskkill /T /F`，taskkill 的 stdout/stderr 直接重定向至 `DISCARD`，再反向强杀快照中的
-全部后代，使用 `onExit()` 和 1 秒上限等待进程树。
+`ProcessHandle` 快照；Windows 超时路径先在 `taskkill` 前收集后代 PID，再用
+`LinkedHashSet` 去重后执行一次 `taskkill /T /F`，taskkill 的 stdout/stderr 直接重定向至
+`DISCARD`，随后反向强杀快照中的全部后代，使用 `onExit()` 和 1 秒上限等待进程树。
 不能再调用无界的 `WinPtyProcess.waitFor()`：它等待 WinPTY 原生包装进程时
 可能额外阻塞约 30 秒，因此只做 1 秒有界等待。WinPTY 输入流的原生 `read` 与 `close()`
 共享读取锁，超时路径不能依赖同步关闭；Windows reader 改用 `available()` 轮询，进程销毁
@@ -184,9 +184,13 @@ old/new path 做标准化并验证仍在根目录；之后才把同一字节交�
 `exitCode=-1`、`timedOut=true`，正常路径继续完整排空输出。新增工作目录释放回归测试，
 并以 PTY 全类实测验证清理延迟。
 
+超时路径还会显式关闭已交给 reader 使用的 `WinPTYInputStream`；`WinPtyProcess.destroy()`
+对已标记使用中的输入流不会代为关闭，若遗漏该步骤，虚拟 reader 线程和 native 句柄会在
+命令返回后继续持有工作目录。
+
 **【证据】** `PtyCommandExecutorTest.releasesWorkingDirectoryBeforeReturningFromTimeout`、
-`terminatesProcessAtTimeout`；`mvn -pl agent-sandbox -Dtest=PtyCommandExecutorTest test`
-连续 3 次实测 `5/5` 通过，超时用例未再出现工作目录锁定或 30 秒等待。
+`terminatesProcessAtTimeout`；`mvn -pl agent-sandbox test` 连续 5 次实测 `43/43` 通过，
+超时用例未再出现工作目录锁定或 30 秒等待。
 
 ### 2.9 Docker 一次性容器的清理必须覆盖所有出口
 

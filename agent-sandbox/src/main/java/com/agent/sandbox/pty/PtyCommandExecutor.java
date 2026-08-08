@@ -99,6 +99,7 @@ public final class PtyCommandExecutor {
         boolean timedOut = !finished;
         if (timedOut) {
             terminateProcessTree(process);
+            closeOutput(processOutput, readFailure);
             awaitReader(readerThread);
         } else {
             readerThread.join();
@@ -113,6 +114,16 @@ public final class PtyCommandExecutor {
 
         int exitCode = timedOut ? -1 : process.exitValue();
         return new CommandResult(exitCode, stdout.toString(), "", timedOut);
+    }
+
+    private void closeOutput(
+            InputStream processOutput,
+            AtomicReference<IOException> readFailure) {
+        try {
+            processOutput.close();
+        } catch (IOException exception) {
+            readFailure.compareAndSet(null, exception);
+        }
     }
 
     private void terminateProcessTree(PtyProcess process)
@@ -133,14 +144,19 @@ public final class PtyCommandExecutor {
         if (WINDOWS && process.pid() > 0) {
             windowsProcessIds.add(process.pid());
         }
-        for (long pid : windowsProcessIds) {
-            terminateWindowsProcessTree(pid);
-        }
         List<ProcessHandle> descendants = roots.stream()
                 .flatMap(root -> java.util.stream.Stream.concat(
                         java.util.stream.Stream.of(root), root.descendants()))
                 .distinct()
                 .toList();
+        if (WINDOWS) {
+            descendants.stream()
+                    .mapToLong(ProcessHandle::pid)
+                    .forEach(pid -> windowsProcessIds.add(pid));
+        }
+        for (long pid : windowsProcessIds) {
+            terminateWindowsProcessTree(pid);
+        }
         descendants.reversed().stream()
                 .filter(ProcessHandle::isAlive)
                 .forEach(ProcessHandle::destroyForcibly);
