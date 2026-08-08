@@ -25,6 +25,7 @@ import javax.sql.DataSource;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -149,6 +150,26 @@ class JdbcRagStoreIntegrationTest {
                 "repo-a", OLD_FINGERPRINT, 1, 2, null))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("indexedAt");
+    }
+
+    @Test
+    void normalizesRepositoryIndexTimestampToPostgresPrecision() {
+        Instant indexedAt = Instant.parse("2026-08-03T10:00:00.123456789Z");
+
+        assertThat(new RagRepositoryIndex(
+                "repo-a", OLD_FINGERPRINT, 1, 2, indexedAt).indexedAt())
+                .isEqualTo(indexedAt.truncatedTo(ChronoUnit.MICROS));
+    }
+
+    @Test
+    void roundTripsRepositoryIndexTimestampThroughPostgresPrecision() {
+        Instant indexedAt = Instant.parse("2026-08-03T10:00:00.123456789Z");
+        RagRepositoryIndex index = new RagRepositoryIndex(
+                "repo-a", OLD_FINGERPRINT, 0, 0, indexedAt);
+
+        store.replaceRepository("repo-a", List.of(), List.of(), index);
+
+        assertThat(store.findRepositoryIndex("repo-a")).contains(index);
     }
 
     @Test

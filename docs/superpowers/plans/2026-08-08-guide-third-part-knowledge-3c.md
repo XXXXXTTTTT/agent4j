@@ -269,11 +269,11 @@
 - Create: `agent-eval/src/test/java/com/agent/eval/ProjectKnowledgeRouteEddTest.java`
 - Modify: `docs/ENGINEERING_PITFALLS.md`
 
-- [ ] **Step 1: 写生产集成测试**：当前 Docker 环境用真实 `pgvector/pgvector:pg16`、独立 RAG Flyway 和固定 8 维测试 Embedding；项目架构问题只执行 Planner 并返回 `final_response`，状态包含项目文件与代码证据；代码修改任务同时包含 memory 与 knowledge 后才进入 Coder。并发同仓库首次查询只建立一次索引。
-- [ ] **Step 2: 写故障集成测试**：索引更新中 embedding 失败时旧块和旧指纹仍可读取；非严格模式最终回答仅使用项目文件并记录 `DEGRADED`；严格模式以完整 cause 终止。知识问题不得产生 `ops.command`、`coder.unifiedDiff` 或 Reviewer 证据。
-- [ ] **Step 3: 写确定性 EDD**：报告固定写入 `agent-eval/target/edd/project-knowledge-route-edd.json`，每项字段精确为 `taskId/route/sourceCount/fingerprint/ragStages/degraded/ttftMs/finalResponse/passed`；覆盖普通 Chat、项目问答、代码任务、索引命中跳过、增强降级、基础失败回退。
-- [ ] **Step 4: 更新工程复盘**：追加路由动作词误判、Flyway 双版本空间、mtime 假命中、指纹与切片双扫描竞态、single-flight 旧 Future 删除新重试、Embedding 维度漂移与日志泄密等问题。
-- [ ] **Step 5: 运行定向 EDD**：
+- [x] **Step 1: 写生产集成测试**：当前 Docker 环境用真实 `pgvector/pgvector:pg16`、独立 RAG Flyway 和固定 8 维测试 Embedding；项目架构问题只执行 Planner 并返回 `final_response`，状态包含项目文件与代码证据；代码修改任务同时包含 memory 与 knowledge 后才进入 Coder。并发同仓库首次查询只建立一次索引。
+- [x] **Step 2: 写故障集成测试**：索引更新中 embedding 失败时旧块和旧指纹仍可读取；非严格模式最终回答仅使用项目文件并记录 `DEGRADED`；严格模式以完整 cause 终止。知识问题不得产生 `ops.command`、`coder.unifiedDiff` 或 Reviewer 证据。
+- [x] **Step 3: 写确定性 EDD**：报告固定写入 `agent-eval/target/edd/project-knowledge-route-edd.json`，每项字段精确为 `taskId/route/sourceCount/fingerprint/ragStages/degraded/ttftMs/finalResponse/passed`；覆盖普通 Chat、项目问答、代码任务、索引命中跳过、增强降级、基础失败回退。
+- [x] **Step 4: 更新工程复盘**：追加路由动作词误判、Flyway 双版本空间、mtime 假命中、指纹与切片双扫描竞态、single-flight 旧 Future 删除新重试、Embedding 维度漂移与日志泄密等问题。
+- [x] **Step 5: 运行定向 EDD**：
 
   ```powershell
   mvn -pl agent-eval -am `
@@ -281,7 +281,7 @@
     "-Dsurefire.failIfNoSpecifiedTests=false" test
   ```
 
-- [ ] **Step 6: 运行完整门禁**：先清理 target，再构建前端静态资源，然后运行 JDK 21 全量测试和不再 clean 的打包；避免 `clean + frontend.skip` 清空真实浏览器测试与最终 JAR 所需的 `target/classes/static`：
+- [x] **Step 6: 运行完整门禁**：先清理 target，再构建前端静态资源，然后运行 JDK 21 全量测试和不再 clean 的打包；避免 `clean + frontend.skip` 清空真实浏览器测试与最终 JAR 所需的 `target/classes/static`：
 
   ```powershell
   $env:JAVA_HOME='C:\Program Files\Java\jdk-21'
@@ -296,11 +296,11 @@
   git diff --check
   ```
 
-- [ ] **Step 7: 运行安全与残留检查**：精确扫描 `pom.xml`、模块 POM 与 `agent-*/src`，确认没有 `langchain4j/langgraph4j`；确认 `.env`、日志、`target` 未暂存；`docker ps -a --filter "label=com.agent.runtime.managed=true"` 无残留。
-- [ ] **Step 8: 提交**：
+- [x] **Step 7: 运行安全与残留检查**：精确扫描 `pom.xml`、模块 POM 与 `agent-*/src`，确认没有 `langchain4j/langgraph4j`；确认 `.env`、日志、`target` 未暂存；`docker ps -a --filter "label=com.agent.runtime.managed=true"` 无残留。
+- [x] **Step 8: 提交**：
 
   ```text
   test(eval): verify project knowledge production loop
   ```
 
-- [ ] **Step 9: 里程碑审查**：独立代码审查无 Critical/Important；最终 HEAD 重跑完整门禁。保留当前 worktree 与分支，不自动合并、不推送，等待第四篇实施。
+- [x] **Step 9: 里程碑审查**：独立代码审查无 Critical/Important；最终 HEAD 重跑完整门禁。保留当前 worktree 与分支，不自动合并、不推送，等待第四篇实施。

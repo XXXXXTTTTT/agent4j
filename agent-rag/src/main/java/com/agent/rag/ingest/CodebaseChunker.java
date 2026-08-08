@@ -67,6 +67,9 @@ public final class CodebaseChunker {
             List<ChildDraft> children) {
         String source = repositorySource.content();
         String relativePath = repositorySource.relativePath();
+        if (source.isBlank()) {
+            return;
+        }
         if (relativePath.endsWith(".java")) {
             chunkJava(root.resolve(relativePath), relativePath,
                     repositoryId, source, parents, children);

@@ -1,6 +1,7 @@
 package com.agent.rag.store;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Objects;
 
 /** 一个仓库当前已提交 RAG 索引的内容指纹与块数量。 */
@@ -27,6 +28,7 @@ public record RagRepositoryIndex(
         if (childCount < 0) {
             throw new IllegalArgumentException("childCount 不能为负数");
         }
-        Objects.requireNonNull(indexedAt, "indexedAt 不能为空");
+        indexedAt = Objects.requireNonNull(indexedAt, "indexedAt 不能为空")
+                .truncatedTo(ChronoUnit.MICROS);
     }
 }

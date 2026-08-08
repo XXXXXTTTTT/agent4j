@@ -124,6 +124,24 @@ class CodebaseChunkerTest {
     }
 
     @Test
+    void skipsBlankTextFilesWithoutCreatingEmptyRetrievalDocuments() throws IOException {
+        write("empty.txt", "\n  \n\t");
+        write("content.txt", "kept");
+
+        ChunkBatch batch = new CodebaseChunker(new AstService())
+                .chunk(temporaryDirectory, "repository-1");
+
+        assertThat(batch.parents()).extracting(ParentChunk::path)
+                .containsExactly("content.txt");
+        assertThat(batch.children()).extracting(ChildDraft::path)
+                .containsExactly("content.txt");
+        assertThat(batch.parents()).allSatisfy(parent ->
+                assertThat(parent.content()).isNotBlank());
+        assertThat(batch.children()).allSatisfy(child ->
+                assertThat(child.content()).isNotBlank());
+    }
+
+    @Test
     void ingestsEightDimensionalEmbeddingsAndReplacesRepository() throws IOException {
         write("notes.txt", "alpha\nbeta");
         RecordingStore store = new RecordingStore();

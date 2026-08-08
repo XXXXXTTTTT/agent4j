@@ -1,8 +1,8 @@
 # Agent4j 技术攻关、踩坑复盘与面试表达指南
 
-> 证据基线：Phase 5 Task 12 全量验收（2026-08-03）。本文依据 Phase 1 至 Phase 5 的
-> Git 补丁、`docs/superpowers/specs/` 设计文档、生产代码和自动化测试整理。Phase 5
-> 后端闭环、React 工作台、Monaco/xterm/HITL/Reviewer 证据视图和真实浏览器闭环均已落地。
+> 证据基线：Phase 5 与第三篇 3C Task 9 定向验收（2026-08-08）。本文依据 Phase 1 至
+> 当前分支的 Git 补丁、`docs/superpowers/specs/` 设计文档、生产代码和自动化测试整理。
+> 当前证据包含真实 pgvector PostgreSQL、同仓库 single-flight、生产知识路由和六场景 EDD。
 
 ## 1. 项目核心攻关与避坑总览
 
@@ -1579,3 +1579,71 @@ Embedding 请求携带真实源码。如果直接记录请求体或带 Authoriza
 一个 `index=0` 项、八个有限数且没有尾随 JSON。日志只记录完整 URL、model、inputCount、
 HTTP 状态和 durationMs，不记录 input 正文或 Bearer。配置沿用 `AGENT_LLM_BASE_URL` 与
 `AGENT_LLM_API_KEY`，RAG 只新增路径、模型和策略开关，避免重复密钥来源。
+
+## 第三篇 3C Task 9 补充：生产闭环回归与 EDD
+
+### 【问题现象】合法 UTF-8 的空文本文件进入 RAG 后在检索阶段才失败
+
+生产工作区通常包含空的占位文件（例如 Windows 工具目录中的 `bash.exe`）。扫描器把它们
+识别为合法 UTF-8 来源，切片器随后创建空父块和空子块；Planner 直到 token 预算选择阶段
+构造 `RagContextDocument` 才抛出 `content 不能为空`，知识问答被错误标记为 Planner 失败。
+
+### 【根因分析】
+
+“可解码”不等于“可检索”。空白正文没有任何词法或向量证据，却绕过了扫描层的二进制和
+UTF-8 门禁。错误发生在索引提交之后，导致失败请求还可能留下已经写入的空块。
+
+### 【解决方案/代码级实现】
+
+`CodebaseChunker.readAndChunk` 在 Java/文本分派前使用精确的 `String.isBlank()` 门禁，空白
+来源不生成父块或子块；非空 Java 类仍按 JavaParser 符号边界切分。回归测试同时保留空文件、
+有效文本、二进制和非法 UTF-8 文件，确认空文档不会进入存储或 `RagTokenBudgetSelector`。
+
+### 【问题现象】PostgreSQL `timestamptz` 往返后索引对象比较失败
+
+虚拟线程索引任务使用 `Clock.systemUTC()` 产生纳秒级 `Instant`，PostgreSQL `timestamptz`
+只保存微秒级精度。首次索引返回的对象可能是 `...539381600Z`，数据库回读是
+`...539382Z`；指纹相同却因为 record 全值比较被误判为不同索引。
+
+### 【根因分析】
+
+数据库列精度是持久化协议的一部分。只在 JDBC 写入时截断会让内存返回值和回读值仍使用两套
+语义；只在测试中放宽比较又会掩盖 single-flight 与旧索引保留逻辑的错误。
+
+### 【解决方案/代码级实现】
+
+`RagRepositoryIndex` 的紧凑构造器在 null 校验后统一执行
+`indexedAt.truncatedTo(ChronoUnit.MICROS)`，因此所有创建路径、JDBC 写入和 JDBC 回读共享同一
+规范值。真实 `pgvector/pgvector:pg16` 测试用带纳秒输入的回归断言，并验证失败 refresh 后旧
+指纹和旧代码块保持不变。
+
+### 【问题现象】只读项目问答被错误送入 Coder/Ops，或 EDD 只验证路线不验证证据
+
+项目架构问题需要读取代码但不应写文件、执行命令或启动 Reviewer。仅断言 `route=knowledge`
+无法发现 Planner 没有写入 `final_response`、RAG 阶段降级未记录、代码任务没有同时注入记忆
+和项目规则等问题。
+
+### 【根因分析】
+
+Agent 的“通过”是用户可见回答、状态证据和副作用边界的联合协议，不是单一字符串。真实
+模型与 RAG 还存在增强失败、基础失败、已持久化索引命中等不同路径，单元测试无法覆盖这些
+组合时序。
+
+### 【解决方案/代码级实现】
+
+生产图把 `knowledge` 和 `chat` 精确映射到 `END`；`PlannerNode` 写入 `final_response`、
+知识指纹、来源数量、不可变证据 JSON 和降级标志。代码路线在 Coder 前先保存长期记忆与
+项目知识。`ProjectKnowledgeRouteEddTest` 使用 Mock LLM 协议响应和真实核心/RAG 对象，固定
+生成 `agent-eval/target/edd/project-knowledge-route-edd.json`，六个场景每项只包含：
+`taskId/route/sourceCount/fingerprint/ragStages/degraded/ttftMs/finalResponse/passed`。
+场景覆盖普通 Chat、项目问答、代码任务、持久化索引跳过、增强降级和基础失败回退；Chat 与
+Knowledge 路线必须有 `FINAL_RESPONSE_KEY`，Code 路线明确使用 Planner 的 `PLAN_KEY` 作为
+本评测阶段的用户可见计划，不做隐式键回退；所有场景均不能出现 Planner 错误状态。`ttftMs`
+由 Mock 响应创建回调记录的首个响应时刻计算，避免把完整 Planner 结束耗时冒充首字延迟。
+
+### 【证据】
+
+`ProductionKnowledgeIntegrationTest` 使用真实 Docker PostgreSQL，覆盖 Planner-only 项目
+问答、并发首次索引、失败 refresh 旧索引保留、memory+knowledge 到 Coder、非严格回退和严格
+终止；`ProjectKnowledgeRouteEddTest` 六场景全部通过并写入固定 JSON 报告。空白文本和微秒
+精度回归分别由 `CodebaseChunkerTest` 与 `JdbcRagStoreIntegrationTest` 锁定。
