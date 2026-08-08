@@ -172,6 +172,59 @@ class ToolRegistryTest {
     }
 
     @Test
+    void canonicalizesNestedObjectFieldsAndPreservesArrayOrderForHashes() {
+        List<ToolAuditEvent> events = new ArrayList<>();
+        try (DefaultToolRegistry registry = new DefaultToolRegistry(
+                new JacksonToolSchemaValidator(), new DefaultToolAuthorizer(), events::add,
+                new ObjectMapper(), System::nanoTime)) {
+            registry.register(definition("hash.tool", ToolRiskLevel.LOW, Set.of(),
+                    (call, context) -> object("ok", true)));
+            ObjectNode first = JsonNodeFactory.instance.objectNode();
+            first.putArray("items").add(2).add(1);
+            first.putObject("nested").put("z", 2).put("a", 1);
+            ObjectNode second = JsonNodeFactory.instance.objectNode();
+            second.putObject("nested").put("a", 1).put("z", 2);
+            second.putArray("items").add(2).add(1);
+
+            registry.execute(new ToolCall("hash-1", "hash.tool", first), context());
+            registry.execute(new ToolCall("hash-2", "hash.tool", second), context());
+
+            assertThat(events).extracting(ToolAuditEvent::argumentsSha256)
+                    .containsExactly(events.getFirst().argumentsSha256(), events.getFirst().argumentsSha256());
+        }
+    }
+
+    @Test
+    void convertsCheckedNullAndScalarHandlerOutputsToFailures() {
+        List<ToolAuditEvent> events = new ArrayList<>();
+        try (DefaultToolRegistry registry = new DefaultToolRegistry(
+                new JacksonToolSchemaValidator(), new DefaultToolAuthorizer(), events::add,
+                new ObjectMapper(), System::nanoTime)) {
+            registry.register(definition("checked.tool", ToolRiskLevel.LOW, Set.of(), (call, context) -> {
+                throw new java.io.IOException("checked failure");
+            }));
+            registry.register(definition("null.tool", ToolRiskLevel.LOW, Set.of(), (call, context) -> null));
+            registry.register(definition("scalar.tool", ToolRiskLevel.LOW, Set.of(),
+                    (call, context) -> JsonNodeFactory.instance.textNode("invalid")));
+
+            ToolResult checked = registry.execute(
+                    new ToolCall("checked-1", "checked.tool", JsonNodeFactory.instance.objectNode()), context());
+            ToolResult nullOutput = registry.execute(
+                    new ToolCall("null-1", "null.tool", JsonNodeFactory.instance.objectNode()), context());
+            ToolResult scalar = registry.execute(
+                    new ToolCall("scalar-1", "scalar.tool", JsonNodeFactory.instance.objectNode()), context());
+
+            assertThat(checked.status()).isEqualTo(ToolResultStatus.FAILED);
+            assertThat(checked.errorStack()).contains("IOException", "checked failure");
+            assertThat(nullOutput.status()).isEqualTo(ToolResultStatus.FAILED);
+            assertThat(nullOutput.errorStack()).contains("IllegalArgumentException");
+            assertThat(scalar.status()).isEqualTo(ToolResultStatus.FAILED);
+            assertThat(scalar.errorStack()).contains("IllegalArgumentException");
+            assertThat(events).hasSize(3);
+        }
+    }
+
+    @Test
     void rejectsExecutionAfterClose() {
         DefaultToolRegistry registry = new DefaultToolRegistry();
         registry.close();

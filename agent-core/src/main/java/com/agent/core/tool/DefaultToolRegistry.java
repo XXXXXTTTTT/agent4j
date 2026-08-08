@@ -123,7 +123,8 @@ public final class DefaultToolRegistry implements ToolRegistry {
 
         ToolAuthorization authorization;
         try {
-            authorization = authorizer.authorize(definition, call, context);
+            authorization = Objects.requireNonNull(
+                    authorizer.authorize(definition, call, context), "授权器不得返回 null");
         } catch (Throwable exception) {
             return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.DENIED,
                     NullNode.getInstance(), exception, started, false);

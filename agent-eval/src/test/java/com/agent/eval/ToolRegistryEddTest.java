@@ -28,6 +28,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -67,7 +68,7 @@ class ToolRegistryEddTest {
     private EddResult success() {
         return execute("tool.success", registry -> register(registry, "success.tool", ToolRiskLevel.LOW,
                 Set.of(), (call, context) -> JsonNodeFactory.instance.objectNode().put("ok", true)),
-                ToolResultStatus.SUCCEEDED, "");
+                ToolResultStatus.SUCCEEDED, "", 1);
     }
 
     private EddResult schemaDenied() {
@@ -85,22 +86,22 @@ class ToolRegistryEddTest {
         return execute("tool.schema-denied", registry -> {
             ToolRegistry custom = new DefaultToolRegistry(validator, new DefaultToolAuthorizer(),
                     registry.auditSink(), new ObjectMapper(), System::nanoTime);
-            register(custom, "schema.tool", ToolRiskLevel.LOW, Set.of(),
+            register(registry, custom, "schema.tool", ToolRiskLevel.LOW, Set.of(),
                     (call, context) -> JsonNodeFactory.instance.objectNode());
             return custom;
-        }, ToolResultStatus.DENIED, "ToolSchemaException");
+        }, ToolResultStatus.DENIED, "ToolSchemaException", 0);
     }
 
     private EddResult capabilityDenied() {
         return execute("tool.capability-denied", registry -> register(registry, "write.tool", ToolRiskLevel.LOW,
                 Set.of(RequiredCapability.CODE_WRITE), (call, context) -> JsonNodeFactory.instance.objectNode()),
-                ToolResultStatus.DENIED, "ToolAuthorizationException");
+                ToolResultStatus.DENIED, "ToolAuthorizationException", 0);
     }
 
     private EddResult approvalRequired() {
         return execute("tool.approval-required", registry -> register(registry, "danger.tool", ToolRiskLevel.HIGH,
                 Set.of(), (call, context) -> JsonNodeFactory.instance.objectNode()),
-                ToolResultStatus.APPROVAL_REQUIRED, "ToolApprovalRequiredException");
+                ToolResultStatus.APPROVAL_REQUIRED, "ToolApprovalRequiredException", 0);
     }
 
     private EddResult timeout() {
@@ -113,18 +114,19 @@ class ToolRegistryEddTest {
                         throw exception;
                     }
                     return JsonNodeFactory.instance.objectNode();
-                }, Duration.ofMillis(20)), ToolResultStatus.TIMED_OUT, "ToolTimeoutException");
+                }, Duration.ofMillis(20)), ToolResultStatus.TIMED_OUT, "ToolTimeoutException", 1);
     }
 
     private EddResult handlerFailure() {
         return execute("tool.handler-failure", registry -> register(registry, "broken.tool", ToolRiskLevel.LOW,
                 Set.of(), (call, context) -> {
                     throw new IllegalStateException("handler failed");
-                }), ToolResultStatus.FAILED, "IllegalStateException");
+                }), ToolResultStatus.FAILED, "IllegalStateException", 1);
     }
 
     private EddResult execute(String taskId, java.util.function.Function<EddRegistry, ToolRegistry> setup,
-                              ToolResultStatus expectedStatus, String expectedErrorType) {
+                              ToolResultStatus expectedStatus, String expectedErrorType,
+                              int expectedHandlerCalls) {
         List<ToolAuditEvent> audits = new CopyOnWriteArrayList<>();
         EddRegistry holder = new EddRegistry(audits);
         ToolRegistry registry = setup.apply(holder);
@@ -133,14 +135,18 @@ class ToolRegistryEddTest {
                             JsonNodeFactory.instance.objectNode().put("value", "edd")),
                     holder.context());
             Optional<ToolAuditEvent> audit = audits.stream().findFirst();
+            String expectedHash = sha256(JsonNodeFactory.instance.objectNode().put("value", "edd"));
             boolean errorMatches = expectedErrorType.isEmpty()
                     ? result.errorStack().isEmpty()
                     : result.errorStack().contains(expectedErrorType);
             boolean passed = result.status() == expectedStatus
                     && audit.isPresent()
+                    && audits.size() == 1
                     && audit.get().status() == expectedStatus
+                    && audit.get().argumentsSha256().equals(expectedHash)
+                    && holder.handlerCalls().get() == expectedHandlerCalls
                     && errorMatches;
-            return new EddResult(taskId, result.status().name(), audit.isPresent(), result.durationMs(),
+            return new EddResult(taskId, result.status().name(), audits.size() == 1, result.durationMs(),
                     audit.map(ToolAuditEvent::errorType).orElse(""), passed);
         } catch (Exception exception) {
             return new EddResult(taskId, "EXCEPTION", false, 0,
@@ -162,30 +168,46 @@ class ToolRegistryEddTest {
 
     private ToolRegistry register(EddRegistry registry, String name, ToolRiskLevel risk,
                                   Set<RequiredCapability> capabilities, com.agent.core.tool.ToolHandler handler) {
-        return register(registry.registry(), name, risk, capabilities, handler, Duration.ofSeconds(1));
+        return register(registry, registry.registry(), name, risk, capabilities, handler, Duration.ofSeconds(1));
     }
 
     private ToolRegistry register(EddRegistry registry, String name, ToolRiskLevel risk,
                                   Set<RequiredCapability> capabilities, com.agent.core.tool.ToolHandler handler,
                                   Duration timeout) {
-        return register(registry.registry(), name, risk, capabilities, handler, timeout);
+        return register(registry, registry.registry(), name, risk, capabilities, handler, timeout);
     }
 
-    private ToolRegistry register(ToolRegistry registry, String name, ToolRiskLevel risk,
+    private ToolRegistry register(EddRegistry holder, ToolRegistry registry, String name, ToolRiskLevel risk,
                                   Set<RequiredCapability> capabilities, com.agent.core.tool.ToolHandler handler) {
-        return register(registry, name, risk, capabilities, handler, Duration.ofSeconds(1));
+        return register(holder, registry, name, risk, capabilities, handler, Duration.ofSeconds(1));
     }
 
-    private ToolRegistry register(ToolRegistry registry, String name, ToolRiskLevel risk,
+    private ToolRegistry register(EddRegistry holder, ToolRegistry registry, String name, ToolRiskLevel risk,
                                   Set<RequiredCapability> capabilities, com.agent.core.tool.ToolHandler handler,
                                   Duration timeout) {
         registry.register(new ToolDefinition(name, "EDD 工具",
                 JsonNodeFactory.instance.objectNode().put("type", "object"), capabilities,
-                risk, timeout, handler));
+                risk, timeout, (call, context) -> {
+                    holder.handlerCalls().incrementAndGet();
+                    return handler.execute(call, context);
+                }));
         return registry;
     }
 
-    private record EddRegistry(List<ToolAuditEvent> audits) {
+    private String sha256(com.fasterxml.jackson.databind.JsonNode arguments) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(new ObjectMapper().writeValueAsBytes(arguments)));
+        } catch (Exception exception) {
+            throw new AssertionError(exception);
+        }
+    }
+
+    private record EddRegistry(List<ToolAuditEvent> audits, AtomicInteger handlerCalls) {
+        private EddRegistry(List<ToolAuditEvent> audits) {
+            this(audits, new AtomicInteger());
+        }
+
         ToolRegistry registry() {
             return new DefaultToolRegistry(new com.agent.core.tool.JacksonToolSchemaValidator(),
                     new DefaultToolAuthorizer(), audits::add, new ObjectMapper(), System::nanoTime);
