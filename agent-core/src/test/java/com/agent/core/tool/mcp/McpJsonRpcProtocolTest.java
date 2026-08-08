@@ -113,4 +113,15 @@ class McpJsonRpcProtocolTest {
                 "1"))
                 .isInstanceOf(McpProtocolException.class);
     }
+
+    @Test
+    void rejectsFractionalJsonRpcErrorCodeInsteadOfTruncatingIt() {
+        assertThatThrownBy(() -> McpJsonRpcResponse.parse(
+                objectMapper,
+                "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"error\":"
+                        + "{\"code\":1.5,\"message\":\"bad\"}}",
+                "1"))
+                .isInstanceOf(McpProtocolException.class)
+                .hasMessageContaining("code/message");
+    }
 }

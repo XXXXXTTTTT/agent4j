@@ -14,6 +14,7 @@ import java.io.StringWriter;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -21,7 +22,6 @@ import java.util.Optional;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -41,7 +41,7 @@ public final class DefaultToolRegistry implements ToolRegistry {
     private final ToolAuditSink auditSink;
     private final ObjectMapper objectMapper;
     private final LongSupplier nanoTime;
-    private final ConcurrentHashMap<String, ToolDefinition> definitions = new ConcurrentHashMap<>();
+    private volatile Map<String, ToolDefinition> definitions = Map.of();
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -67,20 +67,39 @@ public final class DefaultToolRegistry implements ToolRegistry {
 
     @Override
     public void register(ToolDefinition definition) {
-        ensureOpen();
         Objects.requireNonNull(definition, "definition 不能为空");
-        try {
-            schemaValidator.validateSchema(definition.inputSchema());
-        } catch (Throwable exception) {
-            if (exception instanceof ToolRegistrationException registrationException) {
-                throw registrationException;
+        registerAll(List.of(definition));
+    }
+
+    @Override
+    public synchronized void registerAll(List<ToolDefinition> inputDefinitions) {
+        ensureOpen();
+        Objects.requireNonNull(inputDefinitions, "definitions 不能为空");
+        List<ToolDefinition> batch = List.copyOf(inputDefinitions);
+        java.util.HashSet<String> batchNames = new java.util.HashSet<>();
+        for (ToolDefinition definition : batch) {
+            if (!batchNames.add(definition.name())) {
+                throw new ToolRegistrationException(
+                        definition.name(), "批量工具名称重复: " + definition.name(), null);
             }
-            throw new ToolRegistrationException(definition.name(), "工具 Schema 注册校验失败", exception);
+            if (definitions.containsKey(definition.name())) {
+                throw new ToolRegistrationException(
+                        definition.name(), "工具名称已注册: " + definition.name(), null);
+            }
+            try {
+                schemaValidator.validateSchema(definition.inputSchema());
+            } catch (Throwable exception) {
+                if (exception instanceof ToolRegistrationException registrationException) {
+                    throw registrationException;
+                }
+                throw new ToolRegistrationException(definition.name(), "工具 Schema 注册校验失败", exception);
+            }
         }
-        ToolDefinition previous = definitions.putIfAbsent(definition.name(), definition);
-        if (previous != null) {
-            throw new ToolRegistrationException(definition.name(), "工具名称已注册: " + definition.name(), null);
+        HashMap<String, ToolDefinition> next = new HashMap<>(definitions);
+        for (ToolDefinition definition : batch) {
+            next.put(definition.name(), definition);
         }
+        definitions = Map.copyOf(next);
     }
 
     @Override

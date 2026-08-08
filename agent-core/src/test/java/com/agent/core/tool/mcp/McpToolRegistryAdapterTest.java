@@ -2,11 +2,14 @@ package com.agent.core.tool.mcp;
 
 import com.agent.core.intent.RequiredCapability;
 import com.agent.core.tool.DefaultToolRegistry;
+import com.agent.core.tool.DefaultToolAuthorizer;
 import com.agent.core.tool.ToolCall;
 import com.agent.core.tool.ToolInvocationContext;
 import com.agent.core.tool.ToolResult;
 import com.agent.core.tool.ToolResultStatus;
 import com.agent.core.tool.ToolRiskLevel;
+import com.agent.core.tool.ToolSchemaException;
+import com.agent.core.tool.ToolSchemaValidator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -180,6 +183,60 @@ class McpToolRegistryAdapterTest {
                     .isInstanceOf(RuntimeException.class);
             assertThat(registry.list()).extracting(definition -> definition.name())
                     .containsExactly("remote.echo");
+        }
+    }
+
+    @Test
+    void rejectsUntrustedSchemaBeforeRegisteringAnyDiscoveredTool() {
+        RecordingTransport transport = initializedTransport();
+        transport.toolList = """
+                {"tools":[
+                  {"name":"valid","description":"Valid","inputSchema":{"type":"object"}},
+                  {"name":"invalid","description":"Invalid","inputSchema":{"type":"object","$ref":"unsafe"}}
+                ]}
+                """;
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            McpToolRegistryAdapter adapter = new McpToolRegistryAdapter(client(transport), registry);
+
+            assertThatThrownBy(() -> adapter.registerDiscoveredTools("remote", ToolRiskLevel.LOW,
+                    Set.of(), Duration.ofSeconds(1)))
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("Schema");
+            assertThat(registry.list()).isEmpty();
+        }
+    }
+
+    @Test
+    void customRegistrySchemaFailureDoesNotLeavePartiallyRegisteredTools() {
+        RecordingTransport transport = initializedTransport();
+        transport.toolList = """
+                {"tools":[
+                  {"name":"first","description":"First","inputSchema":{"type":"object"}},
+                  {"name":"second","description":"Second",
+                   "inputSchema":{"type":"object","title":"reject-by-registry"}}
+                ]}
+                """;
+        ToolSchemaValidator validator = new ToolSchemaValidator() {
+            @Override
+            public void validateSchema(JsonNode schema) {
+                if ("reject-by-registry".equals(schema.path("title").textValue())) {
+                    throw new ToolSchemaException("/title", "自定义 Registry 拒绝 Schema", null);
+                }
+            }
+
+            @Override
+            public void validateArguments(JsonNode schema, JsonNode arguments) {
+            }
+        };
+        try (DefaultToolRegistry registry = new DefaultToolRegistry(
+                validator, new DefaultToolAuthorizer(), event -> { }, objectMapper, System::nanoTime)) {
+            McpToolRegistryAdapter adapter = new McpToolRegistryAdapter(client(transport), registry);
+
+            assertThatThrownBy(() -> adapter.registerDiscoveredTools("remote", ToolRiskLevel.LOW,
+                    Set.of(), Duration.ofSeconds(1)))
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("Schema");
+            assertThat(registry.list()).isEmpty();
         }
     }
 

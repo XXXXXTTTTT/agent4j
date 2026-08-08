@@ -14,6 +14,7 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -80,13 +81,18 @@ class McpHttpTransportTest {
 
     @Test
     void rejectsNonSuccessfulHttpStatus() {
-        server.createContext("/mcp", exchange -> write(
-                exchange, 503, "application/json", "{\"error\":\"offline\"}"));
+        AtomicInteger requests = new AtomicInteger();
+        server.createContext("/mcp", exchange -> {
+            requests.incrementAndGet();
+            exchange.getResponseHeaders().set("Retry-After", "1");
+            write(exchange, 503, "application/json", "{\"error\":\"offline\"}");
+        });
         transport = transport(Duration.ofSeconds(2));
 
         assertThatThrownBy(() -> transport.request(request()))
                 .isInstanceOf(McpTransportException.class)
                 .hasMessageContaining("503");
+        assertThat(requests).hasValue(1);
     }
 
     @Test
@@ -123,6 +129,11 @@ class McpHttpTransportTest {
         assertThatThrownBy(() -> transport.request(request()))
                 .isInstanceOf(McpTransportException.class)
                 .hasMessageContaining("超时");
+        long closeStarted = System.nanoTime();
+        transport.close();
+        transport = null;
+        assertThat(Duration.ofNanos(System.nanoTime() - closeStarted).toMillis())
+                .isLessThan(500);
     }
 
     private McpJsonRpcRequest request() {

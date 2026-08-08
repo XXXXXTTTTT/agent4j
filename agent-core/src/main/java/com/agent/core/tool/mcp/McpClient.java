@@ -171,6 +171,9 @@ public final class McpClient implements AutoCloseable {
                 || !result.get("serverInfo").isObject()) {
             throw new McpProtocolException("MCP initialize result 字段不合法");
         }
+        if (!protocolVersion.equals(result.get("protocolVersion").textValue())) {
+            throw new McpProtocolException("MCP initialize protocolVersion 不匹配");
+        }
     }
 
     private void requireInitialized() {

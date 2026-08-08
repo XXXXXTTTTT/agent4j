@@ -65,11 +65,11 @@
 - Create: `agent-core/src/main/java/com/agent/core/tool/mcp/McpRemoteToolException.java`
 - Create: `agent-core/src/test/java/com/agent/core/tool/mcp/McpToolRegistryAdapterTest.java`
 
-- [ ] **Step 1: Write failing adapter tests**: namespace names exactly, invalid names rejected, remote handler invoked once, Registry schema/permission/approval/timeout still gate execution, remote errors retain JSON and cause.
-- [ ] **Step 2: Run red test** with `mvn -pl agent-core -am -Dtest=McpToolRegistryAdapterTest -Dsurefire.failIfNoSpecifiedTests=false test`.
-- [ ] **Step 3: Implement adapter**: discover after initialization, build `ToolDefinition` with remote schema and injected risk/capabilities/timeout, close over exact remote name, and register atomically.
-- [ ] **Step 4: Run green test and tool regression suite**.
-- [ ] **Step 5: Commit** `feat(tool): govern mcp tools through registry`.
+- [x] **Step 1: Write failing adapter tests**: namespace names exactly, invalid names rejected, remote handler invoked once, Registry schema/permission/approval/timeout still gate execution, remote errors retain JSON and cause.
+- [x] **Step 2: Run red test** with `mvn -pl agent-core -am -Dtest=McpToolRegistryAdapterTest -Dsurefire.failIfNoSpecifiedTests=false test`.
+- [x] **Step 3: Implement adapter**: discover after initialization, build `ToolDefinition` with remote schema and injected risk/capabilities/timeout, close over exact remote name, and register atomically.
+- [x] **Step 4: Run green test and tool regression suite**.
+- [x] **Step 5: Commit** `feat(tool): govern mcp tools through registry`.
 
 ### Task 5: Deterministic MCP EDD and final gate
 
@@ -78,9 +78,9 @@
 - Modify: `docs/ENGINEERING_PITFALLS.md`
 - Modify: `docs/superpowers/plans/2026-08-08-guide-fourth-part-tools-4b.md`
 
-- [ ] **Step 1: Write EDD**: fixed fake MCP transport and report `agent-eval/target/edd/mcp-tool-adapter-edd.json` with exact fields `taskId/status/audited/durationMs/errorType/passed`; cover initialize, discovery, success, schema denied, capability denied, approval denied and remote failure.
-- [ ] **Step 2: Run EDD and inspect report**.
-- [ ] **Step 3: Update engineering pitfalls** with MCP protocol drift, remote schema trust, namespace collision, transport timeout and governance bypass cases.
+- [x] **Step 1: Write EDD**: fixed fake MCP transport and report `agent-eval/target/edd/mcp-tool-adapter-edd.json` with exact fields `taskId/status/audited/durationMs/errorType/passed`; cover initialize, discovery, success, schema denied, capability denied, approval denied and remote failure.
+- [x] **Step 2: Run EDD and inspect report**.
+- [x] **Step 3: Update engineering pitfalls** with MCP protocol drift, remote schema trust, namespace collision, transport timeout and governance bypass cases.
 - [ ] **Step 4: Run final gates**:
 
   ```powershell

@@ -99,7 +99,9 @@ public record McpJsonRpcResponse(
         if (!fields.stream().allMatch(field -> Set.of("code", "message", "data").contains(field))) {
             throw new McpProtocolException("MCP error 包含未知字段");
         }
-        if (!node.get("code").canConvertToInt() || !node.get("message").isTextual()
+        if (!node.get("code").isIntegralNumber()
+                || !node.get("code").canConvertToInt()
+                || !node.get("message").isTextual()
                 || node.get("message").textValue().isBlank()) {
             throw new McpProtocolException("MCP error 的 code/message 类型不合法");
         }

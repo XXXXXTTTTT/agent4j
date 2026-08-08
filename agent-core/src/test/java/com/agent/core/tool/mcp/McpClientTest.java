@@ -115,6 +115,21 @@ class McpClientTest {
                 .hasMessageContaining("remote unavailable");
     }
 
+    @Test
+    void rejectsServerProtocolVersionThatDoesNotMatchRequestedVersion() {
+        FakeTransport transport = new FakeTransport();
+        transport.responses.add(success("1", """
+                {"protocolVersion":"2024-11-05","capabilities":{},
+                 "serverInfo":{"name":"demo","version":"1"}}
+                """));
+        McpClient client = client(transport);
+
+        assertThatThrownBy(client::initialize)
+                .isInstanceOf(McpProtocolException.class)
+                .hasMessageContaining("protocolVersion");
+        assertThat(transport.notifications).isEmpty();
+    }
+
     private McpClient client(McpTransport transport) {
         return new McpClient(transport, objectMapper, "2025-06-18", "agent4j", "0.1");
     }

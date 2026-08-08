@@ -1736,3 +1736,122 @@ arguments。现有 `HarnessHookChain` 对非关键 Hook 只写审计并继续，
 Hook 失败边界。`ToolRegistryEddTest` 使用六个确定性场景生成
 `agent-eval/target/edd/tool-registry-edd.json`，每项字段严格为
 `taskId/status/audited/durationMs/errorType/passed`，全部场景通过且审计事件精确为一条。
+
+## 第四篇 4B：MCP 远程工具协议与治理适配
+
+### 【问题现象】JSON-RPC 字段漂移、重复字段或错误 ID 被当作成功响应
+
+MCP 服务端可能同时返回 `result/error`、重复写入 `id`、追加第二段 JSON，或者用其他请求的
+响应 ID 回答当前请求。宽松反序列化通常保留最后一个重复字段，使协议污染变成难以定位的
+业务错误；初始化和工具调用还会在错误会话上继续运行。
+
+### 【根因分析】
+
+“JSON 能解析”不等于“JSON-RPC 2.0 合法”。握手、通知、分页发现和工具调用分别有精确字段集，
+但通用 DTO 默认允许未知字段、尾随 token 和重复键；如果传输层同时承担业务解析，协议错误还会
+被错误包装成 HTTP 故障。
+
+### 【解决方案/代码级实现】
+
+`McpJsonRpcRequest` 固定序列化 `jsonrpc/id/method/params`，notification 精确省略 `id`；
+`McpJsonRpcResponse` 开启重复字段检测和尾随 token 拒绝，要求 `result/error` 二选一并校验精确 ID，
+error code 必须是可转换为 Java int 的 JSON 整数，拒绝小数截断。`McpClient` 再分别校验
+`initialize`、`tools/list` 和 `tools/call` 的结果结构、未知字段、重复工具名和循环 cursor；服务端
+返回的 protocolVersion 必须与客户端请求值精确相等，版本不匹配时不发送 initialized notification。
+传输异常与协议异常使用 `McpTransportException`、`McpProtocolException` 分离，完整 cause 保留到上层。
+
+### 【问题现象】远程 Schema 不可信，批量发现可能留下半批本地工具
+
+远程 `inputSchema` 可以包含本地运行时不支持的 `$ref` 或未知关键字。如果逐个发现、逐个注册，
+第一个合法工具已经可见，第二个非法工具才失败，Registry 会进入难以重放的半完成状态；若执行时
+才校验，handler 甚至可能在参数门禁前被调用。
+
+### 【根因分析】
+
+MCP discovery 返回的是外部输入，不是受信任的本地 `ToolDefinition`。只检查 Schema 是 JSON object
+无法证明本地校验器理解其约束，批量注册也缺少预检阶段。
+
+### 【解决方案/代码级实现】
+
+`McpToolRegistryAdapter` 先完成 initialize 和完整分页 discovery，再用
+`JacksonToolSchemaValidator` 对整批远程 Schema 做白名单预检，同时构造全部不可变
+`ToolDefinition` 并检查本地名称冲突。`ToolRegistry.registerAll` 是原子批注册协议；
+`DefaultToolRegistry` 在同一同步边界内预检整批自定义 Schema、批内重复名和已有名称，全部通过后才
+写入 map。无效 Schema 测试同时返回一个合法工具和一个非法工具，分别覆盖 `$ref` 预检失败和注入
+Registry 自定义校验器在第二项失败，两个场景都断言 Registry 最终为空。
+
+### 【问题现象】namespace 冲突或格式修补导致模型调用了另一个工具
+
+不同 MCP 服务都可能暴露 `echo`、`read` 等相同名称。若适配器自动小写、替换空格或删除符号，
+两个远程工具会收敛到同一本地键，日志中的名称也无法还原真实远程调用。
+
+### 【根因分析】
+
+名称空间既是路由协议也是审计身份。对名称做模糊匹配或格式修补会破坏 Tool Registry 的唯一键，
+并违反调用链对精确标识符的要求。
+
+### 【解决方案/代码级实现】
+
+本地工具名只允许精确拼接 `namespace + "." + remoteName`，不改变大小写、字符或段结构；namespace
+点号只能分隔非空段，组合后的名称继续由 `ToolDefinition` 做长度和字符门禁。适配器在注册前查询
+Registry 冲突，handler 闭包保存发现时的精确 `remoteName`，执行时不从本地名称反向猜测远程名称。
+
+### 【问题现象】HTTP 超时返回后请求仍占用线程，SSE 响应被误当作单 JSON
+
+只给 `RestClient` 设置连接超时不能限制完整 MCP 请求；服务端迟迟不返回或返回 SSE 时，调用线程
+可能无限等待。仅中断调用方 Future 也不代表底层网络请求已经停止，随后重试会叠加在途请求。
+
+### 【根因分析】
+
+连接建立、响应读取和业务总预算是三个不同边界；当前 4B transport 只实现单个
+`application/json` 响应，并不具备 Streamable HTTP/SSE 帧解析能力。把不支持的响应类型按普通 JSON
+读取会制造伪成功。
+
+### 【解决方案/代码级实现】
+
+`McpHttpTransport` 使用 `RestClient.mutate()` 保留调用方配置的 base URL、认证头与拦截器，但强制
+替换为无自动重试的 `SimpleClientHttpRequestFactory`，其 connect/read timeout 与 transport timeout
+一致。请求在虚拟线程中执行，外层 `Future.get` 再做总预算门禁；超时立即 `cancel(true)`，以
+`McpTransportException` 保留 cause。HTTP 非 2xx、空正文、非 JSON、SSE 和尾随 JSON 都明确失败。
+回归测试给 503 POST 返回 `Retry-After` 并断言服务端只收到一次请求，同时断言 100ms 慢响应超时后
+transport close 在 500ms 内结束。日志只记录 endpoint、method、requestId、HTTP 状态与 duration，
+不记录参数、Authorization 或源码。SSE/Streamable HTTP 和 stdio transport 保持未实现状态，不伪造能力。
+
+### 【问题现象】MCP 直连绕过 Registry，审批、能力和超时形同虚设
+
+如果节点直接调用 `McpClient.callTool`，远程工具虽然可用，却绕过 Schema 校验、能力授权、HIGH 风险
+审批、审计和统一超时。前端可能显示“等待审批”，远程副作用已经发生。
+
+### 【根因分析】
+
+协议 client 与治理入口职责混淆。MCP 只描述远程工具和调用协议，不提供 Agent4J 的用户、工作区、
+风险或审批上下文，因此不能承担授权决策。
+
+### 【解决方案/代码级实现】
+
+`McpToolRegistryAdapter` 把远程 description、inputSchema 和精确 remoteName 映射为本地
+`ToolDefinition`，风险、能力和 timeout 由调用方显式注入。节点只能通过 `ToolRegistry.execute`
+执行：Schema、能力或审批失败时远程调用计数保持为零，成功时只调用一次，timeout 由 Registry 取消。
+
+### 【问题现象】JSON-RPC error 与工具 `isError=true` 被混成同一种故障
+
+JSON-RPC `error` 表示协议层请求失败，而成功的 `tools/call` 响应仍可能携带 `isError=true` 和结构化
+content。若两者都只转成 message，远程返回的文本、图片或资源错误证据会丢失，修复循环无法判断
+是传输故障还是工具执行失败。
+
+### 【解决方案/代码级实现】
+
+`McpClient` 对 JSON-RPC `error` 抛 `McpProtocolException`；对合法 `tools/call` 则完整返回
+`McpToolCallResult(content, isError)`。适配器看到 `isError=true` 时抛
+`McpRemoteToolException`，异常字段保留精确 remoteName 和防御性复制的 content JSON array，完整
+堆栈由 Registry 写入 `ToolResult.errorStack` 与审计异常类型。
+
+### 【证据】
+
+`McpJsonRpcProtocolTest`、`McpHttpTransportTest`、`McpClientTest` 和
+`McpToolRegistryAdapterTest` 覆盖严格协议、HTTP 错误、握手分页、精确名称、批量 Schema 预检、
+权限审批、超时、重复注册和远程失败。`McpToolAdapterEddTest` 使用七个确定性场景生成
+`agent-eval/target/edd/mcp-tool-adapter-edd.json`，每项字段严格为
+`taskId/status/audited/durationMs/errorType/passed`。握手与发现没有执行 Tool Registry，`audited` 精确为
+false，并通过协议请求计数与 notification 证明；成功、三类治理拒绝和远程失败各产生一条 Registry
+审计事件，`audited` 精确为 true，七个场景均通过。

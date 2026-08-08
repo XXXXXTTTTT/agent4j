@@ -1,6 +1,7 @@
 package com.agent.core.tool.mcp;
 
 import com.agent.core.intent.RequiredCapability;
+import com.agent.core.tool.JacksonToolSchemaValidator;
 import com.agent.core.tool.ToolDefinition;
 import com.agent.core.tool.ToolRegistry;
 import com.agent.core.tool.ToolRiskLevel;
@@ -15,6 +16,8 @@ import java.util.Set;
 
 /** 将 MCP 远程工具转换为本地受治理工具定义。 */
 public final class McpToolRegistryAdapter {
+
+    private static final JacksonToolSchemaValidator SCHEMA_VALIDATOR = new JacksonToolSchemaValidator();
 
     private final McpClient client;
     private final ToolRegistry registry;
@@ -41,20 +44,15 @@ public final class McpToolRegistryAdapter {
         Set<String> names = new HashSet<>();
         for (McpRemoteTool remoteTool : remoteTools) {
             String localName = namespace + "." + remoteTool.name();
+            SCHEMA_VALIDATOR.validateSchema(remoteTool.inputSchema());
             ToolDefinition definition = definition(localName, remoteTool, riskLevel, capabilities, timeout);
             if (!names.add(localName)) {
                 throw new IllegalArgumentException("MCP 本地工具名称重复: " + localName);
             }
-            if (registry.find(localName).isPresent()) {
-                throw new IllegalArgumentException("MCP 本地工具名称已注册: " + localName);
-            }
             definitions.add(definition);
         }
 
-        // 所有名称和 Schema 已在上面预检，完成预检后才触发注册，避免发现阶段留下半批工具。
-        for (ToolDefinition definition : definitions) {
-            registry.register(definition);
-        }
+        registry.registerAll(definitions);
     }
 
     private ToolDefinition definition(

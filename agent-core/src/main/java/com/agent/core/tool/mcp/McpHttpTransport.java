@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import java.net.URI;
@@ -33,7 +34,7 @@ public final class McpHttpTransport implements McpTransport {
             ObjectMapper objectMapper,
             URI endpoint,
             Duration timeout) {
-        this.restClient = Objects.requireNonNull(restClient, "restClient 不能为空");
+        RestClient sourceClient = Objects.requireNonNull(restClient, "restClient 不能为空");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
         this.endpoint = Objects.requireNonNull(endpoint, "endpoint 不能为空");
         if (!endpoint.isAbsolute()
@@ -45,6 +46,12 @@ public final class McpHttpTransport implements McpTransport {
         if (timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("timeout 必须大于 0");
         }
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(timeout);
+        requestFactory.setReadTimeout(timeout);
+        this.restClient = sourceClient.mutate()
+                .requestFactory(requestFactory)
+                .build();
     }
 
     @Override
@@ -90,7 +97,7 @@ public final class McpHttpTransport implements McpTransport {
         long startedAt = System.nanoTime();
         Future<HttpReply> future = executor.submit(() -> send(request));
         try {
-            HttpReply reply = future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            HttpReply reply = future.get(timeout.toNanos(), TimeUnit.NANOSECONDS);
             long durationMs = elapsedMillis(startedAt);
             LOGGER.info(
                     "MCP HTTP 请求完成 endpoint={} method={} requestId={} httpStatus={} durationMs={}",

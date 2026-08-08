@@ -43,12 +43,14 @@ LangGraph4j、stdio 子进程或前端配置页面；stdio transport 留到后�
 `McpToolRegistryAdapter.registerDiscoveredTools(namespace, riskLevel, capabilities, timeout)`
 先初始化并发现工具，再按 `namespace + "." + remoteName` 生成本地名。namespace 与
 remoteName 必须组合成 4A 名称正则允许的精确字符串，不做大小写或字符替换；冲突由
-Registry 原子拒绝。handler 只闭包远程原名，收到本地 `ToolCall` 后调用 `McpClient`。
+Registry 的 `registerAll` 原子拒绝。handler 只闭包远程原名，收到本地 `ToolCall` 后调用 `McpClient`。
 返回的 content 数组作为 JSON array 输出，远程 `isError` 抛出 `McpRemoteToolException`。
 
 ## HTTP transport
 
 `McpHttpTransport` 构造器注入 `RestClient`、`ObjectMapper`、endpoint URI 和请求超时。
+transport 通过 `RestClient.mutate()` 保留调用方配置并替换为无自动重试、connect/read timeout
+与总预算一致的 request factory，禁止可能有副作用的 POST 被底层透明重发。
 请求使用 `POST`、`Content-Type: application/json`、`Accept: application/json`；非 2xx、
 空响应、非 JSON content type、解析失败、请求超时均抛 `McpTransportException`。日志只记录
 endpoint、method、requestId、HTTP 状态和耗时，不记录 params、API Key 或源码。

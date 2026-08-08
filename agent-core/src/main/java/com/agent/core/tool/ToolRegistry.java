@@ -9,6 +9,9 @@ public interface ToolRegistry extends AutoCloseable {
     /** 注册一个工具定义。 */
     void register(ToolDefinition definition);
 
+    /** 在任何定义失败时不写入整批工具。 */
+    void registerAll(List<ToolDefinition> definitions);
+
     /** 按精确名称查找工具。 */
     Optional<ToolDefinition> find(String name);
 
