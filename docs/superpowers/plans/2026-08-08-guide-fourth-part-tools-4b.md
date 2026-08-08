@@ -38,11 +38,11 @@
 - Create: `agent-core/src/main/java/com/agent/core/tool/mcp/McpHttpTransport.java`
 - Create: `agent-core/src/test/java/com/agent/core/tool/mcp/McpHttpTransportTest.java`
 
-- [ ] **Step 1: Write failing local `HttpServer` tests**: assert POST headers/body, non-2xx mapping, empty/non-JSON response rejection, SSE content-type rejection, timeout cause, and logs without params or API key.
-- [ ] **Step 2: Run red test** with `mvn -pl agent-core -am -Dtest=McpHttpTransportTest -Dsurefire.failIfNoSpecifiedTests=false test`.
-- [ ] **Step 3: Implement `McpTransport` and `McpHttpTransport`**: inject `RestClient`, `ObjectMapper`, endpoint and positive timeout; send strict JSON-RPC body; parse one response; log only endpoint/method/requestId/status/duration.
-- [ ] **Step 4: Run green test and `mvn -pl agent-core -am test`**.
-- [ ] **Step 5: Commit** `feat(tool): add mcp http transport`.
+- [x] **Step 1: Write failing local `HttpServer` tests**: assert POST headers/body, non-2xx mapping, empty/non-JSON response rejection, SSE content-type rejection, timeout cause, and logs without params or API key.
+- [x] **Step 2: Run red test** with `mvn -pl agent-core -am -Dtest=McpHttpTransportTest -Dsurefire.failIfNoSpecifiedTests=false test`.
+- [x] **Step 3: Implement `McpTransport` and `McpHttpTransport`**: inject `RestClient`, `ObjectMapper`, endpoint and positive timeout; send strict JSON-RPC body; parse one response; log only endpoint/method/requestId/status/duration.
+- [x] **Step 4: Run green test and `mvn -pl agent-core -am test`**: transport 5 项通过，core 回归通过。
+- [x] **Step 5: Commit** `feat(tool): add mcp http transport`.
 
 ### Task 3: MCP client handshake and tool protocol
 
