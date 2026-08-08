@@ -178,4 +178,3 @@ PTY 输出七条路线；报告不保存命令正文或用户参数。
 可以在激活后引用 CLI 命令名；第七篇 CLI Agent 再把命令定义注册为 `ToolDefinition`，统一进入
 ToolRegistry 的审计和模型调用链。完成后更新 `docs/ENGINEERING_PITFALLS.md`，记录 Shell 注入、
 符号链接逃逸、审批误执行和 raw CommandRequest 旁路问题。
-
