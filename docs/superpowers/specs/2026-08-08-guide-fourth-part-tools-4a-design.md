@@ -85,7 +85,7 @@ public interface ToolRegistry extends AutoCloseable {
 }
 ```
 
-生产实现 `DefaultToolRegistry` 使用不可变快照和 `ConcurrentHashMap` 注册表；`list()` 始终按工具名自然顺序返回不可变列表：
+生产实现 `DefaultToolRegistry` 使用 `volatile Map` 发布 copy-on-write 不可变快照；批量注册在同步临界区内完成校验与一次性发布，读取不加锁；`list()` 始终按工具名自然顺序返回不可变列表：
 
 1. 注册时校验定义、名称唯一和 Schema 结构；重复名称立即抛 `ToolRegistrationException`。
 2. 执行时按精确名称查找；未知名称返回 `FAILED`，错误中包含 `ToolNotFoundException` 的完整堆栈。
