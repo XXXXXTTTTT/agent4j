@@ -149,6 +149,34 @@ class CodebaseChunkerTest {
     }
 
     @Test
+    void ingestsCapturedSnapshotAndReturnsRepositoryIndex() throws IOException {
+        write("notes.txt", "alpha\nbeta");
+        RecordingStore store = new RecordingStore();
+        EmbeddingModel model = new EmbeddingModel() {
+            @Override
+            public int dimensions() {
+                return 8;
+            }
+
+            @Override
+            public float[] embed(String text) {
+                return new float[8];
+            }
+        };
+        RepositorySnapshot snapshot = new RepositorySourceScanner().capture(temporaryDirectory);
+
+        com.agent.rag.store.RagRepositoryIndex index =
+                new CodebaseIngestionService(new AstService(), model, store)
+                        .ingest(snapshot, "repository-1");
+
+        assertThat(index.repositoryId()).isEqualTo("repository-1");
+        assertThat(index.workspaceFingerprint()).isEqualTo(snapshot.fingerprint());
+        assertThat(index.parentCount()).isEqualTo(store.parents.size());
+        assertThat(index.childCount()).isEqualTo(store.children.size());
+        assertThat(store.index).isEqualTo(index);
+    }
+
+    @Test
     void rejectsWrongEmbeddingDimensionBeforeStoreWrite() throws IOException {
         write("notes.txt", "alpha");
         RecordingStore store = new RecordingStore();
@@ -236,6 +264,7 @@ class CodebaseChunkerTest {
         private String repositoryId;
         private List<ParentChunk> parents = List.of();
         private List<ChildChunk> children = List.of();
+        private com.agent.rag.store.RagRepositoryIndex index;
 
         @Override
         public void replaceRepository(
@@ -245,6 +274,16 @@ class CodebaseChunkerTest {
             this.repositoryId = repositoryId;
             this.parents = List.copyOf(parents);
             this.children = List.copyOf(children);
+        }
+
+        @Override
+        public void replaceRepository(
+                String repositoryId,
+                List<ParentChunk> parents,
+                List<ChildChunk> children,
+                com.agent.rag.store.RagRepositoryIndex index) {
+            replaceRepository(repositoryId, parents, children);
+            this.index = index;
         }
 
         @Override

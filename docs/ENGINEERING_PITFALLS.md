@@ -1502,3 +1502,50 @@ cause，在 `strict=false` 时只返回文件规则，并新增 source 精确为
 `ProjectKnowledgeEddTest`。确定性 EDD 报告固定写入
 `agent-eval/target/edd/project-knowledge-edd.json`，六个场景均包含
 `taskId/passed/sourceCount/fingerprint/estimatedTokens/degraded/evidence`。
+
+## 第三篇 3C 补充：按需索引一致性与 single-flight
+
+### 【问题现象】指纹扫描与切片分别读取磁盘会产生混合版本索引
+
+如果先扫描文件计算 workspace fingerprint，随后切片器再次打开文件，两个步骤之间发生的
+代码修改会让数据库保存“旧指纹 + 新正文”。后续请求看到指纹不一致会重复索引；更严重时，
+审计记录无法证明当前向量到底来自哪一版源码。
+
+### 【根因分析】
+
+指纹和切片虽然属于同一次索引事务，但旧接口分别消费路径，磁盘读取不是事务快照。数据库
+事务只能保证父块、子块和元数据一起提交，不能回滚事务外已经变化的文件系统。
+
+### 【解决方案/代码级实现】
+
+`RepositorySourceScanner` 一次捕获规范化路径、严格 UTF-8 正文、单文件 SHA-256 和仓库
+SHA-256；`CodebaseChunker` 与 `CodebaseIngestionService` 只消费该不可变
+`RepositorySnapshot`。`RagRepositoryIndex` 使用同一快照指纹和实际父子数量，并与父子块在
+`JdbcRagStore` 的同一 PostgreSQL 事务中替换。快照后修改磁盘不会污染本轮切片正文。
+
+### 【问题现象】并发首次查询会重复扫描和调用 embedding
+
+同一 repositoryId 在索引缺失或代码变化时可能同时收到多个知识查询。每个请求独立 ingest
+会重复读取整个项目、重复消耗 embedding 配额，并竞争替换同一组数据库行。
+
+### 【根因分析】
+
+数据库指纹只能跳过已经提交的索引，不能合并正在执行的索引。单纯先查 Map 再放 Future
+仍是 check-then-act 竞态；Future 失败后若留在 Map 中，后续请求还会永久复用失败结果。
+
+### 【解决方案/代码级实现】
+
+`CodebaseIndexCoordinator` 以 repositoryId 为精确键，通过 `ConcurrentHashMap.compute`
+原子创建或复用未完成的 `CompletableFuture<RagRepositoryIndex>`。扫描、切片和 embedding
+全部提交到 `Executors.newVirtualThreadPerTaskExecutor()`；数据库指纹一致时直接返回已提交
+元数据。完成或失败后使用键和值双重匹配删除 Future，避免旧任务删除新重试；已完成旧值即使
+尚在 Map 中也不会阻止下一轮索引。`IndexingKnowledgeContextProvider` 在调用线程按配置
+`Duration` 等待，超时、中断和执行异常分别保留原始 cause，中断路径恢复线程中断标记。
+
+### 【证据】
+
+`CodebaseIndexCoordinatorTest` 验证同仓库并发只调用一次 embedding、虚拟线程执行、指纹命中
+跳过、失败后重试和完成回调内再次索引；`IndexingKnowledgeContextProviderTest` 验证等待顺序、
+超时、执行失败与中断传播。Task 6 指定测试连续三轮通过；随后 `agent-sandbox` 43、
+`agent-core` 168、`agent-rag` 115 个测试全量通过，0 failures、0 errors。2 个 skip 均为
+Windows 无符号链接权限的明确 assumption，真实 pgvector 集成测试未跳过。
