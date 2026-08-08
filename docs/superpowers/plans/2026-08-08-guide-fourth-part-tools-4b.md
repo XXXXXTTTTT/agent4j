@@ -19,17 +19,17 @@
 - Create: `agent-core/src/main/java/com/agent/core/tool/mcp/McpTransportException.java`
 - Create: `agent-core/src/test/java/com/agent/core/tool/mcp/McpJsonRpcProtocolTest.java`
 
-- [ ] **Step 1: Write failing protocol tests**: assert request serialization uses exact `jsonrpc/id/method/params`, notification omits `id`, response rejects duplicate fields, trailing JSON, simultaneous `result/error`, missing error `code/message`, and mismatched IDs.
-- [ ] **Step 2: Run red test**:
+- [x] **Step 1: Write failing protocol tests**: assert request serialization uses exact `jsonrpc/id/method/params`, notification omits `id`, response rejects duplicate fields, trailing JSON, simultaneous `result/error`, missing error `code/message`, and mismatched IDs.
+- [x] **Step 2: Run red test**:
 
   ```powershell
   mvn -pl agent-core -am "-Dtest=McpJsonRpcProtocolTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
   ```
 
   Expected: compilation failure because MCP protocol types do not exist.
-- [ ] **Step 3: Implement records and strict parser**: freeze `JsonNode` values with deep copies; use an `ObjectReader` configured with duplicate detection and trailing-token failure; preserve protocol causes.
-- [ ] **Step 4: Run green test** with the same command.
-- [ ] **Step 5: Commit** `feat(tool): define mcp json-rpc protocol`.
+- [x] **Step 3: Implement records and strict parser**: freeze `JsonNode` values with deep copies; use an `ObjectReader` configured with duplicate detection and trailing-token failure; preserve protocol causes.
+- [x] **Step 4: Run green test** with the same command: 7 tests passed.
+- [x] **Step 5: Commit** `feat(tool): define mcp json-rpc protocol`.
 
 ### Task 2: MCP transport port and HTTP implementation
 
