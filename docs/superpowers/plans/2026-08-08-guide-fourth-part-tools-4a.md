@@ -90,9 +90,9 @@
 - Create: `agent-core/src/main/java/com/agent/core/tool/JacksonToolSchemaValidator.java`
 - Create: `agent-core/src/test/java/com/agent/core/tool/ToolSchemaValidatorTest.java`
 
-- [ ] **Step 1: 写失败 Schema 定义测试**：根必须为 `type=object`；递归支持 `properties/required/additionalProperties/type/items/enum/minLength/maxLength/minimum/maximum/title/description`；`required` 重复、属性名空白、类型未知、约束类型错误、min 大于 max、array 缺 items 和任何未支持关键字均以精确 JSON Pointer 失败。
-- [ ] **Step 2: 写失败参数测试**：覆盖 object/string/integer/number/boolean/array、嵌套 required、enum、字符串长度、数值上下限、array items；`additionalProperties=false` 拒绝未知字段，未声明或 true 时保留未知字段；NaN/Infinity 不接受。
-- [ ] **Step 3: 运行红灯**：
+- [x] **Step 1: 写失败 Schema 定义测试**：根必须为 `type=object`；递归支持 `properties/required/additionalProperties/type/items/enum/minLength/maxLength/minimum/maximum/title/description`；`required` 重复、属性名空白、类型未知、约束类型错误、min 大于 max、array 缺 items 和任何未支持关键字均以精确 JSON Pointer 失败。
+- [x] **Step 2: 写失败参数测试**：覆盖 object/string/integer/number/boolean/array、嵌套 required、enum、字符串长度、数值上下限、array items；`additionalProperties=false` 拒绝未知字段，未声明或 true 时保留未知字段；NaN/Infinity 不接受。
+- [x] **Step 3: 运行红灯**：
 
   ```powershell
   mvn -pl agent-core -am `
@@ -100,7 +100,7 @@
     '-Dsurefire.failIfNoSpecifiedTests=false' test
   ```
 
-- [ ] **Step 4: 写最小接口和实现**：
+- [x] **Step 4: 写最小接口和实现**：
 
   ```java
   public interface ToolSchemaValidator {
@@ -110,8 +110,8 @@
   ```
 
   `JacksonToolSchemaValidator` 使用递归方法携带 JSON Pointer；数字使用 `BigDecimal` 比较；required 用 `LinkedHashSet` 检测重复；关键字按当前 Schema 层级白名单校验，不忽略未知关键字。
-- [ ] **Step 5: 运行绿灯与重复测试**：指定测试连续运行两次，再运行 `mvn -pl agent-core -am test`。
-- [ ] **Step 6: 提交**：
+- [x] **Step 5: 运行绿灯与重复测试**：指定测试连续运行两次，再运行 `mvn -pl agent-core -am test`。
+- [x] **Step 6: 提交**：
 
   ```text
   feat(tool): validate deterministic json schemas
