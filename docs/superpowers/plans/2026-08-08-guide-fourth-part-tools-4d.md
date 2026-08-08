@@ -238,7 +238,7 @@ docs(knowledge): record cli governance pitfalls
 
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Java\jdk-21'
-mvn -pl agent-core '-Dtest=com.agent.core.cli.*' test
+mvn -pl agent-core '-Dtest=CliCommandDefinitionTest,CliCommandCatalogTest,CliCommandRenderingTest,GovernedCliCommandExecutorTest,GovernedCliPtyIntegrationTest' test
 mvn -pl agent-core,agent-eval -am test
 ```
 
