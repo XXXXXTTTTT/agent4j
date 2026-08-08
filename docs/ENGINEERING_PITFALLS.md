@@ -1935,3 +1935,46 @@ Registry 读取失败导致整个目录原子失败。Skill 没有 `execute`、h
 `SkillCatalogConcurrencyTest` 验证 32 个虚拟线程并发读取和 Schema 隔离；
 `SkillMcpIntegrationTest` 验证 MCP 工具经过 Registry 审批。`SkillCatalogEddTest` 七项全部通过并
 生成 `agent-eval/target/edd/skill-catalog-edd.json`。
+
+## 第四篇 4D：CLI Capability 治理与安全执行
+
+### 【问题现象】把模型输出的自然语言直接交给 Bash，审批显示等待但终端已经启动
+
+CLI 是 Agent 最容易产生外部副作用的能力。若节点把一整段自然语言或未经约束的 Shell
+字符串交给 `SandboxTerminalService`，模型可以借助分号、管道、重定向、命令替换或环境
+展开拼接第二条命令；若审批只在前端显示而没有位于终端调用之前，拒绝操作仍会落地。
+
+### 【根因分析】命令意图、命令生成、安全策略和终端执行没有分层
+
+原始 `CommandRequest` 只描述已经渲染完成的 Bash 字符串，不表达命令身份、风险、能力、
+工作区或审批状态。调用方若自行拼接字符串，就会绕过统一的能力差集、HITL 决策、审计指纹
+和路径边界。工作区只做 `normalize()` 也无法识别指向根目录外部的符号链接。
+
+### 【解决方案/代码级实现】目录固定命令，意图只传 token，门面只执行 ALLOWED
+
+`CliCommandDefinition` 固定精确命令名、executable、固定参数、`CliRiskLevel` 和
+`RequiredCapability` 集合；`CliCommandIntent` 只接受精确命令名、用户 token 参数、
+`workspaceRoot`、`TerminalTarget` 和有界 timeout。`CliCommandCatalog.authorize` 按“精确
+查找 -> token 门禁 -> `toRealPath()` 边界 -> 单引号引用 -> SHA-256 -> 能力 -> 风险审批”
+顺序生成 `CliCommandPlan`。`READ_ONLY` 自动允许，`MUTATING` 需要用户批准，`DESTRUCTIVE`
+同时需要用户和管理员批准；缺少能力永远 `DENIED`，不能被审批覆盖。
+
+`GovernedCliCommandExecutor` 将 `ALLOWED` 的同一个 `CommandRequest` 交给注入的
+`TerminalCommandExecutor`，`DENIED` 与 `APPROVAL_REQUIRED` 返回空结果且调用计数为零。
+底层 PTY/Docker 的 ANSI 日志、退出码、超时和异常 cause 原样保留，治理层不自动重试、不自动
+批准、不拼接第二条命令。审计报告只保存渲染命令的 64 位小写 SHA-256，不保存命令正文或用户
+参数。
+
+### 【证据】单元、真实 PTY 与 EDD 同时验证策略和副作用边界
+
+`CliCommandDefinitionTest`、`CliCommandCatalogTest` 与 `CliCommandRenderingTest` 覆盖集合
+冻结、精确名称、三档风险、能力拒绝、参数注入、真实路径越界、符号链接逃逸和稳定指纹。
+`GovernedCliCommandExecutorTest` 验证拒绝/待审批调用终端次数为零、允许路径只调用一次并
+保留 Future 异常；`GovernedCliPtyIntegrationTest` 使用精确 `D:/Git/bin/bash.exe` 执行真实
+`printf`，捕获 PTY 日志并确认日志读取线程为虚拟线程。
+
+`CliCapabilityEddTest` 固定评测 `cli.read-only`、`cli.mutating-approval`、
+`cli.destructive-admin`、`cli.capability-denied`、`cli.argument-injection`、
+`cli.workspace-escape`、`cli.pty-output` 七条路线，报告严格只含
+`taskId/status/decision/commandSha256/exitCode/timedOut/terminalCalls/passed`。
+报告中的 `terminalCalls` 由 fake 或真实终端适配器实际计数，避免用授权结果推断副作用。
