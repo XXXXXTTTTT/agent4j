@@ -15,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.testcontainers.DockerClientFactory;
@@ -28,6 +29,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -43,6 +45,10 @@ class JdbcRagStoreIntegrationTest {
             UUID.fromString("c4b37c2e-5964-42e5-a8ad-0b5c759a21dc");
     private static final UUID CHILD_ID =
             UUID.fromString("7698c6fb-2939-4ae1-84c9-44a3fe7a7ec0");
+    private static final String OLD_FINGERPRINT = "a".repeat(64);
+    private static final String NEW_FINGERPRINT = "b".repeat(64);
+
+    private static DataSource sharedDataSource;
 
     private DataSource dataSource;
     private JdbcRagStore store;
@@ -61,6 +67,14 @@ class JdbcRagStoreIntegrationTest {
         }
         Assumptions.assumeTrue(dockerAvailable, "Docker Engine 不可用");
         POSTGRES.start();
+        sharedDataSource = new DriverManagerDataSource(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+        new ResourceDatabasePopulator(
+                new ClassPathResource("db/rag-migration/V1__create_rag_tables.sql"),
+                new ClassPathResource("db/rag-migration/V2__create_memory_table.sql"),
+                new ClassPathResource("db/rag-migration/V3__add_memory_lifecycle.sql"),
+                new ClassPathResource("db/rag-migration/V4__create_repository_indexes.sql"))
+                .execute(sharedDataSource);
     }
 
     @AfterAll
@@ -72,11 +86,7 @@ class JdbcRagStoreIntegrationTest {
 
     @BeforeEach
     void setUpDatabase() {
-        dataSource = new DriverManagerDataSource(
-                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
-        new ResourceDatabasePopulator(
-                new ClassPathResource("db/rag-migration/V1__create_rag_tables.sql"))
-                .execute(dataSource);
+        dataSource = sharedDataSource;
         store = new JdbcRagStore(dataSource, CLOCK);
         store.replaceRepository("repo-a", List.of(), List.of());
         store.replaceRepository("repo-b", List.of(), List.of());
@@ -89,6 +99,56 @@ class JdbcRagStoreIntegrationTest {
         assertThat(store.indexNames())
                 .contains("idx_rag_child_search_vector", "idx_rag_child_embedding");
         assertThat(store.vectorDimension()).isEqualTo(8);
+        JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
+        assertThat(jdbcTemplate.queryForList("""
+                select column_name
+                from information_schema.columns
+                where table_schema = 'public'
+                  and table_name = 'rag_repository_indexes'
+                order by ordinal_position
+                """, String.class)).containsExactly(
+                        "repository_id",
+                        "workspace_fingerprint",
+                        "parent_count",
+                        "child_count",
+                        "indexed_at");
+        assertThat(jdbcTemplate.queryForObject("""
+                select count(*)
+                from information_schema.table_constraints
+                where table_schema = 'public'
+                  and table_name = 'rag_repository_indexes'
+                  and constraint_type = 'PRIMARY KEY'
+                """, Integer.class)).isEqualTo(1);
+    }
+
+    @Test
+    void validatesRepositoryIndexDomainContract() {
+        Instant indexedAt = Instant.parse("2026-08-03T10:00:00Z");
+
+        assertThat(new RagRepositoryIndex(
+                "repo-a", OLD_FINGERPRINT, 1, 2, indexedAt))
+                .isEqualTo(new RagRepositoryIndex(
+                        "repo-a", OLD_FINGERPRINT, 1, 2, indexedAt));
+        assertThatThrownBy(() -> new RagRepositoryIndex(
+                " ", OLD_FINGERPRINT, 1, 2, indexedAt))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("repositoryId");
+        assertThatThrownBy(() -> new RagRepositoryIndex(
+                "repo-a", "ABC", 1, 2, indexedAt))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("workspaceFingerprint");
+        assertThatThrownBy(() -> new RagRepositoryIndex(
+                "repo-a", OLD_FINGERPRINT, -1, 2, indexedAt))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("parentCount");
+        assertThatThrownBy(() -> new RagRepositoryIndex(
+                "repo-a", OLD_FINGERPRINT, 1, -1, indexedAt))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("childCount");
+        assertThatThrownBy(() -> new RagRepositoryIndex(
+                "repo-a", OLD_FINGERPRINT, 1, 2, null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("indexedAt");
     }
 
     @Test
@@ -136,6 +196,47 @@ class JdbcRagStoreIntegrationTest {
                 .extracting(RetrievalRow::childChunk)
                 .containsExactly(oldChild);
         assertThat(store.findByLexical("repo-a", "newMethod", 10)).isEmpty();
+    }
+
+    @Test
+    void replacesBlocksAndRepositoryIndexInOneTransaction() {
+        ParentChunk oldParent = parent("repo-a", "src/Old.java", "com.example.Old");
+        ChildChunk oldChild = child("repo-a", oldParent.parentId(),
+                "com.example.Old#void old()", "void old() {}", new float[8]);
+        RagRepositoryIndex oldIndex = new RagRepositoryIndex(
+                "repo-a", OLD_FINGERPRINT, 1, 1,
+                Instant.parse("2026-08-03T09:00:00Z"));
+        store.replaceRepository("repo-a", List.of(oldParent), List.of(oldChild), oldIndex);
+
+        assertThat(store.findRepositoryIndex("repo-a"))
+                .contains(oldIndex);
+
+        ParentChunk newParent = parent("repo-a", "src/New.java", "com.example.New");
+        ChildChunk invalidChild = child(
+                "repo-a",
+                UUID.fromString("4dff921d-bb83-4c5c-9f19-6bd5c3c190ce"),
+                "com.example.New#void newMethod()",
+                "void newMethod() {}",
+                new float[8]);
+        RagRepositoryIndex newIndex = new RagRepositoryIndex(
+                "repo-a", NEW_FINGERPRINT, 1, 1,
+                Instant.parse("2026-08-03T10:00:00Z"));
+
+        assertThatThrownBy(() -> store.replaceRepository(
+                "repo-a", List.of(newParent), List.of(invalidChild), newIndex))
+                .isInstanceOf(RagStoreException.class);
+        assertThat(store.findRepositoryIndex("repo-a"))
+                .contains(oldIndex);
+        assertThat(store.findByLexical("repo-a", "old", 10))
+                .extracting(RetrievalRow::childChunk)
+                .containsExactly(oldChild);
+        assertThat(store.findByLexical("repo-a", "newMethod", 10)).isEmpty();
+    }
+
+    @Test
+    void returnsEmptyRepositoryIndexForUnknownRepository() {
+        assertThat(store.findRepositoryIndex("missing"))
+                .isEqualTo(Optional.empty());
     }
 
     @Test

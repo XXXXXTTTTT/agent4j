@@ -17,6 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 /** 基于 Spring JDBC 的 PostgreSQL RAG 存储。 */
@@ -51,11 +52,38 @@ public final class JdbcRagStore implements RagStore {
             String repositoryId,
             List<ParentChunk> parents,
             List<ChildChunk> children) {
+        replaceRepositoryAtomically(repositoryId, parents, children, null);
+    }
+
+    @Override
+    public void replaceRepository(
+            String repositoryId,
+            List<ParentChunk> parents,
+            List<ChildChunk> children,
+            RagRepositoryIndex index) {
+        requireRepositoryId(repositoryId);
+        Objects.requireNonNull(index, "index 不能为空");
+        if (!repositoryId.equals(index.repositoryId())) {
+            throw new IllegalArgumentException("index repositoryId 不一致");
+        }
+        replaceRepositoryAtomically(repositoryId, parents, children, index);
+    }
+
+    private void replaceRepositoryAtomically(
+            String repositoryId,
+            List<ParentChunk> parents,
+            List<ChildChunk> children,
+            RagRepositoryIndex index) {
         requireRepositoryId(repositoryId);
         Objects.requireNonNull(parents, "parents 不能为空");
         Objects.requireNonNull(children, "children 不能为空");
         try {
             transactionTemplate.executeWithoutResult(status -> {
+                if (index == null) {
+                    jdbcTemplate.update(
+                            "delete from rag_repository_indexes where repository_id = ?",
+                            repositoryId);
+                }
                 jdbcTemplate.update(
                         "delete from rag_child_chunks where repository_id = ?", repositoryId);
                 jdbcTemplate.update(
@@ -89,11 +117,50 @@ public final class JdbcRagStore implements RagStore {
                             child.symbol(), child.ordinal(), child.content(), child.startLine(),
                             child.endLine(), vectorLiteral(child.embedding()), createdAt);
                 }
+                if (index != null) {
+                    jdbcTemplate.update("""
+                            insert into rag_repository_indexes(
+                                repository_id, workspace_fingerprint,
+                                parent_count, child_count, indexed_at)
+                            values (?, ?, ?, ?, ?)
+                            on conflict (repository_id) do update set
+                                workspace_fingerprint = excluded.workspace_fingerprint,
+                                parent_count = excluded.parent_count,
+                                child_count = excluded.child_count,
+                                indexed_at = excluded.indexed_at
+                            """,
+                            index.repositoryId(),
+                            index.workspaceFingerprint(),
+                            index.parentCount(),
+                            index.childCount(),
+                            Timestamp.from(index.indexedAt()));
+                }
             });
         } catch (RagStoreException exception) {
             throw exception;
         } catch (RuntimeException exception) {
             throw new RagStoreException("替换 RAG 索引失败: " + repositoryId, exception);
+        }
+    }
+
+    @Override
+    public Optional<RagRepositoryIndex> findRepositoryIndex(String repositoryId) {
+        requireRepositoryId(repositoryId);
+        try {
+            return jdbcTemplate.query("""
+                    select repository_id, workspace_fingerprint,
+                           parent_count, child_count, indexed_at
+                    from rag_repository_indexes
+                    where repository_id = ?
+                    """, (resultSet, rowNumber) -> new RagRepositoryIndex(
+                            resultSet.getString("repository_id"),
+                            resultSet.getString("workspace_fingerprint"),
+                            resultSet.getInt("parent_count"),
+                            resultSet.getInt("child_count"),
+                            resultSet.getTimestamp("indexed_at").toInstant()),
+                    repositoryId).stream().findFirst();
+        } catch (DataAccessException exception) {
+            throw new RagStoreException("读取 RAG 索引元数据失败: " + repositoryId, exception);
         }
     }
 

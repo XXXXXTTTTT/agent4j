@@ -5,6 +5,7 @@ import com.agent.rag.domain.ParentChunk;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** RAG 索引存储端口。 */
 public interface RagStore {
@@ -14,6 +15,20 @@ public interface RagStore {
             String repositoryId,
             List<ParentChunk> parents,
             List<ChildChunk> children);
+
+    /** 替换父子块与索引元数据；旧实现保持父子块替换兼容行为。 */
+    default void replaceRepository(
+            String repositoryId,
+            List<ParentChunk> parents,
+            List<ChildChunk> children,
+            RagRepositoryIndex index) {
+        replaceRepository(repositoryId, parents, children);
+    }
+
+    /** 返回仓库已提交的索引元数据；旧实现固定返回空。 */
+    default Optional<RagRepositoryIndex> findRepositoryIndex(String repositoryId) {
+        return Optional.empty();
+    }
 
     /** 按余弦距离返回向量召回行。 */
     List<RetrievalRow> findByVector(String repositoryId, float[] queryEmbedding, int limit);
