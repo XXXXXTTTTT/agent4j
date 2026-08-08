@@ -253,4 +253,3 @@ git -c safe.directory='D:/agent4j/.worktrees/guide-third-part-knowledge' status 
 ```
 
 Expected: 全模块打包成功，diff check 为空，状态只包含已提交变更；target、日志、`.env` 不进入 Git。
-
