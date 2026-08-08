@@ -1855,3 +1855,83 @@ content。若两者都只转成 message，远程返回的文本、图片或资�
 `taskId/status/audited/durationMs/errorType/passed`。握手与发现没有执行 Tool Registry，`audited` 精确为
 false，并通过协议请求计数与 notification 证明；成功、三类治理拒绝和远程失败各产生一条 Registry
 审计事件，`audited` 精确为 true，七个场景均通过。
+
+## 第四篇 4C：Skills 只读编排与渐进披露
+
+### 【问题现象】把多个工具直接拼进 system Prompt，工具数量增长后上下文膨胀
+
+天气查询、代码搜索和 MCP 工具各自可用时，如果每次请求都把全部 Schema、参数约束和实现说明
+注入模型，简单问答也会承担完整工具上下文，首 token 延迟和输入 token 成本随工具数量线性增长。
+更严重的是，模型看到未触发工具后可能主动选择不相关能力。
+
+### 【根因分析】
+
+Tool 是单一操作，Skill 还包含调用顺序、参数约束和异常策略；两者没有分层协议时，调用方只能
+把“工具列表”和“能力知识”当作同一份静态字符串。教程第 14 章的三层懒加载如果没有确定的
+披露边界，就会退化为全量 Prompt。
+
+### 【解决方案/代码级实现】
+
+`SkillDefinition` 把元数据、原始 trigger、有序 Registry 工具名和策略片段分开保存。
+`SkillCatalog.resolve` 默认只返回 `SkillSummary` 的 discovery 分区；只有
+`String.contains(exactTrigger)` 命中或显式传入精确 Skill 名称时，才返回 `ActivatedSkill`、
+工具描述、canonical JSON Schema 和知识片段。每次上下文以 discovery/activation 两个分区的
+UTF-8 SHA-256 生成 64 位指纹，供 Prompt 审计，不保存工具 handler 或参数正文。
+
+### 【问题现象】触发词归一化造成错误 Skill 激活，多个版本选择不确定
+
+将 trigger 自动 trim、折叠大小写或进行 Unicode 归一化，会让模型在用户没有表达该能力时激活
+Skill；同一名称同时保留多个版本则会让命中结果依赖 Map 遍历顺序，审计无法说明实际使用的策略。
+
+### 【根因分析】
+
+标识符与自然语言触发文本的边界被混淆。模糊匹配对搜索体验有帮助，但不适合需要可重放的工具
+编排；版本字段如果参与隐式排序，就会把发布策略偷偷变成运行时路由规则。
+
+### 【解决方案/代码级实现】
+
+4C 对 trigger 使用原始 Unicode `contains`，不 trim、不折叠大小写、不做归一化；相同精确 trigger
+跨 Skill 直接在目录构造阶段拒绝。目录只允许一个精确 Skill 名称，`version` 是当前活动定义的
+SemVer 审计标识，新版本通过装配层整体替换不可变目录，不在一次 resolve 中猜测版本。
+
+### 【问题现象】Skill 直接调用 MCP 或生产类，审批与审计显示成功但远程副作用已发生
+
+如果 Skill 保存 `McpClient`、Java 类名或脚本路径，模型可以绕过 4A Registry 的 Schema、能力、
+HIGH 风险审批、超时和 ToolAuditEvent；前端即使显示“待审批”，远程工具也可能已经收到请求。
+
+### 【根因分析】
+
+Skill 组织层和工具执行层职责耦合。MCP 只定义发现与调用协议，不知道 Agent4J 的用户、工作区、
+风险和审批上下文；反射和脚本入口还会把不可验证的动态代码带入核心模块。
+
+### 【解决方案/代码级实现】
+
+`SkillCatalog` 构造时仅从 `ToolRegistry.find(exactName)` 复制名称、描述和 Schema，未知工具或
+Registry 读取失败导致整个目录原子失败。Skill 没有 `execute`、handler、反射或脚本字段；激活
+结果产生的 `ToolCall` 仍必须交给 `ToolRegistry.execute`。4B MCP 适配器先把远程工具注册为本地
+`ToolDefinition`，因此未批准 HIGH 风险时远程调用计数为零，批准后才允许一次调用。
+
+### 【问题现象】默认发现结果泄漏完整策略、Schema 或敏感参数
+
+把 Skill 的 Prompt 片段和工具参数放进常驻目录摘要，会让每次请求都暴露实现细节；将 EDD 报告
+直接序列化完整 Prompt 又会把 Schema、源码或用户输入带入长期评测产物。
+
+### 【根因分析】
+
+“可发现”与“可执行元数据”没有独立协议。目录、激活上下文和评测报告若复用同一个对象，
+渐进披露会在日志或报告序列化时被无意打穿。
+
+### 【解决方案/代码级实现】
+
+`SkillSummary` 只包含 name/version/description；`SkillToolMetadata` 对 JsonNode 在构造和 accessor
+两端 deep copy；`SkillPromptContext` 分离 discoverySection、activationSection 和审计 fingerprint。
+`SkillCatalogEddTest` 的报告字段严格为 `taskId/status/activatedSkills/exposedTools/fingerprint/passed`，
+不写策略全文、Schema、工具参数或密钥。
+
+### 【证据】
+
+`SkillDefinitionTest` 覆盖核心 SemVer、精确文本和集合冻结；`SkillCatalogTest` 与
+`SkillTriggerMatchingTest` 覆盖渐进披露、冲突、显式发现、大小写和 Unicode 语义；
+`SkillCatalogConcurrencyTest` 验证 32 个虚拟线程并发读取和 Schema 隔离；
+`SkillMcpIntegrationTest` 验证 MCP 工具经过 Registry 审批。`SkillCatalogEddTest` 七项全部通过并
+生成 `agent-eval/target/edd/skill-catalog-edd.json`。
