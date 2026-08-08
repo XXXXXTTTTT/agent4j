@@ -187,6 +187,31 @@ class CodebaseChunkerTest {
                 .hasCauseInstanceOf(IOException.class);
     }
 
+    @Test
+    void chunksOnlyCapturedJavaSourceAfterWorkspaceChanges() throws IOException {
+        Path source = write("src/main/java/demo/Snapshot.java", """
+                package demo;
+
+                final class Snapshot {
+                    void before() {
+                    }
+                }
+                """);
+        RepositorySnapshot snapshot = new RepositorySourceScanner()
+                .capture(temporaryDirectory);
+        Files.writeString(source, "broken java", StandardCharsets.UTF_8);
+
+        ChunkBatch batch = new CodebaseChunker(new AstService())
+                .chunk(snapshot, "repository-1");
+
+        assertThat(batch.parents()).singleElement().satisfies(parent -> {
+            assertThat(parent.symbol()).isEqualTo("demo.Snapshot");
+            assertThat(parent.content()).contains("void before()");
+        });
+        assertThat(batch.children()).singleElement().satisfies(child ->
+                assertThat(child.content()).contains("void before()"));
+    }
+
     private Path write(String relativePath, String content) throws IOException {
         Path path = temporaryDirectory.resolve(relativePath);
         Files.createDirectories(path.getParent());
