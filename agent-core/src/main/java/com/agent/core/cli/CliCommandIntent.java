@@ -23,7 +23,14 @@ public record CliCommandIntent(
         if (!CliValidation.isDefinitionName(name)) {
             throw new CliArgumentException(name, -1, "命令名格式非法");
         }
-        arguments = List.copyOf(Objects.requireNonNull(arguments, "arguments 不能为空"));
+        List<String> argumentSnapshot = new java.util.ArrayList<>(
+                Objects.requireNonNull(arguments, "arguments 不能为空"));
+        for (int index = 0; index < argumentSnapshot.size(); index++) {
+            if (argumentSnapshot.get(index) == null) {
+                throw new CliArgumentException(name, index, "参数不能为 null");
+            }
+        }
+        arguments = List.copyOf(argumentSnapshot);
         if (arguments.size() > MAX_ARGUMENTS) {
             throw new CliArgumentException(name, -1, "用户参数数量不能超过 " + MAX_ARGUMENTS);
         }

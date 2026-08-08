@@ -47,6 +47,26 @@ class CliCommandDefinitionTest {
     }
 
     @Test
+    void classifiesNullFixedAndIntentTokensAsDomainErrors() {
+        assertThatThrownBy(() -> new CliCommandDefinition(
+                "maven", "mvn", java.util.Arrays.asList((String) null),
+                CliRiskLevel.READ_ONLY, Set.of()))
+                .isInstanceOf(CliCommandDefinitionException.class);
+
+        List<String> fixed = new ArrayList<>(List.of("test"));
+        CliCommandDefinition definition = new CliCommandDefinition(
+                "maven", "mvn", fixed, CliRiskLevel.READ_ONLY, Set.of());
+        assertThat(definition).isNotNull();
+        assertThatThrownBy(() -> new CliCommandIntent(
+                "maven",
+                java.util.Arrays.asList((String) null),
+                workspace,
+                new com.agent.sandbox.pty.DockerTarget("image", workspace, "/workspace"),
+                Duration.ofSeconds(30)))
+                .isInstanceOf(CliArgumentException.class);
+    }
+
+    @Test
     void validatesExactCommandNameAndExecutable() {
         assertThatThrownBy(() -> definition("Maven", "mvn"))
                 .isInstanceOf(CliCommandDefinitionException.class);

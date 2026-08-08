@@ -17,11 +17,12 @@ public record CliCommandDefinition(
     public CliCommandDefinition {
         CliValidation.validateDefinitionName(name);
         CliValidation.validateExecutable(name, executable);
-        fixedArguments = List.copyOf(
+        List<String> fixedArgumentSnapshot = new java.util.ArrayList<>(
                 Objects.requireNonNull(fixedArguments, "fixedArguments 不能为空"));
-        for (int index = 0; index < fixedArguments.size(); index++) {
-            CliValidation.validateDefinitionArgument(name, fixedArguments.get(index), index);
+        for (int index = 0; index < fixedArgumentSnapshot.size(); index++) {
+            CliValidation.validateDefinitionArgument(name, fixedArgumentSnapshot.get(index), index);
         }
+        fixedArguments = List.copyOf(fixedArgumentSnapshot);
         riskLevel = Objects.requireNonNull(riskLevel, "riskLevel 不能为空");
         requiredCapabilities = Set.copyOf(
                 Objects.requireNonNull(requiredCapabilities, "requiredCapabilities 不能为空"));
