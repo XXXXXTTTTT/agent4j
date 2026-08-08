@@ -130,7 +130,7 @@ public record ToolAuditEvent(
         String userId,
         String callId,
         String toolName,
-        ToolRiskLevel riskLevel,
+        Optional<ToolRiskLevel> riskLevel,
         ToolResultStatus status,
         long durationMs,
         String argumentsSha256,
@@ -143,7 +143,7 @@ public interface ToolAuditSink {
 }
 ```
 
-审计只保存 arguments 的 SHA-256、工具名、风险级别、结果状态、耗时和错误类型。缺少 `NodeExecutionContext` 时仍可审计；在图节点中使用时，适配器额外通过现有 Harness Hook 发布 `BEFORE_TOOL`、`AFTER_TOOL` 或 `FAILURE`。
+审计只保存 arguments 的 SHA-256、工具名、风险级别、结果状态、耗时和错误类型。只有未知工具的 `FAILED/ToolNotFoundException` 事件允许 `riskLevel=Optional.empty()`，其余事件必须保存已注册定义的风险级别。缺少 `NodeExecutionContext` 时仍可审计；在图节点中使用时，适配器额外通过现有 Harness Hook 发布 `BEFORE_TOOL`、`AFTER_TOOL` 或 `FAILURE`。
 
 ## 5. 错误与资源语义
 
