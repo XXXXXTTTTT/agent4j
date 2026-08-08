@@ -26,8 +26,8 @@
 - Create: `agent-core/src/main/java/com/agent/core/tool/ToolTimeoutException.java`
 - Create: `agent-core/src/test/java/com/agent/core/tool/ToolAuthorizationTest.java`
 
-- [ ] **Step 1: 写失败领域测试**：断言三个枚举的精确常量集合；`ToolAuthorization(ALLOWED, "")` 合法，`DENIED/APPROVAL_REQUIRED` 只接受非空 reason；所有异常保留精确字段和 cause，`ToolSchemaException` 保存非空 JSON Pointer。
-- [ ] **Step 2: 运行红灯**：
+- [x] **Step 1: 写失败领域测试**：断言三个枚举的精确常量集合；`ToolAuthorization(ALLOWED, "")` 合法，`DENIED/APPROVAL_REQUIRED` 只接受非空 reason；所有异常保留精确字段和 cause，`ToolSchemaException` 保存非空 JSON Pointer。
+- [x] **Step 2: 运行红灯**：
 
   ```powershell
   $env:JAVA_HOME='C:\Program Files\Java\jdk-21'
@@ -38,9 +38,9 @@
   ```
 
   预期因工具领域类型不存在而测试编译失败。
-- [ ] **Step 3: 写最小实现**：三个 enum 只声明规格中的精确值；授权 record 冻结 decision/reason；`ToolException` 继承 `RuntimeException`，具体异常只增加规格要求的不可变字段，不吞 cause。
-- [ ] **Step 4: 运行绿灯**：重复指定测试，预期 `ToolAuthorizationTest` 全部通过。
-- [ ] **Step 5: 提交**：
+- [x] **Step 3: 写最小实现**：三个 enum 只声明规格中的精确值；授权 record 冻结 decision/reason；`ToolException` 继承 `RuntimeException`，具体异常只增加规格要求的不可变字段，不吞 cause。
+- [x] **Step 4: 运行绿灯**：重复指定测试，预期 `ToolAuthorizationTest` 全部通过。
+- [x] **Step 5: 提交**：
 
   ```text
   feat(tool): define authorization protocol
