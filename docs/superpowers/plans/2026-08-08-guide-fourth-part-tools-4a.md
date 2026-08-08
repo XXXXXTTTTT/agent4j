@@ -190,10 +190,10 @@
 - Create: `agent-core/src/test/java/com/agent/core/tool/ToolRegistryConcurrencyTest.java`
 - Create: `agent-core/src/test/java/com/agent/core/tool/ToolHarnessIntegrationTest.java`
 
-- [ ] **Step 1: 写失败并发测试**：使用 `CountDownLatch` 同时注册同名定义，断言仅一个 register 成功；并发执行共享原输入对象时，每个 handler 与结果互不污染；每个调用精确产生一个审计事件。
-- [ ] **Step 2: 写失败 Harness 测试**：真实 `StateGraph` 节点通过 `HarnessToolExecutor` 调用 Registry；成功事件顺序 `BEFORE_TOOL/AFTER_TOOL`，失败、拒绝、审批和超时顺序 `BEFORE_TOOL/FAILURE`；metadata 精确包含 `toolName/callId/riskLevel` 且不含 arguments，最终状态只从 `ToolAuditEvent.status` 读取。
-- [ ] **Step 3: 写失败 Hook 隔离测试**：非关键 Hook 抛错时 Harness 审计记录失败且 Registry 结果不变；关键 BEFORE_TOOL Hook 抛错时 handler 不执行且异常原样交给图失败路径。
-- [ ] **Step 4: 运行红灯**：
+- [x] **Step 1: 写失败并发测试**：使用 `CountDownLatch` 同时注册同名定义，断言仅一个 register 成功；并发执行共享原输入对象时，每个 handler 与结果互不污染；每个调用精确产生一个审计事件。
+- [x] **Step 2: 写失败 Harness 测试**：真实 `StateGraph` 节点通过 `HarnessToolExecutor` 调用 Registry；成功事件顺序 `BEFORE_TOOL/AFTER_TOOL`，失败、拒绝、审批和超时顺序 `BEFORE_TOOL/FAILURE`；metadata 精确包含 `toolName/callId/riskLevel` 且不含 arguments，最终状态只从 `ToolAuditEvent.status` 读取。
+- [x] **Step 3: 写失败 Hook 隔离测试**：非关键 Hook 抛错时 Harness 审计记录失败且 Registry 结果不变；关键 BEFORE_TOOL Hook 抛错时 handler 不执行且异常原样交给图失败路径。
+- [x] **Step 4: 运行红灯**：
 
   ```powershell
   mvn -pl agent-core -am `
@@ -201,9 +201,9 @@
     '-Dsurefire.failIfNoSpecifiedTests=false' test
   ```
 
-- [ ] **Step 5: 写最小适配器**：适配器持有 `ToolRegistry`；用 `NodeExecutionContext.callTool` 包裹调用。非 SUCCEEDED 结果在 action 内抛仅内部可见、携带结果的异常，让现有 Harness 发布 FAILURE；适配器在外层捕获该内部异常并返回原 `ToolResult`。关键 Hook 异常不捕获。
-- [ ] **Step 6: 运行绿灯和图回归**：重复指定测试，再运行 `mvn -pl agent-core -am test`。
-- [ ] **Step 7: 提交**：
+- [x] **Step 5: 写最小适配器**：适配器持有 `ToolRegistry`；用 `NodeExecutionContext.callTool` 包裹调用。非 SUCCEEDED 结果在 action 内抛仅内部可见、携带结果的异常，让现有 Harness 发布 FAILURE；适配器在外层捕获该内部异常并返回原 `ToolResult`。关键 Hook 异常不捕获。
+- [x] **Step 6: 运行绿灯和图回归**：重复指定测试，再运行 `mvn -pl agent-core -am test`。
+- [x] **Step 7: 提交**：
 
   ```text
   feat(tool): bridge tool registry to harness
