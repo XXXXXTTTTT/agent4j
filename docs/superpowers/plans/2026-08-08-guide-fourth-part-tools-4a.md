@@ -152,11 +152,11 @@
 - Create: `agent-core/src/test/java/com/agent/core/tool/ToolRegistryTest.java`
 - Create: `agent-core/src/test/java/com/agent/core/tool/ToolRegistryTimeoutTest.java`
 
-- [ ] **Step 1: 写失败注册测试**：精确名称 find、自然顺序 list、重复注册只允许一次、Schema 在注册时校验、返回列表不可变；关闭后 register/execute 拒绝。
-- [ ] **Step 2: 写失败执行顺序测试**：记录 validator/authorizer/handler/audit 调用，固定顺序为查找→参数校验→授权→handler→审计；Schema、DENIED、APPROVAL_REQUIRED 均不得调用 handler；未知工具返回含 `ToolNotFoundException` 的 FAILED。
-- [ ] **Step 3: 写失败结果测试**：成功 deep copy handler output；checked/unchecked/null/标量输出均返回完整 FAILED 堆栈；argumentsSha256 基于递归按字段名排序、数组保持原顺序的规范 JSON 字节计算，相同对象字段顺序不同仍得到相同哈希；审计不得含原 arguments、源码或密钥。
-- [ ] **Step 4: 写失败超时测试**：真实阻塞 handler 观察 interrupt；超时返回 `TIMED_OUT`、`ToolTimeoutException` 堆栈、`cancellationRequested=true`，Registry 不等待 handler 的后续行为；`close()` 调用 `shutdownNow()`。
-- [ ] **Step 5: 运行红灯**：
+- [x] **Step 1: 写失败注册测试**：精确名称 find、自然顺序 list、重复注册只允许一次、Schema 在注册时校验、返回列表不可变；关闭后 register/execute 拒绝。
+- [x] **Step 2: 写失败执行顺序测试**：记录 validator/authorizer/handler/audit 调用，固定顺序为查找→参数校验→授权→handler→审计；Schema、DENIED、APPROVAL_REQUIRED 均不得调用 handler；未知工具返回含 `ToolNotFoundException` 的 FAILED。
+- [x] **Step 3: 写失败结果测试**：成功 deep copy handler output；checked/unchecked/null/标量输出均返回完整 FAILED 堆栈；argumentsSha256 基于递归按字段名排序、数组保持原顺序的规范 JSON 字节计算，相同对象字段顺序不同仍得到相同哈希；审计不得含原 arguments、源码或密钥。
+- [x] **Step 4: 写失败超时测试**：真实阻塞 handler 观察 interrupt；超时返回 `TIMED_OUT`、`ToolTimeoutException` 堆栈、`cancellationRequested=true`，Registry 不等待 handler 的后续行为；`close()` 调用 `shutdownNow()`。
+- [x] **Step 5: 运行红灯**：
 
   ```powershell
   mvn -pl agent-core -am `
@@ -164,7 +164,7 @@
     '-Dsurefire.failIfNoSpecifiedTests=false' test
   ```
 
-- [ ] **Step 6: 写最小 Registry 接口**：
+- [x] **Step 6: 写最小 Registry 接口**：
 
   ```java
   public interface ToolRegistry extends AutoCloseable {
@@ -175,9 +175,9 @@
   }
   ```
 
-- [ ] **Step 7: 写最小生产实现**：构造器注入 `ToolSchemaValidator/ToolAuthorizer/ToolAuditSink/ObjectMapper/LongSupplier nanoTime`；内部使用 `ConcurrentHashMap`、`Executors.newVirtualThreadPerTaskExecutor()` 和 `AtomicBoolean closed`；durationMs 使用单调纳秒差计算；异常先保留对象，审计后再统一用 `StringWriter/PrintWriter` 序列化。
-- [ ] **Step 8: 运行绿灯和核心回归**：重复指定测试并运行 `mvn -pl agent-core -am test`。
-- [ ] **Step 9: 提交**：
+- [x] **Step 7: 写最小生产实现**：构造器注入 `ToolSchemaValidator/ToolAuthorizer/ToolAuditSink/ObjectMapper/LongSupplier nanoTime`；内部使用 `ConcurrentHashMap`、`Executors.newVirtualThreadPerTaskExecutor()` 和 `AtomicBoolean closed`；durationMs 使用单调纳秒差计算；异常先保留对象，审计后再统一用 `StringWriter/PrintWriter` 序列化。
+- [x] **Step 8: 运行绿灯和核心回归**：重复指定测试并运行 `mvn -pl agent-core -am test`。
+- [x] **Step 9: 提交**：
 
   ```text
   feat(tool): execute governed tools
