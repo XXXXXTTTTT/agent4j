@@ -126,9 +126,9 @@
 - Create: `agent-core/src/main/java/com/agent/core/tool/ToolAuditSink.java`
 - Create: `agent-core/src/test/java/com/agent/core/tool/ToolGovernanceTest.java`
 
-- [ ] **Step 1: 写失败授权测试**：能力不足返回 `DENIED` 并列出缺失的精确枚举名；能力满足时 LOW/MEDIUM 允许；HIGH 在未批准时返回 `APPROVAL_REQUIRED`、批准后允许；不得读取工具名或参数正文决定权限。
-- [ ] **Step 2: 写失败审计模型测试**：`ToolAuditEvent` 校验并冻结 runId/nodeName/userId/callId/toolName/risk/status/durationMs/argumentsSha256/errorType/cancellationRequested；SHA-256 只接受 64 位小写十六进制；SUCCEEDED 的 errorType 为空，其余状态必须非空；只有 `FAILED/ToolNotFoundException` 允许 `riskLevel=Optional.empty()`。
-- [ ] **Step 3: 运行红灯**：
+- [x] **Step 1: 写失败授权测试**：能力不足返回 `DENIED` 并列出缺失的精确枚举名；能力满足时 LOW/MEDIUM 允许；HIGH 在未批准时返回 `APPROVAL_REQUIRED`、批准后允许；不得读取工具名或参数正文决定权限。
+- [x] **Step 2: 写失败审计模型测试**：`ToolAuditEvent` 校验并冻结 runId/nodeName/userId/callId/toolName/risk/status/durationMs/argumentsSha256/errorType/cancellationRequested；SHA-256 只接受 64 位小写十六进制；SUCCEEDED 的 errorType 为空，其余状态必须非空；只有 `FAILED/ToolNotFoundException` 允许 `riskLevel=Optional.empty()`。
+- [x] **Step 3: 运行红灯**：
 
   ```powershell
   mvn -pl agent-core -am `
@@ -136,9 +136,9 @@
     '-Dsurefire.failIfNoSpecifiedTests=false' test
   ```
 
-- [ ] **Step 4: 写最小实现**：默认授权器先计算 `definition.requiredCapabilities - context.grantedCapabilities`，再判断 HIGH 审批；`ToolAuditSink.noop()` 只校验事件非 null，不产生外部副作用。
-- [ ] **Step 5: 运行绿灯**：重复指定测试。
-- [ ] **Step 6: 提交**：
+- [x] **Step 4: 写最小实现**：默认授权器先计算 `definition.requiredCapabilities - context.grantedCapabilities`，再判断 HIGH 审批；`ToolAuditSink.noop()` 只校验事件非 null，不产生外部副作用。
+- [x] **Step 5: 运行绿灯**：重复指定测试。
+- [x] **Step 6: 提交**：
 
   ```text
   feat(tool): authorize and audit tool calls
