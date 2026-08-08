@@ -56,10 +56,10 @@
 - Create: `agent-core/src/main/java/com/agent/core/tool/ToolResult.java`
 - Create: `agent-core/src/test/java/com/agent/core/tool/ToolDefinitionTest.java`
 
-- [ ] **Step 1: 写失败定义测试**：验证工具名正则 `[a-z][a-z0-9_.-]{0,63}`、描述 code point 上限 4000、timeout 范围 `(0, 10m]`、非空 handler、`Set<RequiredCapability>` 冻结和 null 元素拒绝。
-- [ ] **Step 2: 写失败不可变测试**：构造后修改原 `ObjectNode`，定义 Schema、调用 arguments 和结果 output 不变；修改 accessor 返回节点也不影响内部值。`ToolCall.arguments` 只允许 object；成功结果要求 object/array output 与空 errorStack，其余状态要求 JSON null output 与完整非空 errorStack。
-- [ ] **Step 3: 写失败上下文测试**：精确校验 runId/nodeName/userId；workspaceRoot 转绝对规范路径；能力集合冻结且不含 null；不要求目录已经存在。
-- [ ] **Step 4: 运行红灯**：
+- [x] **Step 1: 写失败定义测试**：验证工具名正则 `[a-z][a-z0-9_.-]{0,63}`、描述 code point 上限 4000、timeout 范围 `(0, 10m]`、非空 handler、`Set<RequiredCapability>` 冻结和 null 元素拒绝。
+- [x] **Step 2: 写失败不可变测试**：构造后修改原 `ObjectNode`，定义 Schema、调用 arguments 和结果 output 不变；修改 accessor 返回节点也不影响内部值。`ToolCall.arguments` 只允许 object；成功结果要求 object/array output 与空 errorStack，其余状态要求 JSON null output 与完整非空 errorStack。
+- [x] **Step 3: 写失败上下文测试**：精确校验 runId/nodeName/userId；workspaceRoot 转绝对规范路径；能力集合冻结且不含 null；不要求目录已经存在。
+- [x] **Step 4: 运行红灯**：
 
   ```powershell
   mvn -pl agent-core -am `
@@ -67,7 +67,7 @@
     '-Dsurefire.failIfNoSpecifiedTests=false' test
   ```
 
-- [ ] **Step 5: 写最小实现**：records 在紧凑构造器保存 `deepCopy()`，并重写对应 accessor 返回 `deepCopy()`；`ToolHandler` 精确声明：
+- [x] **Step 5: 写最小实现**：records 在紧凑构造器保存 `deepCopy()`，并重写对应 accessor 返回 `deepCopy()`；`ToolHandler` 精确声明：
 
   ```java
   @FunctionalInterface
@@ -76,8 +76,8 @@
   }
   ```
 
-- [ ] **Step 6: 运行绿灯与核心回归**：重复指定测试，再运行 `mvn -pl agent-core -am test`。
-- [ ] **Step 7: 提交**：
+- [x] **Step 6: 运行绿灯与核心回归**：重复指定测试，再运行 `mvn -pl agent-core -am test`。
+- [x] **Step 7: 提交**：
 
   ```text
   feat(tool): define immutable tool contracts
