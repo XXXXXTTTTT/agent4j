@@ -166,14 +166,17 @@ old/new path 做标准化并验证仍在根目录；之后才把同一字节交�
 退出，WinPTY 输入流的原生读取也可能继续阻塞。
 
 **【根因分析】** pty4j 的 `destroyForcibly()` 实际关闭 WinPTY 代理，不等价于 Java 原生
-进程树强杀；Bash 启动的子进程可能短暂持有工作目录。WinPTY 的输入流在被虚拟线程读取时，
-仅调用 `InputStream.close()` 不能保证立即唤醒 Windows 原生 read，未加边界的 `join()` 会
-把 100ms 命令拖到 30 秒。
+进程树强杀；Bash 启动的子进程可能短暂持有工作目录。0.13.12 中 `WinPtyProcess.pid()` 与
+`getChildProcessId()` 返回同一 Windows PID，若不去重会对同一进程树连续执行两次 `taskkill`。
+原实现还在有界 `waitFor` 之前调用 `taskkill.getInputStream().transferTo(...)`，因此所谓超时
+实际上会先被无界输出读取阻塞。WinPTY 的输入流在被虚拟线程读取时，仅调用
+`InputStream.close()` 也不能保证立即唤醒 Windows 原生 read。
 
 **【解决方案/代码级实现】** `PtyCommandExecutor` 从 pty4j 明确提供的 `pid()` 和
-`WinPtyProcess.getChildProcessId()` 同时构造包装进程与真实 Bash 子进程的双根
-`ProcessHandle` 快照；Windows 超时路径先对两个精确 PID 执行 `taskkill /T /F`，
-再反向强杀快照中的全部后代，使用 `onExit()` 和 1 秒上限等待进程树。
+`WinPtyProcess.getChildProcessId()` 构造包装进程与真实 Bash 子进程的
+`ProcessHandle` 快照；Windows 超时路径用 `LinkedHashSet` 对 PID 去重后执行一次
+`taskkill /T /F`，taskkill 的 stdout/stderr 直接重定向至 `DISCARD`，再反向强杀快照中的
+全部后代，使用 `onExit()` 和 1 秒上限等待进程树。
 不能再调用无界的 `WinPtyProcess.waitFor()`：它等待 WinPTY 原生包装进程时
 可能额外阻塞约 30 秒，因此只做 1 秒有界等待。WinPTY 输入流的原生 `read` 与 `close()`
 共享读取锁，超时路径不能依赖同步关闭；Windows reader 改用 `available()` 轮询，进程销毁

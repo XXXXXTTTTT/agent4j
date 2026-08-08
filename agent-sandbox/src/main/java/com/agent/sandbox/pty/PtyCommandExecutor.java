@@ -11,6 +11,7 @@ import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -117,6 +118,7 @@ public final class PtyCommandExecutor {
     private void terminateProcessTree(PtyProcess process)
             throws IOException, InterruptedException {
         List<ProcessHandle> roots = new java.util.ArrayList<>();
+        LinkedHashSet<Long> windowsProcessIds = new LinkedHashSet<>();
         ProcessHandle wrapper = ProcessHandle.of(process.pid()).orElse(null);
         if (wrapper != null) {
             roots.add(wrapper);
@@ -124,12 +126,15 @@ public final class PtyCommandExecutor {
         if (process instanceof WinPtyProcess winPtyProcess) {
             int childPid = winPtyProcess.getChildProcessId();
             if (childPid > 0) {
-                terminateWindowsProcessTree(childPid);
+                windowsProcessIds.add((long) childPid);
                 ProcessHandle.of(childPid).ifPresent(roots::add);
             }
         }
         if (WINDOWS && process.pid() > 0) {
-            terminateWindowsProcessTree(process.pid());
+            windowsProcessIds.add(process.pid());
+        }
+        for (long pid : windowsProcessIds) {
+            terminateWindowsProcessTree(pid);
         }
         List<ProcessHandle> descendants = roots.stream()
                 .flatMap(root -> java.util.stream.Stream.concat(
@@ -156,9 +161,6 @@ public final class PtyCommandExecutor {
         } finally {
             process.destroyForcibly();
         }
-        // ProcessHandle 已确认 Bash 及其后代退出；WinPTY 包装进程的 waitFor
-        // 在 Windows 上可能阻塞约 30 秒，因此这里只做有界等待。
-        process.waitFor(PROCESS_TERMINATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     private void terminateWindowsProcessTree(long pid)
@@ -168,9 +170,9 @@ public final class PtyCommandExecutor {
         }
         Process taskkill = new ProcessBuilder(
                 "taskkill", "/PID", Long.toString(pid), "/T", "/F")
-                .redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
                 .start();
-        taskkill.getInputStream().transferTo(java.io.OutputStream.nullOutputStream());
         if (!taskkill.waitFor(
                 PROCESS_TERMINATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
             taskkill.destroyForcibly();
