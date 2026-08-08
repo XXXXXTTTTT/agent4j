@@ -161,6 +161,8 @@ public final class PtyCommandExecutor {
         } finally {
             process.destroyForcibly();
         }
+        // PID 去重后只保留一次有界等待，给 WinPTY 内部退出线程同步 child 状态。
+        process.waitFor(PROCESS_TERMINATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     private void terminateWindowsProcessTree(long pid)
