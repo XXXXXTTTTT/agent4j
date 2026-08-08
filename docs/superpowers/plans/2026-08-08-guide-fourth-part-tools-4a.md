@@ -215,10 +215,10 @@
 - Create: `agent-eval/src/test/java/com/agent/eval/ToolRegistryEddTest.java`
 - Modify: `docs/ENGINEERING_PITFALLS.md`
 
-- [ ] **Step 1: 写 EDD**：固定六个场景 `success/schema-denied/capability-denied/approval-required/timeout/handler-failure`；报告写入 `agent-eval/target/edd/tool-registry-edd.json`，每项字段精确为 `taskId/status/audited/durationMs/errorType/passed`，回读 JSON 并校验字段集合。
-- [ ] **Step 2: 锁定场景证据**：每项断言 handler 调用次数、审计次数、arguments SHA-256、errorType 和状态；成功与所有失败路径都必须 `passed=true`，不能通过捕获测试异常伪造报告。
-- [ ] **Step 3: 更新复盘**：追加 Schema 未知关键字静默放行、JSON 节点假不可变、审批结果误执行、超时任务继续写入、审计记录敏感参数和 Harness 失败映射问题，保持“问题现象→根因→代码级解决方案”结构。
-- [ ] **Step 4: 运行定向 EDD**：
+- [x] **Step 1: 写 EDD**：固定六个场景 `success/schema-denied/capability-denied/approval-required/timeout/handler-failure`；报告写入 `agent-eval/target/edd/tool-registry-edd.json`，每项字段精确为 `taskId/status/audited/durationMs/errorType/passed`，回读 JSON 并校验字段集合。
+- [x] **Step 2: 锁定场景证据**：每项断言 handler 调用次数、审计次数、arguments SHA-256、errorType 和状态；成功与所有失败路径都必须 `passed=true`，不能通过捕获测试异常伪造报告。
+- [x] **Step 3: 更新复盘**：追加 Schema 未知关键字静默放行、JSON 节点假不可变、审批结果误执行、超时任务继续写入、审计记录敏感参数和 Harness 失败映射问题，保持“问题现象→根因→代码级解决方案”结构。
+- [x] **Step 4: 运行定向 EDD**：
 
   ```powershell
   mvn -pl agent-eval -am `
@@ -226,7 +226,7 @@
     '-Dsurefire.failIfNoSpecifiedTests=false' test
   ```
 
-- [ ] **Step 5: 提交**：
+- [x] **Step 5: 提交**：
 
   ```text
   test(eval): verify governed tool execution

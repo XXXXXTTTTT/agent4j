@@ -1647,3 +1647,85 @@ Knowledge 路线必须有 `FINAL_RESPONSE_KEY`，Code 路线明确使用 Planner
 问答、并发首次索引、失败 refresh 旧索引保留、memory+knowledge 到 Coder、非严格回退和严格
 终止；`ProjectKnowledgeRouteEddTest` 六场景全部通过并写入固定 JSON 报告。空白文本和微秒
 精度回归分别由 `CodebaseChunkerTest` 与 `JdbcRagStoreIntegrationTest` 锁定。
+
+## 第四篇 4A：统一 Tool Registry 与 Harness 执行治理
+
+### 【问题现象】Schema 未知关键字被静默放行，工具参数在不同调用方产生不同语义
+
+模型输出的 JSON Schema 可能包含 `$ref`、脚本表达式或当前运行时未实现的约束。若校验器
+忽略未知关键字，注册阶段看似成功，真正执行时却会在不同工具适配器中出现不一致的参数边界。
+
+### 【根因分析】
+
+工具协议没有定义可验证的 Schema 子集，调用方把“能解析 JSON”误当成“理解 Schema”。同时，
+字符串长度、整数约束和浮点有限性若交给 Jackson 默认转换，容易发生 UTF-16/code point、
+小数截断以及 NaN/Infinity 的语义漂移。
+
+### 【解决方案/代码级实现】
+
+`JacksonToolSchemaValidator` 在注册时递归校验精确白名单：`object/string/integer/number/boolean/array`、
+`properties/required/additionalProperties/items/enum/minLength/maxLength/minimum/maximum/title/description`。
+任何未支持关键字都以精确 JSON Pointer 抛出 `ToolSchemaException`；字符串长度按 Unicode code point，
+数值使用 `BigDecimal`，整数约束拒绝小数和非有限值。参数校验在授权前执行，未知字段只在
+`additionalProperties=false` 时拒绝。这样 Schema 失败不会进入 handler，也不会依赖调用方猜测格式。
+
+### 【问题现象】审批结果被调用方当作允许执行，或参数正文进入审计日志
+
+高风险工具如果把“需要审批”转换成布尔值，调用方很容易在等待逻辑中误执行；直接记录 arguments
+又会把源码、Bearer 或业务密钥写入长期审计文件。
+
+### 【根因分析】
+
+权限、风险与审计没有统一不可变协议，工具名称和参数文本还被错误地用于推断权限。缺少能力、
+拒绝、待审批和允许四种状态没有清晰区分，导致 UI 状态与实际 handler 调用不一致。
+
+### 【解决方案/代码级实现】
+
+`DefaultToolAuthorizer` 只计算 `requiredCapabilities - grantedCapabilities`，再按 `ToolRiskLevel.HIGH`
+和 `approvalGranted` 返回精确的 `DENIED/APPROVAL_REQUIRED/ALLOWED`；不读取工具名或参数正文。
+`ToolAuditEvent` 只保存参数规范化 JSON 的小写 SHA-256、风险、状态、耗时、异常类型和取消标志。
+未知工具的 `FAILED/ToolNotFoundException` 才允许没有风险级别，其余事件必须带已注册定义的风险级别，
+从协议上阻止“伪造已授权工具”的审计记录。
+
+### 【问题现象】超时返回后 handler 仍继续写入状态，重复重试造成副作用
+
+传统线程池在超时后可能继续运行阻塞任务；如果上层立即重试写工具，会出现两次写入。仅记录
+`timeout` 文本又无法证明是否真的发出了取消请求。
+
+### 【根因分析】
+
+执行器没有统一的生命周期和单调时钟，超时分支没有保存 `Future.cancel(true)` 的结果，异常也只
+保留 message，无法区分工具超时、handler 失败与线程中断。
+
+### 【解决方案/代码级实现】
+
+`DefaultToolRegistry` 使用 `Executors.newVirtualThreadPerTaskExecutor()`，按定义 timeout 调用
+`Future.get`；超时立即 `cancel(true)`，返回 `TIMED_OUT` 并把完整 `ToolTimeoutException` 堆栈和
+`cancellationRequested` 写入审计。耗时由注入的 `LongSupplier nanoTime` 计算，关闭时 `shutdownNow()`，
+关闭后的注册与执行直接拒绝。Registry 不自动重试，重试责任留给有预算约束的图节点。
+
+### 【问题现象】工具失败被 Harness 当作节点成功，或 Hook 观测异常覆盖原始结果
+
+如果治理失败只返回一个结果对象，现有 `NodeExecutionContext.callTool` 会继续发布 `AFTER_TOOL`；
+如果观测 Hook 抛错直接向上冒泡，工具本身的成功/失败证据会被二次异常覆盖。
+
+### 【根因分析】
+
+Registry 结果协议与图生命周期协议没有桥接层，成功和非成功路径无法映射到不同 Harness 事件；
+关键 Hook 与非关键 Hook 也没有隔离规则。
+
+### 【解决方案/代码级实现】
+
+`HarnessToolExecutor` 用 `NodeExecutionContext.callTool` 包裹 Registry。非 `SUCCEEDED` 结果在 action
+内部抛出仅适配器可见、携带原结果的异常，使 Harness 发布 `FAILURE`，随后在外层还原原始
+`ToolResult`；成功才发布 `AFTER_TOOL`。metadata 精确限定为 `toolName/callId/riskLevel`，不携带
+arguments。现有 `HarnessHookChain` 对非关键 Hook 只写审计并继续，关键 BEFORE Hook 直接阻止 handler，
+真实 StateGraph 集成测试验证了事件顺序和 runId/nodeName 一致性。
+
+### 【证据】
+
+`ToolRegistryTest`、`ToolRegistryTimeoutTest`、`ToolRegistryConcurrencyTest` 和
+`ToolHarnessIntegrationTest` 覆盖注册唯一性、Schema/能力/审批拒绝、并发隔离、超时中断、完整堆栈与
+Hook 失败边界。`ToolRegistryEddTest` 使用六个确定性场景生成
+`agent-eval/target/edd/tool-registry-edd.json`，每项字段严格为
+`taskId/status/audited/durationMs/errorType/passed`，全部场景通过且审计事件精确为一条。
