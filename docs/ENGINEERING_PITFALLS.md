@@ -2180,3 +2180,60 @@ Web 层只提供 `GET /api/agent-profiles`、`GET /api/agent-profiles/{profileId
 以及未知 graph 透传；`AgentProfileControllerTest` 验证列表无图检查副作用、详情与拓扑 JSON、空白
 标识 400、未知 profile/graph 404。`AgentWebApplicationTest` 验证示例环境实际装配
 `demo-agent` Profile，并精确关联同名 graph。
+
+## 第七篇 7A：受治理 CLI Agent 与真实失败自愈
+
+### 【问题现象】Coder 返回裸 Bash，工具目录和知识证据没有进入生产执行链
+
+早期生产图虽然已有 `ToolRegistry`、`CliCommandCatalog` 和项目知识上下文，`CoderNode` 仍直接调用
+`AstService.applyDiff`，并把模型返回的 `command` 原样写入 `ops.command`。这使工具 Schema、能力
+授权和审计端口只存在于独立测试中；模型还能利用 Shell 控制字符追加第二条命令。Coder 也没有把
+Planner 已确定的知识指纹和来源数带入自身证据，修复循环无法证明第二次修改依据了同一项目规则。
+
+### 【根因分析】能力组件存在不等于生产拓扑已建立强类型交接
+
+节点之间仍以自由字符串共享命令，工作区路径同时出现在状态和潜在模型参数中。`AgentState` 的不可变
+Map 只能防止原地修改，不能阻止模型绕过目录，也不能保证 Diff 一定经受治理工具执行。代码修改路由
+还只声明 `CODE_READ/CODE_WRITE`，与生产拓扑必经 Ops 的事实矛盾，正确的 CLI 定义若要求
+`TERMINAL` 会立即拒绝。
+
+### 【解决方案/代码级实现】补丁工具、结构化意图和精确生产目录组成单向链
+
+内置 `code.apply-diff` 只接受 `unifiedDiff`，`workspaceRoot` 从 `ToolInvocationContext` 绑定，
+`additionalProperties=false` 拒绝模型提交路径。Coder 的严格 JSON 协议改为
+`summary/unifiedDiff/commandName/commandArguments`，未知 `command` 字段直接失败；补丁通过
+`HarnessToolExecutor` 和 `ToolRegistry` 应用，非成功 `ToolResult.errorStack` 原样进入
+`coder.error`。Coder 同时记录 Planner 知识指纹、来源数，并把结构化命令交给 Ops。
+
+生产配置只注册 `test.cat` 与固定 `mvn test` 的 `test.maven`，二者都要求 `TERMINAL`，模型不能
+扩展目录。代码修改快路由同步声明 `TERMINAL`，Ops 只有在目录完成精确名称、参数控制字符、真实
+workspace 路径、能力和风险授权后，才把渲染命令写入 `ops.command` 并创建终端 Future。
+
+### 【问题现象】把待审批计划放在内存 Map，服务重启后批准恢复失效
+
+首次实现曾在 `CliApprovalInterruptPolicy` 内缓存 `runId -> commandSha256`。这在单 JVM 测试可用，
+但 WAITING_APPROVAL 已持久化到 PostgreSQL；若服务在审批前重启，内存记录消失，恢复后的 Ops 会再次
+得到 `APPROVAL_REQUIRED`，形成无法完成的审批循环。
+
+### 【解决方案/代码级实现】把既有一次性 bypass 作为批准信号，恢复时重新授权
+
+`StateGraph` 将 `GraphExecutionRequest.bypassInterruptAtStart` 精确绑定到当前节点的
+`NodeExecutionContext.approvalBypassed()`，只在恢复起始节点可见，进入下一节点立即清理。策略不保存
+审批正文或进程内状态；Ops 在批准恢复时用原状态重新解析 `CliCommandIntent`、重新渲染命令和
+SHA-256，再用批准上下文授权。拒绝路线不调度图，普通直接调用没有 bypass，因此永远不能越过
+MUTATING/DESTRUCTIVE 门禁。
+
+### 【问题现象】EDD 已运行两轮，但 Reviewer 一直失败并触发最大步数
+
+真实 EDD 的 Mock HTTP 分派最初在原始 JSON 请求体中查找实际换行。Prompt 换行经过 JSON 编码后是
+字符序列 `\n`，修复分支与通过分支都未命中；这类测试会错误地把响应脚本缺陷归因于 Agent 自愈
+能力。
+
+### 【解决方案/代码级实现】按传输层精确编码匹配，并验证真实外部证据
+
+响应分派按原始 JSON 中的 `\n` 精确匹配 `ops.exitCode`。`CliAgentWorkflowEddTest` 使用真实临时
+Git 工作树、JGit 两次连续 Diff、`D:/Git/bin/bash.exe`、pty4j ANSI 日志和受治理 `test.value`
+命令：首轮把值改成 `broken` 并得到非零退出码，第二轮从 Ops/Reviewer 证据修复为 `after`。
+最终 Trace 精确为 `planner/coder/ops/reviewer/coder/ops/reviewer`，报告只含
+`taskId/status/attempts/updatedFiles/commandSha256/terminalCalls/passed`，实际结果为两次终端调用、
+两次 Coder 尝试和 `passed=true`。
