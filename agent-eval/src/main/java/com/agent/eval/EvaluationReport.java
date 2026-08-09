@@ -12,6 +12,7 @@ import java.util.Objects;
 public record EvaluationReport(
         String suiteId,
         BenchmarkReport benchmarkReport,
+        EvaluationGatePolicy policy,
         List<CapabilityMetrics> capabilities,
         long totalInputTokens,
         long totalOutputTokens,
@@ -24,6 +25,7 @@ public record EvaluationReport(
             throw new IllegalArgumentException("suiteId 不能为空");
         }
         benchmarkReport = Objects.requireNonNull(benchmarkReport, "benchmarkReport 不能为空");
+        policy = Objects.requireNonNull(policy, "policy 不能为空");
         capabilities = List.copyOf(Objects.requireNonNull(capabilities, "capabilities 不能为空"));
         if (capabilities.isEmpty()) {
             throw new IllegalArgumentException("capabilities 不能为空");
@@ -54,6 +56,8 @@ public record EvaluationReport(
             double passK,
             int executionCount,
             int tracePassedCount,
+            double requiredMinPassK,
+            Duration maxTtftP95,
             BigDecimal totalCostUsd,
             Duration ttftP95,
             List<String> failedTaskIds) {
@@ -69,6 +73,14 @@ public record EvaluationReport(
             }
             if (!Double.isFinite(passK) || passK < 0 || passK > 1) {
                 throw new IllegalArgumentException("能力 passK 必须位于 0 到 1 之间");
+            }
+            if (!Double.isFinite(requiredMinPassK)
+                    || requiredMinPassK < 0 || requiredMinPassK > 1) {
+                throw new IllegalArgumentException("能力 requiredMinPassK 必须位于 0 到 1 之间");
+            }
+            maxTtftP95 = Objects.requireNonNull(maxTtftP95, "maxTtftP95 不能为空");
+            if (maxTtftP95.isZero() || maxTtftP95.isNegative()) {
+                throw new IllegalArgumentException("maxTtftP95 必须大于 0");
             }
             totalCostUsd = Objects.requireNonNull(totalCostUsd, "totalCostUsd 不能为空")
                     .setScale(4, RoundingMode.HALF_UP);

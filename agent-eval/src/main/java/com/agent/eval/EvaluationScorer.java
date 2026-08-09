@@ -89,10 +89,11 @@ public final class EvaluationScorer {
                     capability.id(), taskIds.size(), passedTasks,
                     (double) passedTasks / taskIds.size(),
                     Math.multiplyExact(taskIds.size(), repetitions), tracePassed,
+                    capability.minPassK(), capability.maxTtftP95(),
                     capabilityCost, percentileDuration(ttftMillis, 0.95), failedTaskIds));
         }
         return new EvaluationReport(
-                suite.id(), benchmark, metrics, inputTokens, outputTokens,
+                suite.id(), benchmark, suite.policy(), metrics, inputTokens, outputTokens,
                 totalCost, failureCounts, Instant.now());
     }
 

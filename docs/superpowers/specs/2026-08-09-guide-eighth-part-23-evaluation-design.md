@@ -72,7 +72,8 @@ public record EvaluationObservation(
 缺失任务映射、空轨迹名和反向阈值。`EvaluationReport` 包含：基础 `BenchmarkReport`、按能力聚合的通过数/失败数、轨迹
 通过数、总 input/output tokens、总费用、失败分类计数、生成时间和门禁结果。所有集合不可变且稳定排序。
 
-能力通过条件同时满足：基础任务通过、requiredTrace 是有序子序列、单次费用不超过能力预算、失败分类为 `NONE`。
+`EvaluationReport` 同时保存创建它的 `EvaluationGatePolicy`；每项能力指标保存该能力的 `minPassK` 与
+`maxTtftP95`，让门禁不依赖进程外配置或再次查找 Suite。能力通过条件同时满足：基础任务通过、requiredTrace 是有序子序列、单次费用不超过能力预算、失败分类为 `NONE`。
 能力 `passK` 是该能力任务在 k 次重复中全部通过的任务比例。
 
 ## 4. CI 门禁与失败语义
@@ -95,6 +96,10 @@ public record EvaluationObservation(
 或别名推断。现有 EDD 可以把节点事件、工具审计事件和模型调用摘要转换为 `EvaluationObservation`，从而在同一
 报告中同时证明真实链路和质量阈值。确定性 EDD 继续证明协议与资源生命周期；Live EDD 继续显式调用真实端点，
 两者在报告中通过 `mode=deterministic|live` 区分。
+
+`BenchmarkReportWriter` 增加
+`write(EvaluationReport report, EvaluationGateResult gate, EvaluationMode mode, int modelCallAttempts, Path path)`
+及对应 `OutputStream` 重载；`EvaluationMode` 只有 `DETERMINISTIC` 与 `LIVE` 两个值，JSON 输出为小写。
 
 ## 6. 测试门禁
 

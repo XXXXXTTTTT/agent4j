@@ -147,6 +147,7 @@ git commit -m "feat(eval): aggregate capability evaluation reports"
 - Create: `agent-eval/src/main/java/com/agent/eval/EvaluationGate.java`
 - Create: `agent-eval/src/main/java/com/agent/eval/EvaluationGateResult.java`
 - Create: `agent-eval/src/main/java/com/agent/eval/EvaluationGateViolationException.java`
+- Create: `agent-eval/src/main/java/com/agent/eval/EvaluationMode.java`
 - Modify: `agent-eval/src/main/java/com/agent/eval/BenchmarkReportWriter.java`
 - Create: `agent-eval/src/test/java/com/agent/eval/EvaluationGateTest.java`
 - Create: `agent-eval/src/test/java/com/agent/eval/EvaluationReportWriterTest.java`
@@ -164,7 +165,7 @@ Expected: FAIL because the gate, result and EDD types do not exist.
 
 - [ ] **Step 3: Write minimal implementation**
 
-`EvaluationGate.evaluate` 使用 `EvaluationReport` 的聚合值生成不可变 `EvaluationGateResult`；`assertPassed` 在失败时抛出带 violation 列表的强类型异常。新增 `EvaluationReportWriter.write`，复用现有 Jackson 模块并保持 UTF-8、ISO-8601 时间和稳定排序。`EvaluationEddTest` 使用确定性 executor 生成 CLI、GUI、RAG 三个能力，写入 `target/edd/evaluation-chapter-23.json`，断言报告通过且 `modelCallAttempts=0`；Live EDD 不在普通测试中开启。
+`EvaluationReport` 保存 `EvaluationGatePolicy`，能力指标保存对应 `minPassK/maxTtftP95`。`EvaluationGate.evaluate` 使用这些聚合值生成不可变 `EvaluationGateResult`；`assertPassed` 在失败时抛出带 violation 列表的强类型异常。`BenchmarkReportWriter` 增加接收 `EvaluationMode`、`modelCallAttempts`、报告和门禁结果的重载，复用现有 Jackson 模块并保持 UTF-8、ISO-8601 时间和稳定排序。`EvaluationEddTest` 使用确定性 executor 生成 CLI、GUI、RAG 三个能力，写入 `target/edd/evaluation-chapter-23.json`，断言报告通过且 `modelCallAttempts=0`；Live EDD 不在普通测试中开启。
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -175,7 +176,7 @@ Expected: PASS and report exists under `agent-eval/target/edd/`.
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add agent-eval/src/main/java/com/agent/eval/EvaluationGate.java agent-eval/src/main/java/com/agent/eval/EvaluationGateResult.java agent-eval/src/main/java/com/agent/eval/EvaluationGateViolationException.java agent-eval/src/main/java/com/agent/eval/BenchmarkReportWriter.java agent-eval/src/test/java/com/agent/eval/EvaluationGateTest.java agent-eval/src/test/java/com/agent/eval/EvaluationReportWriterTest.java agent-eval/src/test/java/com/agent/eval/EvaluationEddTest.java
+git add agent-eval/src/main/java/com/agent/eval/EvaluationGate.java agent-eval/src/main/java/com/agent/eval/EvaluationGateResult.java agent-eval/src/main/java/com/agent/eval/EvaluationGateViolationException.java agent-eval/src/main/java/com/agent/eval/EvaluationMode.java agent-eval/src/main/java/com/agent/eval/BenchmarkReportWriter.java agent-eval/src/test/java/com/agent/eval/EvaluationGateTest.java agent-eval/src/test/java/com/agent/eval/EvaluationReportWriterTest.java agent-eval/src/test/java/com/agent/eval/EvaluationEddTest.java
 git commit -m "feat(eval): enforce evaluation ci gate"
 ```
 
