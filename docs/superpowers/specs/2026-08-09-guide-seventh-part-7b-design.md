@@ -73,6 +73,12 @@ Planner 已经写入 `planner.taskKind` 和 `planner.requiredCapabilities`。生
 
 字段集合必须精确。`click`/`fill` 必须有 selector，`fill` 必须有 value，`scroll` 必须有非零 deltaY，`done` 必须有非空 summary 和至少一个已采集的 evidenceRef；其他动作的 summary 与 evidenceRefs 必须为空。Markdown fence、未知字段、错误类型和未引用证据都写入完整错误堆栈并结束当前节点。
 
+视觉决策采用“多模态优先、DOM 文本降级”。节点先把当前截图作为 OpenAI `image_url` 内容块提交给
+`TaskType.VISION`；如果完整视觉路由失败，则用相同目标、动作历史、URL 和 DOM 再执行一次不含图片的
+`TaskType.VISION` 请求。降级仍走同一个 `ModelRouter`、熔断器和模型审计链，不绕过路由，也不改变
+严格动作 JSON 协议。两次调用均失败时，以文本降级异常为主异常，并把视觉路由异常附加为
+suppressed exception 写入 `gui.error`，避免图片能力不兼容掩盖后续诊断信息。
+
 节点使用以下精确状态键：
 
 - `gui.url`, `gui.goal`, `gui.step`, `gui.actions`
@@ -135,6 +141,11 @@ Live 报告固定包含
 `taskId/mode/endpoint/model/status/steps/toolCalls/finalUrl/domSha256/screenshotSha256/passed/errorType`，
 不记录 API Key、完整 Prompt、完整模型回答或截图正文。Live 失败必须保留测试报告和日志中的完整异常，
 不得回退到 Mock 后宣称通过。
+
+当前配置端点的真实能力探测已经证明：`AGENT_LLM_VISION_MODEL=gpt-5.4-mini` 的纯文本请求返回
+HTTP 200，而 OpenAI 多模态内容请求返回 HTTP 400 `upstream_error`；完整页面截图请求返回 HTTP 500。
+因此 Live EDD 还必须证明多模态失败会进入 DOM 文本降级，并最终通过同一真实模型完成页面动作，
+不能把端点不支持图片当作跳过条件。
 
 ### 合并前审查修复门禁
 

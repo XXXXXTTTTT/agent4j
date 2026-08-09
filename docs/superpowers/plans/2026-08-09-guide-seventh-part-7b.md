@@ -73,6 +73,10 @@
   valid evidence hashes, Tool Registry audit, and a strict LIVE report without prompt/response bodies.
 - [ ] **Step 3: Keep deterministic and Live reports distinct.** The existing GUI EDD remains the repeatable
   contract test; the Live EDD is the model-quality and end-to-end protocol test.
+- [ ] **Step 4: Preserve DOM fallback for non-multimodal gateways.** Add a failing `GuiAgentNodeTest` in which
+  the first multimodal `TaskType.VISION` request fails and the second text-only request completes the strict
+  action protocol. Implement the smallest fallback, retain the first failure as suppressed when both calls fail,
+  then rerun the enabled Live EDD and require a non-skipped real API result.
 
 ### Task 5C: Merge-review hardening
 
