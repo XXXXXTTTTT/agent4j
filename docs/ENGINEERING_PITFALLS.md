@@ -2525,3 +2525,42 @@ try-with-resources 只管理已经成功完成资源声明的对象；多资源�
 `LiveGuiAgentWorkflowEddTest` 将 sessions/tools/client 初始化放入受保护的 try，finally 中逐个关闭并停止
 本地 `HttpServer`；清理辅助方法即使某一资源 close 抛错也继续关闭后续资源，并将后续异常作为 suppressed
 保留。状态失败仍生成脱敏 LIVE 报告。这样真实 API、浏览器和审计资源在成功与异常路径均有明确生命周期。
+
+## 第八篇 23：Evaluation 能力集与 CI 门禁
+
+### 【问题现象】Java 单元测试全部通过，但无法回答 Agent 能力是否稳定、轨迹是否正确以及成本是否超预算
+
+原有 `BenchmarkReport` 只聚合任务通过率、`pass^k` 和 TTFT。CLI、GUI、RAG 与模型 EDD 各自生成独立 JSON，
+没有统一能力维度、工具/节点轨迹、token/cost 和失败类型，因此“绿色构建”不能作为质量门禁。
+
+### 【根因分析】执行结果和评测遥测被错误地设计成同一个生命周期
+
+把供应商 token、费用和 Prompt 直接塞进 `BenchmarkTaskResult` 会破坏现有执行器契约；把外部 EDD 强行放入
+普通 Maven 测试又会让 CI 依赖网络、配额和真实密钥。两种极端都会让报告不可复现或泄露敏感数据。
+
+### 【解决方案/代码级实现】独立 Evaluation 层通过精确任务键关联脱敏观察
+
+`EvaluationSuite` 用 `Map<taskId, capabilityId>` 显式绑定每个任务，拒绝未知、缺失和重复能力映射；
+`EvaluationObservation` 用 `(taskId, repetition)` 作为唯一键保存事件轨迹、input/output tokens、费用和
+`FailureCategory`，不接受换行、Bearer 或密钥样式的故障正文。`EvaluationScorer` 先复用原始
+`BenchmarkMetrics`，再按能力计算 passK、轨迹有序子序列、TTFT P95、费用和失败分类，缺失观察不会被补成零。
+
+### 【问题现象】单个全局 passK 通过，某个关键能力却持续退化
+
+不同章节任务混在同一个总体比例中时，大量简单问答可以掩盖 CLI 修复或 GUI 证据链的失败；只看总体指标无法
+定位是路由、工具协议、权限还是超时问题。
+
+### 【解决方案/代码级实现】能力级阈值和稳定 CI violation 顺序
+
+`EvaluationReport` 冻结 `EvaluationGatePolicy`，能力指标同时保留 `requiredMinPassK` 与 `maxTtftP95`。
+`EvaluationGate` 先按固定顺序检查 `passK/ttftP95/costUsd/failureCount`，再检查按 ID 排序的能力阈值，返回
+`EvaluationGateResult`。`EvaluationGateViolationException` 只包含指标、实际值和限制，不写 Prompt、API Key
+或完整回答；`BenchmarkReportWriter` 输出 `deterministic|live`、modelCallAttempts、能力指标和门禁结果的
+脱敏审计信封。
+
+### 【证据】第 23 章确定性 EDD 覆盖三类能力和报告门禁
+
+`EvaluationEddTest` 构造 50 项 CLI、GUI、RAG 能力任务，提供确定性节点轨迹和遥测，实际写入
+`target/edd/evaluation-chapter-23.json`，断言 3 个能力、`modelCallAttempts=0`、成本/token 汇总和
+`gate.passed=true`。真实模型 EDD 仍由既有显式 `AGENT_LLM_ENABLED` 开关控制，不会被普通构建伪装成真实
+供应商调用。
