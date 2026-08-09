@@ -126,7 +126,7 @@ Expected: FAIL because suite/report/scorer types do not exist.
 
 - [ ] **Step 3: Write minimal implementation**
 
-`EvaluationSuite` 保存 `BenchmarkTaskSet`、不可变能力列表和 `EvaluationGatePolicy`，并建立任务 ID 到能力 ID 的精确映射；一个任务只能属于一个能力。`EvaluationScorer.score` 先调用 `BenchmarkMetrics.calculate`，再验证每个结果都有 observation，计算能力级 passK、轨迹通过数、token/cost 和 `EnumMap<FailureCategory,Integer>`。输出 record 的排序规则固定为能力 ID、任务 ID、repetition。
+`EvaluationSuite(String id, BenchmarkTaskSet taskSet, Map<String, String> taskCapabilities, List<EvaluationCapability> capabilities, EvaluationGatePolicy policy)` 保存不可变任务到能力的精确映射；每个任务只能属于一个能力且不能遗漏。`EvaluationScorer.score` 先调用 `BenchmarkMetrics.calculate`，再验证每个结果都有 observation，计算能力级 passK、轨迹通过数、token/cost 和 `EnumMap<FailureCategory,Integer>`。输出 record 的排序规则固定为能力 ID、任务 ID、repetition。
 
 - [ ] **Step 4: Run test to verify it passes**
 

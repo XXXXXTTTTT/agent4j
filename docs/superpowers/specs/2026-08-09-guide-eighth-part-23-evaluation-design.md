@@ -66,8 +66,10 @@ public record EvaluationObservation(
 
 ### 3.3 聚合报告
 
-`EvaluationSuite` 由任务集、能力声明和 `EvaluationGatePolicy` 组成，构造时拒绝重复能力 ID、未知任务 ID、
-空轨迹名和反向阈值。`EvaluationReport` 包含：基础 `BenchmarkReport`、按能力聚合的通过数/失败数、轨迹
+`EvaluationSuite` 的精确构造器为
+`EvaluationSuite(String id, BenchmarkTaskSet taskSet, Map<String, String> taskCapabilities, List<EvaluationCapability> capabilities, EvaluationGatePolicy policy)`。
+`taskCapabilities` 必须为每个任务 ID 提供且只提供一个能力 ID；构造时拒绝重复能力 ID、未知任务 ID、未知能力 ID、
+缺失任务映射、空轨迹名和反向阈值。`EvaluationReport` 包含：基础 `BenchmarkReport`、按能力聚合的通过数/失败数、轨迹
 通过数、总 input/output tokens、总费用、失败分类计数、生成时间和门禁结果。所有集合不可变且稳定排序。
 
 能力通过条件同时满足：基础任务通过、requiredTrace 是有序子序列、单次费用不超过能力预算、失败分类为 `NONE`。
