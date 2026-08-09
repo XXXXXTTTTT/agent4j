@@ -94,6 +94,21 @@ class PlaywrightBrowserServiceTest {
     }
 
     @Test
+    void fillsScrollsAndCapturesLocatorEvidenceWithOperationTimeout() {
+        service.navigate(pageUri, Duration.ofSeconds(15)).join();
+
+        service.fill("#input", "Agent4J", Duration.ofSeconds(15)).join();
+        service.scroll(500, Duration.ofSeconds(15)).join();
+        BrowserEvidence evidence = service.capture(
+                BrowserEvidenceSelector.locator("#result"), Duration.ofSeconds(15)).join();
+
+        assertThat(evidence.selector()).isEqualTo("#result");
+        assertThat(evidence.finalUrl()).isEqualTo(pageUri);
+        assertThat(evidence.dom()).contains("result");
+        assertThat(evidence.screenshot().pngBytes()).startsWith(PNG_SIGNATURE);
+    }
+
+    @Test
     void rejectsInvalidArgumentsSynchronously() {
         assertThatThrownBy(() -> service.navigate(
                 URI.create("/relative"), Duration.ofSeconds(1)))
@@ -112,6 +127,13 @@ class PlaywrightBrowserServiceTest {
         assertThatThrownBy(() -> service.click(" ", Duration.ofSeconds(1)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("selector");
+        assertThatThrownBy(() -> service.fill("#input", "value", Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("timeout");
+        assertThatThrownBy(() -> service.capture(
+                BrowserEvidenceSelector.page(), Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("timeout");
     }
 
     @Test
@@ -130,14 +152,20 @@ class PlaywrightBrowserServiceTest {
 
         assertClosedFailure(service.navigate(pageUri, Duration.ofSeconds(1))::join);
         assertClosedFailure(service.click("#change", Duration.ofSeconds(1))::join);
+        assertClosedFailure(service.fill("#input", "value", Duration.ofSeconds(1))::join);
+        assertClosedFailure(service.scroll(100, Duration.ofSeconds(1))::join);
         assertClosedFailure(service.extractDom()::join);
         assertClosedFailure(service.screenshot(Duration.ofSeconds(1))::join);
+        assertClosedFailure(service.capture(
+                BrowserEvidenceSelector.page(), Duration.ofSeconds(1))::join);
         assertThatCode(service::close).doesNotThrowAnyException();
     }
 
     private void servePage(HttpExchange exchange) throws IOException {
         byte[] response = ("<!doctype html><html><body>"
                 + "<button id=\"change\" onclick=\"document.querySelector('#state').textContent='after'\">change</button>"
+                + "<input id=\"input\" value=\"before\">"
+                + "<div id=\"result\">result</div>"
                 + "<div id=\"state\">before</div>"
                 + "<div style=\"height:1600px\">full page content</div>"
                 + "</body></html>").getBytes(StandardCharsets.UTF_8);

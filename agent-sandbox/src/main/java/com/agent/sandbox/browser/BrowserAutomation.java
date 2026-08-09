@@ -26,6 +26,48 @@ public interface BrowserAutomation extends AutoCloseable {
     CompletableFuture<Void> click(String selector, Duration timeout);
 
     /**
+     * 向精确选择器定位的输入控件填充值。
+     *
+     * @param selector Playwright 选择器
+     * @param value    精确输入值
+     * @param timeout  填充超时时间
+     * @return 异步完成信号
+     */
+    default CompletableFuture<Void> fill(
+            String selector,
+            String value,
+            Duration timeout) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("浏览器实现不支持 fill"));
+    }
+
+    /**
+     * 垂直滚动当前页面。
+     *
+     * @param deltaY  垂直滚动量
+     * @param timeout 操作超时时间
+     * @return 异步完成信号
+     */
+    default CompletableFuture<Void> scroll(int deltaY, Duration timeout) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("浏览器实现不支持 scroll"));
+    }
+
+    /**
+     * 采集完整页面或指定元素证据。
+     *
+     * @param selector 证据选择器
+     * @param timeout  采集超时时间
+     * @return 异步证据
+     */
+    default CompletableFuture<BrowserEvidence> capture(
+            BrowserEvidenceSelector selector,
+            Duration timeout) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("浏览器实现不支持 capture"));
+    }
+
+    /**
      * 提取当前页面的完整 DOM。
      *
      * @return 异步 DOM 字符串

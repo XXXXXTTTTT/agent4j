@@ -57,15 +57,58 @@ public final class PlaywrightBrowserService implements BrowserAutomation {
      */
     @Override
     public CompletableFuture<Void> click(String selector, Duration timeout) {
-        if (selector == null || selector.isBlank()) {
-            throw new IllegalArgumentException("selector 不能为空");
-        }
+        validateSelector(selector);
         long timeoutMillis = validateTimeout(timeout);
         return submit("页面点击", () -> {
             page.locator(selector).click(
                     new Locator.ClickOptions().setTimeout(timeoutMillis));
             return null;
         });
+    }
+
+    /**
+     * 异步填充精确传入的 Playwright 选择器。
+     */
+    @Override
+    public CompletableFuture<Void> fill(
+            String selector,
+            String value,
+            Duration timeout) {
+        validateSelector(selector);
+        Objects.requireNonNull(value, "value 不能为空");
+        long timeoutMillis = validateTimeout(timeout);
+        return submit("页面填充", () -> {
+            page.locator(selector).fill(
+                    value,
+                    new Locator.FillOptions().setTimeout(timeoutMillis));
+            return null;
+        });
+    }
+
+    /**
+     * 异步垂直滚动当前页面。
+     */
+    @Override
+    public CompletableFuture<Void> scroll(int deltaY, Duration timeout) {
+        validateTimeout(timeout);
+        return submit("页面滚动", () -> {
+            page.mouse().wheel(0, deltaY);
+            return null;
+        });
+    }
+
+    /**
+     * 异步采集完整页面或指定元素证据。
+     */
+    @Override
+    public CompletableFuture<BrowserEvidence> capture(
+            BrowserEvidenceSelector selector,
+            Duration timeout) {
+        Objects.requireNonNull(selector, "selector 不能为空");
+        long timeoutMillis = validateTimeout(timeout);
+        return submit("页面证据采集", () -> selector.isPage()
+                ? capturePage(selector, timeoutMillis)
+                : captureLocator(selector, timeoutMillis));
     }
 
     /**
@@ -196,6 +239,46 @@ public final class PlaywrightBrowserService implements BrowserAutomation {
         String scheme = url.getScheme();
         if (!url.isAbsolute() || !("http".equals(scheme) || "https".equals(scheme))) {
             throw new IllegalArgumentException("url 必须是绝对 http 或 https URI");
+        }
+    }
+
+    private BrowserEvidence capturePage(
+            BrowserEvidenceSelector selector,
+            long timeoutMillis) {
+        BrowserScreenshot capturedScreenshot = new BrowserScreenshot(
+                page.screenshot(new Page.ScreenshotOptions()
+                        .setFullPage(true)
+                        .setType(ScreenshotType.PNG)
+                        .setTimeout(timeoutMillis)),
+                BrowserScreenshot.PNG_MEDIA_TYPE);
+        return new BrowserEvidence(
+                URI.create(page.url()),
+                selector.selector(),
+                page.content(),
+                capturedScreenshot);
+    }
+
+    private BrowserEvidence captureLocator(
+            BrowserEvidenceSelector selector,
+            long timeoutMillis) {
+        Locator locator = page.locator(selector.selector());
+        locator.waitFor(new Locator.WaitForOptions().setTimeout(timeoutMillis));
+        Object outerHtml = locator.evaluate("element => element.outerHTML");
+        BrowserScreenshot capturedScreenshot = new BrowserScreenshot(
+                locator.screenshot(new Locator.ScreenshotOptions()
+                        .setType(ScreenshotType.PNG)
+                        .setTimeout(timeoutMillis)),
+                BrowserScreenshot.PNG_MEDIA_TYPE);
+        return new BrowserEvidence(
+                URI.create(page.url()),
+                selector.selector(),
+                Objects.toString(outerHtml),
+                capturedScreenshot);
+    }
+
+    private static void validateSelector(String selector) {
+        if (selector == null || selector.isBlank()) {
+            throw new IllegalArgumentException("selector 不能为空");
         }
     }
 
