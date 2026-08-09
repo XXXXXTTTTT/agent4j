@@ -2,12 +2,14 @@ package com.agent.web.config;
 
 import com.agent.core.engine.GraphFactory;
 import com.agent.core.engine.StateGraph;
+import com.agent.core.gui.BrowserSessionRegistry;
 import com.agent.core.harness.HarnessHookChain;
 import com.agent.core.cli.CliApprovalInterruptPolicy;
 import com.agent.core.cli.CliCommandCatalog;
 import com.agent.core.cli.CliCommandDefinition;
 import com.agent.core.cli.CliRiskLevel;
 import com.agent.core.intent.RequiredCapability;
+import com.agent.core.intent.TaskKind;
 import com.agent.core.llm.ModelRouter;
 import com.agent.core.llm.TaskType;
 import com.agent.core.profile.AgentProfile;
@@ -15,6 +17,7 @@ import com.agent.core.knowledge.KnowledgeContextProvider;
 import com.agent.core.memory.MemoryContext;
 import com.agent.core.memory.MemoryContextProvider;
 import com.agent.core.nodes.CoderNode;
+import com.agent.core.nodes.GuiAgentNode;
 import com.agent.core.nodes.OpsNode;
 import com.agent.core.nodes.PlannerNode;
 import com.agent.core.nodes.PlannerPromptTemplates;
@@ -25,6 +28,7 @@ import com.agent.core.trace.RunLogPublisher;
 import com.agent.core.tool.DefaultToolRegistry;
 import com.agent.core.tool.ToolRegistry;
 import com.agent.core.tool.builtin.CodePatchTool;
+import com.agent.core.tool.builtin.BrowserToolDefinitions;
 import com.agent.sandbox.ast.AstService;
 import com.agent.sandbox.ast.WorkspaceSnapshotService;
 import com.agent.sandbox.browser.BrowserAutomation;
@@ -44,6 +48,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 import java.util.List;
@@ -58,6 +63,8 @@ public class ProductionGraphConfiguration {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(
             ProductionGraphConfiguration.class);
+    private static final String GUI_ROUTE = "gui";
+    private static final String CODER_ROUTE = "coder";
 
     /** 创建 JavaParser/JGit 服务。 */
     @Bean
@@ -69,10 +76,20 @@ public class ProductionGraphConfiguration {
     @Bean(destroyMethod = "close")
     ToolRegistry productionToolRegistry(
             AstService astService,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            BrowserSessionRegistry browserSessions,
+            ProductionAgentProperties properties) {
         DefaultToolRegistry registry = new DefaultToolRegistry();
         registry.register(CodePatchTool.definition(astService, objectMapper));
+        registry.registerAll(BrowserToolDefinitions.definitions(
+                browserSessions, objectMapper, properties.browserTimeout()));
         return registry;
+    }
+
+    /** 创建按 Run 隔离浏览器会话的注册表。 */
+    @Bean(destroyMethod = "close")
+    BrowserSessionRegistry productionBrowserSessionRegistry() {
+        return new BrowserSessionRegistry(PlaywrightBrowserService::new);
     }
 
     /** 声明模型可以选择的精确只读验证命令。 */
@@ -174,7 +191,8 @@ public class ProductionGraphConfiguration {
             ObjectMapper objectMapper,
             HarnessHookChain harness,
             ToolRegistry toolRegistry,
-            CliApprovalInterruptPolicy approvalPolicy) {
+            CliApprovalInterruptPolicy approvalPolicy,
+            BrowserSessionRegistry browserSessions) {
         Objects.requireNonNull(properties, "properties 不能为空");
         Objects.requireNonNull(knowledgeProperties, "knowledgeProperties 不能为空");
         knowledgeProperties.validate();
@@ -190,6 +208,7 @@ public class ProductionGraphConfiguration {
         Objects.requireNonNull(harness, "harness 不能为空");
         Objects.requireNonNull(toolRegistry, "toolRegistry 不能为空");
         Objects.requireNonNull(approvalPolicy, "approvalPolicy 不能为空");
+        Objects.requireNonNull(browserSessions, "browserSessions 不能为空");
         TerminalTarget target = terminalTarget(properties);
         return () -> createGraph(
                 properties,
@@ -206,7 +225,8 @@ public class ProductionGraphConfiguration {
                 target,
                 knowledgeProperties.maxTokens(),
                 toolRegistry,
-                approvalPolicy);
+                approvalPolicy,
+                browserSessions);
     }
 
     /** 声明精确关联 `code-agent` 图的生产 Profile。 */
@@ -235,6 +255,8 @@ public class ProductionGraphConfiguration {
             RunLogPublisher logPublisher,
             ObjectMapper objectMapper,
             HarnessHookChain harness) {
+        BrowserSessionRegistry browserSessions =
+                new BrowserSessionRegistry(PlaywrightBrowserService::new);
         return codeAgentGraph(
                 properties,
                 new KnowledgeProperties(true, 4_000),
@@ -248,8 +270,13 @@ public class ProductionGraphConfiguration {
                 logPublisher,
                 objectMapper,
                 harness,
-                standaloneToolRegistry(astService, objectMapper),
-                standaloneApprovalPolicy(properties, objectMapper));
+                standaloneToolRegistry(
+                        astService,
+                        objectMapper,
+                        browserSessions,
+                        properties.browserTimeout()),
+                standaloneApprovalPolicy(properties, objectMapper),
+                browserSessions);
     }
 
     GraphFactory codeAgentGraph(
@@ -339,7 +366,8 @@ public class ProductionGraphConfiguration {
             TerminalTarget target,
             int knowledgeMaxTokens,
             ToolRegistry toolRegistry,
-            CliApprovalInterruptPolicy approvalPolicy) {
+            CliApprovalInterruptPolicy approvalPolicy,
+            BrowserSessionRegistry browserSessions) {
         var promptCatalog = PlannerPromptTemplates.catalog();
         PlannerNode planner = new PlannerNode(
                 modelRouter,
@@ -360,20 +388,29 @@ public class ProductionGraphConfiguration {
         OpsNode ops = new OpsNode(terminalService, approvalPolicy, logPublisher);
         ReviewerNode reviewer = new ReviewerNode(
                 browserAutomation, modelRouter, objectMapper, properties.browserTimeout());
+        GuiAgentNode gui = new GuiAgentNode(
+                browserSessions,
+                modelRouter,
+                objectMapper,
+                toolRegistry,
+                properties.browserTimeout(),
+                properties.maxSteps());
         return new StateGraph(
                 properties.executionBudget(), approvalPolicy, harness)
                 .addNode("planner", planner)
                 .addNode("coder", coder)
                 .addNode("ops", ops)
                 .addNode("reviewer", reviewer)
+                .addNode("gui", gui)
                 .setEntryPoint("planner")
                 .addConditionalEdges(
                         "planner",
-                        state -> plannerRoute(state),
+                        state -> plannerGraphRoute(state),
                         Map.of(
                                 PlannerNode.CHAT_ROUTE, StateGraph.END,
                                 PlannerNode.KNOWLEDGE_ROUTE, StateGraph.END,
-                                PlannerNode.AGENT_ROUTE, "coder",
+                                GUI_ROUTE, "gui",
+                                CODER_ROUTE, "coder",
                                 PlannerNode.FAILED_ROUTE, StateGraph.END))
                 .addConditionalEdges(
                         "coder",
@@ -392,8 +429,14 @@ public class ProductionGraphConfiguration {
 
     private ToolRegistry standaloneToolRegistry(
             AstService astService,
-            ObjectMapper objectMapper) {
-        return productionToolRegistry(astService, objectMapper);
+            ObjectMapper objectMapper,
+            BrowserSessionRegistry browserSessions,
+            Duration browserTimeout) {
+        DefaultToolRegistry registry = new DefaultToolRegistry();
+        registry.register(CodePatchTool.definition(astService, objectMapper));
+        registry.registerAll(BrowserToolDefinitions.definitions(
+                browserSessions, objectMapper, browserTimeout));
+        return registry;
     }
 
     private CliApprovalInterruptPolicy standaloneApprovalPolicy(
@@ -418,6 +461,26 @@ public class ProductionGraphConfiguration {
             case PlannerNode.FAILED_ROUTE -> PlannerNode.FAILED_ROUTE;
             default -> throw new IllegalStateException("未知 Planner 路由: " + route);
         };
+    }
+
+    /** 将 Planner Agent 路由细分为代码链或独立 GUI 链。 */
+    String plannerGraphRoute(com.agent.core.engine.AgentState state) {
+        String route = plannerRoute(state);
+        if (!PlannerNode.AGENT_ROUTE.equals(route)) {
+            return route;
+        }
+        String taskKindValue = state.variables().get(PlannerNode.TASK_KIND_KEY);
+        if (taskKindValue == null || taskKindValue.isBlank()) {
+            throw new IllegalStateException(
+                    "Agent 路由缺少状态变量: " + PlannerNode.TASK_KIND_KEY);
+        }
+        TaskKind taskKind;
+        try {
+            taskKind = TaskKind.valueOf(taskKindValue);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalStateException("未知任务类别: " + taskKindValue, exception);
+        }
+        return taskKind == TaskKind.BROWSER_OPERATION ? GUI_ROUTE : CODER_ROUTE;
     }
 
     private boolean shouldRepair(
