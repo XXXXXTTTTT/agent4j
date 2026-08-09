@@ -34,10 +34,12 @@ Showcase: 将真实截图保存为 docs/assets/workbench-showcase.png 后，取�
 本地模式先在宿主机编译 `agent-web`，再由 `Dockerfile.local` 启动已生成的 Jar，并挂载 Docker Socket 供沙箱调用：
 
 ```powershell
-Copy-Item .env.example .env
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 mvn -pl agent-web -am package -DskipTests
 docker compose -f docker-compose.local.yml --env-file .env up -d --build
 ```
+
+`Copy-Item` 只在 `.env` 不存在时执行，避免覆盖已有模型密钥、数据库密码和工作区配置。首次启动后，数据库凭据会保存在 PostgreSQL 数据卷中；修改 `.env` 中的 `POSTGRES_USER` 或 `POSTGRES_PASSWORD` 不会自动修改已初始化的数据卷。
 
 打开 <http://localhost:8080>，输入任务描述并点击 **运行 Agent**，即可观察 `Planner -> Coder -> Ops -> Reviewer` 链路。停止本地服务：
 
@@ -94,6 +96,14 @@ AGENT_LLM_FALLBACK_CAPABILITIES=CHAT_COMPLETIONS
 ### PostgreSQL 连接
 
 Compose 默认使用 `pgvector/pgvector:pg16`，并由 `POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD` 控制数据库初始化。应用容器通过 `SPRING_DATASOURCE_*` 连接 Compose 内的 `postgres` 服务。
+
+如果日志出现 `password authentication failed` 或 `role does not exist`，说明 `.env` 与既有数据卷的初始化凭据不一致。以下命令会从 Compose 的实际解析结果读取数据库、账号、密码和数据卷，并在保留数据的前提下修复凭据：
+
+```powershell
+.\scripts\repair-local-postgres.ps1
+```
+
+脚本只创建或更新登录角色并补齐数据库权限，不删除数据库、表或数据卷。健康检查会验证同一组账号密码后，`agent-web` 才会启动。
 
 ## Architecture
 
