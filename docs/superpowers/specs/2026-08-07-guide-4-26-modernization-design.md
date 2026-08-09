@@ -179,3 +179,54 @@ Agent4J 继续遵守以下边界：
 - Conventional Commit 的 scope 必须精确指向 `architecture`、`prompt`、`context`、`intent`、`runtime`、`memory`、`rag`、`tool`、`security`、`eval` 等实际改动域。
 - 每篇结束时更新 `README.md` 的功能与配置、`docs/ENGINEERING_PITFALLS.md` 的问题现象/根因/解决方案，以及对应 EDD 任务集。
 - `.env`、`logs/`、`target/`、模型真实输出和 API Key 不得进入提交。
+
+## 10. 最终闭环证据
+
+截至 2026-08-09，第 4–26 章的生产实现、确定性测试、EDD 和工程复盘均已进入本地
+`master`。早期实施计划中的复选框是执行时记录，部分文件没有随历史提交回填；最终状态以
+下列已合并提交、生产类型和可重复测试为准，不依据复选框推断实现状态。
+
+| 范围 | 已落地能力 | 提交证据 |
+|---|---|---|
+| 第二篇 2A / 第 4、5、8 章 | Prompt Catalog、token 上下文、强类型 Intent、Planner 装配 | `24a52d5`–`c73b60e` |
+| 第二篇 2B / 第 6、7、9、10 章 | 记忆生命周期、执行预算、无进展停止、Harness Hook | `a1aff51`–`c034e69` |
+| 第三篇 3A / 第 11 章 | 自适应 RAG、RRF、rerank、检索 token 预算、模型增强器 | `3331ffd`–`840e0d0` |
+| 第三篇 3B / 第 12 章 | 分层项目知识编译、内容哈希热重载、RAG 证据合并 | `b2432e5`–`3cc8f5f` |
+| 第三篇 3C / 生产闭环 | 知识问答路由、共享仓库快照、索引指纹、Embedding 适配 | `20385e8`–`520e2ac` |
+| 第四篇 4A / 第 13 章 | 强类型 Tool Registry、Schema、权限、审计与 Harness 桥接 | `3c1f302`–`0507194` |
+| 第四篇 4B / 第 14 章 | MCP JSON-RPC、HTTP transport、发现和治理适配 | `2991ae5`–`34092a4` |
+| 第四篇 4C / 第 15 章 | 不可变 Skill 协议、渐进发现、并发与 MCP 治理 | `f59ba54`–`a54520e` |
+| 第四篇 4D / 第 16 章 | 结构化 CLI、命令策略、工作区边界和受控终端执行 | `804d6f7`–`276c8c6` |
+| 第五篇 5A / 第 17 章 | 有界 Handoff、状态投影、所有权、子运行 Trace 和取消传播 | `170dd42`–`510da9a` |
+| 第五篇 5B / 第 18 章 | 拓扑分析、严格校验、显式状态桥接子图和结构化失败 | `ae71b7a`–`1511dba` |
+| 第六篇 6A / 第 19 章 | 第三方向导框架架构守卫与概念映射 | `4647ff0`–`33ad92d` |
+| 第六篇 6B / 第 20 章 | 只读 Agent Profile 注册、拓扑查询和 Web API | `ad8c82d`–`6ee93e0` |
+| 第七篇 7A / 第 21 章 | Governed Coder→Ops、真实 Diff/PTY 修复循环与 Live LLM EDD | `bfd84d6`–`295e42a` |
+| 第七篇 7B / 第 22 章 | 浏览器动作工具、证据驱动 GUI Agent 与 Live GUI EDD | `f4dc816`–`a6cfe23` |
+| 第八篇 / 第 23 章 | 能力评测、轨迹评分、报告聚合和 CI Gate | `e377a0f`–`84846df` |
+| 第八篇 / 第 24 章 | Prompt Injection、参数策略、脱敏、违规持久化和红队 EDD | `4594299`–`88803b` |
+| 第八篇 / 第 25 章 | 健康探针、优雅关闭、Compose 资源边界和恢复演练 | `0840607`–`4964908` |
+| 第八篇 / 第 26 章 | 推理端点契约、准入预算、fallback 和流式背压指标 | `e13d09b`–`d62c158` |
+
+### 10.1 真实模型 EDD 复验
+
+2026-08-09 使用根目录 `.env` 中已配置的精确模型端点执行：
+
+```powershell
+mvn -pl agent-eval -am '-Dtest=LlmEddTest' '-Dsurefire.failIfNoSpecifiedTests=false' test
+```
+
+测试通过且没有 assumption skip：6 个对话场景全部通过，其中 `model.identity`、
+`travel.without.car`、`weather.followup` 路由为 `chat`，`code.intent`、
+`memory.user-preference`、`memory.bad-case` 路由为 `agent`。对话报告记录
+`transport=live-openai-compatible`、`modelCallAttempts=8`；查询改写和 HyDE 两个 RAG
+增强场景也全部通过。运行日志共记录 10 次 HTTP 200 模型调用，Input/Output Tokens 和耗时均由
+`LlmClient` 审计。测试运行时将报告写入忽略的 `agent-eval/target/edd/`，后续 `clean` 会清理该目录；
+模型响应和真实配置不进入提交。
+
+### 10.2 仓库收尾边界
+
+最终实现位于普通仓库 `D:/agent4j` 的 `master`。`.env`、`logs/`、`target/` 和
+`.worktrees/` 继续由 `.gitignore` 排除。仓库仍注册了早期 Phase/Guide worktree；其中
+`D:/agent4j/tmp/phase4-harness/AGENTS.md` 存在未提交修改，因此本次审计不删除任何旧 worktree
+或分支，避免丢弃用户内容。
