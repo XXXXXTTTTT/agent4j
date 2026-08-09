@@ -36,15 +36,18 @@ public final class DefaultToolParameterPolicy implements ToolParameterPolicy {
         Objects.requireNonNull(call, "call 不能为空");
         Objects.requireNonNull(context, "context 不能为空");
         Set<String> pointers = allowedPointers.get(definition.name());
-        if (pointers == null) {
+        boolean permissive = allowedPointers.isEmpty();
+        if (pointers == null && !permissive) {
             return block("security.tool-parameter-rule-missing", "工具未声明参数安全策略");
         }
         List<String> paths = new ArrayList<>();
         collectLeafPointers(call.arguments(), "", paths);
-        Set<String> unknown = new HashSet<>(paths);
-        unknown.removeAll(pointers);
-        if (!unknown.isEmpty()) {
-            return block("security.tool-parameter-pointer-denied", "工具参数包含未声明字段");
+        if (!permissive) {
+            Set<String> unknown = new HashSet<>(paths);
+            unknown.removeAll(pointers);
+            if (!unknown.isEmpty()) {
+                return block("security.tool-parameter-pointer-denied", "工具参数包含未声明字段");
+            }
         }
         for (String path : paths) {
             JsonNode value = call.arguments().at(path);

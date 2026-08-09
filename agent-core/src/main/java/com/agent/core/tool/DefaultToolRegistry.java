@@ -1,5 +1,15 @@
 package com.agent.core.tool;
 
+import com.agent.core.security.DefaultOutputRedactor;
+import com.agent.core.security.DefaultToolParameterPolicy;
+import com.agent.core.security.OutputRedactor;
+import com.agent.core.security.SecurityDecision;
+import com.agent.core.security.SecuritySeverity;
+import com.agent.core.security.SecurityViolation;
+import com.agent.core.security.SecurityViolationSink;
+import com.agent.core.security.SecurityViolationType;
+import com.agent.core.security.ToolParameterDecision;
+import com.agent.core.security.ToolParameterPolicy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -41,6 +51,9 @@ public final class DefaultToolRegistry implements ToolRegistry {
     private final ToolAuditSink auditSink;
     private final ObjectMapper objectMapper;
     private final LongSupplier nanoTime;
+    private final ToolParameterPolicy parameterPolicy;
+    private final OutputRedactor outputRedactor;
+    private final SecurityViolationSink securityViolationSink;
     private volatile Map<String, ToolDefinition> definitions = Map.of();
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -48,7 +61,9 @@ public final class DefaultToolRegistry implements ToolRegistry {
     /** 使用默认确定性治理组件创建注册表。 */
     public DefaultToolRegistry() {
         this(new JacksonToolSchemaValidator(), new DefaultToolAuthorizer(), ToolAuditSink.noop(),
-                new ObjectMapper(), System::nanoTime);
+                new ObjectMapper(), System::nanoTime,
+                new DefaultToolParameterPolicy(Map.of()),
+                new DefaultOutputRedactor(), SecurityViolationSink.noop());
     }
 
     /** 注入全部策略与单调时钟，便于隔离测试和部署适配。 */
@@ -58,11 +73,30 @@ public final class DefaultToolRegistry implements ToolRegistry {
             ToolAuditSink auditSink,
             ObjectMapper objectMapper,
             LongSupplier nanoTime) {
+        this(schemaValidator, authorizer, auditSink, objectMapper, nanoTime,
+                new DefaultToolParameterPolicy(Map.of()),
+                new DefaultOutputRedactor(), SecurityViolationSink.noop());
+    }
+
+    /** 注入参数策略、输出脱敏器和安全违规 Sink。 */
+    public DefaultToolRegistry(
+            ToolSchemaValidator schemaValidator,
+            ToolAuthorizer authorizer,
+            ToolAuditSink auditSink,
+            ObjectMapper objectMapper,
+            LongSupplier nanoTime,
+            ToolParameterPolicy parameterPolicy,
+            OutputRedactor outputRedactor,
+            SecurityViolationSink securityViolationSink) {
         this.schemaValidator = Objects.requireNonNull(schemaValidator, "schemaValidator 不能为空");
         this.authorizer = Objects.requireNonNull(authorizer, "authorizer 不能为空");
         this.auditSink = Objects.requireNonNull(auditSink, "auditSink 不能为空");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime 不能为空");
+        this.parameterPolicy = Objects.requireNonNull(parameterPolicy, "parameterPolicy 不能为空");
+        this.outputRedactor = Objects.requireNonNull(outputRedactor, "outputRedactor 不能为空");
+        this.securityViolationSink = Objects.requireNonNull(
+                securityViolationSink, "securityViolationSink 不能为空");
     }
 
     @Override
@@ -140,6 +174,27 @@ public final class DefaultToolRegistry implements ToolRegistry {
                     NullNode.getInstance(), exception, started, false, argumentsSha256);
         }
 
+        ToolParameterDecision parameterDecision;
+        try {
+            parameterDecision = Objects.requireNonNull(
+                    parameterPolicy.inspect(definition, call, context),
+                    "参数策略不得返回 null");
+        } catch (Throwable exception) {
+            recordViolation(context, Optional.of(definition.name()), SecurityViolationType.TOOL_PARAMETER,
+                    SecuritySeverity.HIGH, "security.tool-parameter-policy-failure",
+                    "工具参数策略执行失败");
+            return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.DENIED,
+                    NullNode.getInstance(), exception, started, false, argumentsSha256);
+        }
+        if (parameterDecision.decision() != SecurityDecision.ALLOW) {
+            recordViolation(context, Optional.of(definition.name()), SecurityViolationType.TOOL_PARAMETER,
+                    SecuritySeverity.HIGH, parameterDecision.ruleId(), parameterDecision.summary());
+            ToolException exception = new ToolAuthorizationException(
+                    definition.name(), parameterDecision.summary());
+            return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.DENIED,
+                    NullNode.getInstance(), exception, started, false, argumentsSha256);
+        }
+
         ToolAuthorization authorization;
         try {
             authorization = Objects.requireNonNull(
@@ -149,6 +204,14 @@ public final class DefaultToolRegistry implements ToolRegistry {
                     NullNode.getInstance(), exception, started, false, argumentsSha256);
         }
         if (authorization.decision() != ToolAuthorizationDecision.ALLOWED) {
+            SecuritySeverity severity = authorization.decision() == ToolAuthorizationDecision.DENIED
+                    ? SecuritySeverity.HIGH : SecuritySeverity.MEDIUM;
+            String ruleId = authorization.decision() == ToolAuthorizationDecision.DENIED
+                    ? "security.tool-authorization-denied" : "security.tool-approval-required";
+            String summary = authorization.decision() == ToolAuthorizationDecision.DENIED
+                    ? "工具权限校验拒绝调用" : "工具调用需要人工审批";
+            recordViolation(context, Optional.of(definition.name()), SecurityViolationType.AUTHORIZATION,
+                    severity, ruleId, summary);
             ToolException exception = authorization.decision() == ToolAuthorizationDecision.DENIED
                     ? new ToolAuthorizationException(definition.name(), authorization.reason())
                     : new ToolApprovalRequiredException(definition.name(), authorization.reason());
@@ -164,8 +227,18 @@ public final class DefaultToolRegistry implements ToolRegistry {
             if (output == null || (!output.isObject() && !output.isArray())) {
                 throw new IllegalArgumentException("工具 handler 必须返回 JSON object 或 array");
             }
+            JsonNode redactedOutput;
+            try {
+                redactedOutput = outputRedactor.redact(definition.name(), output);
+            } catch (Throwable exception) {
+                recordViolation(context, Optional.of(definition.name()),
+                        SecurityViolationType.OUTPUT_REDACTION, SecuritySeverity.CRITICAL,
+                        "security.output-redaction-failure", "工具输出脱敏失败");
+                return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
+                        NullNode.getInstance(), exception, started, false, argumentsSha256);
+            }
             return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.SUCCEEDED,
-                    output, null, started, false, argumentsSha256);
+                    redactedOutput, null, started, false, argumentsSha256);
         } catch (TimeoutException exception) {
             boolean cancellationRequested = future.cancel(true);
             ToolTimeoutException timeout = new ToolTimeoutException(definition.name(), definition.timeout());
@@ -273,6 +346,23 @@ public final class DefaultToolRegistry implements ToolRegistry {
     private static String errorType(Throwable throwable) {
         String simpleName = throwable.getClass().getSimpleName();
         return simpleName.isBlank() ? throwable.getClass().getName() : simpleName;
+    }
+
+    private void recordViolation(
+            ToolInvocationContext context,
+            Optional<String> toolName,
+            SecurityViolationType type,
+            SecuritySeverity severity,
+            String ruleId,
+            String summary) {
+        SecurityViolation violation = new SecurityViolation(
+                UUID.randomUUID(), context.runId(), context.userId(), context.nodeName(),
+                toolName, type, severity, ruleId, summary, java.time.Instant.now());
+        try {
+            securityViolationSink.record(violation);
+        } catch (Throwable failure) {
+            LOGGER.error("安全违规持久化失败: type={}, ruleId={}", type, ruleId, failure);
+        }
     }
 
     private void ensureOpen() {
