@@ -77,6 +77,9 @@
   the first multimodal `TaskType.VISION` request fails and the second text-only request completes the strict
   action protocol. Implement the smallest fallback, retain the first failure as suppressed when both calls fail,
   then rerun the enabled Live EDD and require a non-skipped real API result.
+- [ ] **Step 5: Force structured browser decisions.** After the Live model proves prompt-only JSON unstable,
+  require one `browser_action` function with strict JSON Schema and exact forced `toolChoice`; reject text-only,
+  wrong-name and multiple ToolCall responses, parse only function arguments, and rerun deterministic plus Live EDD.
 
 ### Task 5C: Merge-review hardening
 

@@ -56,7 +56,8 @@ Planner 已经写入 `planner.taskKind` 和 `planner.requiredCapabilities`。生
 
 ## 4. GuiAgentNode 与状态
 
-`GuiAgentNode` 使用 `TaskType.VISION` 调用 `ModelRouter`，严格解析完整 JSON 动作：
+`GuiAgentNode` 使用 `TaskType.VISION` 调用 `ModelRouter`，并强制模型调用唯一函数
+`browser_action`。函数参数 Schema 使用 `additionalProperties=false`，要求以下八个字段全部存在：
 
 ```json
 {
@@ -71,7 +72,12 @@ Planner 已经写入 `planner.taskKind` 和 `planner.requiredCapabilities`。生
 }
 ```
 
-字段集合必须精确。`click`/`fill` 必须有 selector，`fill` 必须有 value，`scroll` 必须有非零 deltaY，`done` 必须有非空 summary 和至少一个已采集的 evidenceRef；其他动作的 summary 与 evidenceRefs 必须为空。Markdown fence、未知字段、错误类型和未引用证据都写入完整错误堆栈并结束当前节点。
+`ModelRequest.tools` 只包含 `browser_action`，`toolChoice` 精确指定该函数。模型响应必须包含且只包含
+一个 `type=function`、名称为 `browser_action` 的 ToolCall；节点只解析其 `arguments`，不接受正文中的
+自由 JSON。字段集合必须精确。`click`/`fill` 必须有 selector，`fill` 必须有 value，`scroll` 必须有
+非零 deltaY，`done` 必须有非空 summary 和至少一个已采集的 evidenceRef；其他动作的 summary 与
+evidenceRefs 必须为空。未知字段、错误类型、错误函数名、多个 ToolCall 和未引用证据都写入完整错误堆栈
+并结束当前节点。
 
 视觉决策采用“多模态优先、DOM 文本降级”。节点先把当前截图作为 OpenAI `image_url` 内容块提交给
 `TaskType.VISION`；如果完整视觉路由失败，则用相同目标、动作历史、URL 和 DOM 再执行一次不含图片的
@@ -146,6 +152,9 @@ Live 报告固定包含
 HTTP 200，而 OpenAI 多模态内容请求返回 HTTP 400 `upstream_error`；完整页面截图请求返回 HTTP 500。
 因此 Live EDD 还必须证明多模态失败会进入 DOM 文本降级，并最终通过同一真实模型完成页面动作，
 不能把端点不支持图片当作跳过条件。
+
+真实端点强制 Function Calling 探测返回 HTTP 200，且响应只包含一个名为 `browser_action` 的 ToolCall。
+Live EDD 必须使用该结构化输出协议；Prompt 只负责解释动作语义，不能再承担 JSON 结构正确性的唯一责任。
 
 ### 合并前审查修复门禁
 
