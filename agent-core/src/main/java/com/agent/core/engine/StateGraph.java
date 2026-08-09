@@ -7,9 +7,11 @@ import com.agent.core.harness.HarnessHookChain;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -206,6 +208,27 @@ public final class StateGraph implements AutoCloseable {
             throw new IllegalStateException("尚未设置入口节点");
         }
         return entryPoint;
+    }
+
+    /** 返回当前声明结构的不可变拓扑快照，不执行节点或条件。 */
+    public GraphTopology inspectTopology() {
+        ensureOpen();
+        if (entryPoint == null) {
+            throw new IllegalStateException("尚未设置入口节点");
+        }
+        return GraphTopologyAnalyzer.analyze(
+                entryPoint,
+                new LinkedHashSet<>(nodes.keySet()),
+                snapshotOutgoingTargets());
+    }
+
+    /** 严格校验当前拓扑，并在存在结构违规时保存快照后失败。 */
+    public GraphTopology validateTopology() {
+        GraphTopology topology = inspectTopology();
+        if (!topology.valid()) {
+            throw new GraphTopologyException(topology);
+        }
+        return topology;
     }
 
     /**
@@ -406,6 +429,23 @@ public final class StateGraph implements AutoCloseable {
             throw new IllegalStateException("节点没有出边: " + source);
         }
         return target;
+    }
+
+    private Map<String, Set<String>> snapshotOutgoingTargets() {
+        Map<String, Set<String>> outgoingTargets = new LinkedHashMap<>();
+        for (String nodeName : nodes.keySet()) {
+            LinkedHashSet<String> targets = new LinkedHashSet<>();
+            String ordinaryTarget = edges.get(nodeName);
+            if (ordinaryTarget != null) {
+                targets.add(ordinaryTarget);
+            }
+            ConditionalTransition conditional = conditionalEdges.get(nodeName);
+            if (conditional != null) {
+                targets.addAll(conditional.routes().values());
+            }
+            outgoingTargets.put(nodeName, targets);
+        }
+        return outgoingTargets;
     }
 
     private void validateNodeName(String name) {
