@@ -26,11 +26,7 @@ public record ModelEndpoint(
             String model,
             LlmClient client,
             CircuitBreaker circuitBreaker) {
-        this(name, model, client, circuitBreaker, new InferenceServiceContract(
-                name,
-                model,
-                InferenceProtocol.OPENAI_CHAT_COMPLETIONS,
-                InferenceServiceContract.allCapabilities()),
+        this(name, model, client, circuitBreaker, legacyContract(name, model),
                 InferenceAdmissionController.unlimited());
     }
 
@@ -63,5 +59,19 @@ public record ModelEndpoint(
         if (!model.equals(serviceContract.model())) {
             throw new IllegalArgumentException("serviceContract.model 必须与 model 一致");
         }
+    }
+
+    private static InferenceServiceContract legacyContract(String name, String model) {
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("name 不能为空");
+        }
+        if (model == null || model.isBlank()) {
+            throw new IllegalArgumentException("model 不能为空");
+        }
+        return new InferenceServiceContract(
+                name,
+                model,
+                InferenceProtocol.OPENAI_CHAT_COMPLETIONS,
+                InferenceServiceContract.allCapabilities());
     }
 }

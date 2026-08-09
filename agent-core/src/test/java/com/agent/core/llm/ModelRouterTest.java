@@ -25,6 +25,7 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -95,6 +96,77 @@ class ModelRouterTest {
                 "vision-fallback-model",
                 "fallback-result");
         assertThat(primary.circuitBreaker().getMetrics().getNumberOfFailedCalls()).isEqualTo(1);
+    }
+
+    @Test
+    void skipsEndpointWithoutToolCapabilityBeforeHttpCall() {
+        EndpointFixture code = endpoint(
+                "code-primary",
+                "code-model",
+                Set.of(InferenceCapability.CHAT_COMPLETIONS));
+        EndpointFixture fallback = endpoint("code-fallback", "fallback-model");
+        EndpointFixture vision = endpoint("vision-primary", "vision-model");
+        EndpointFixture classification = endpoint("classification-primary", "quick-model");
+        expectToolSuccess(fallback, "fallback-result");
+        ModelRouter router = new ModelRouter(Map.of(
+                TaskType.CODE, List.of(code.endpoint(), fallback.endpoint()),
+                TaskType.VISION, List.of(vision.endpoint()),
+                TaskType.QUICK_CLASSIFICATION, List.of(classification.endpoint())));
+
+        RoutedCompletion result = router.complete(TaskType.CODE, toolRequest());
+
+        assertRoutedTo(result, "code-fallback", "fallback-model", "fallback-result");
+        assertThat(code.circuitBreaker().getMetrics().getNumberOfFailedCalls()).isZero();
+    }
+
+    @Test
+    void skipsEndpointWithoutVisionCapabilityBeforeHttpCall() {
+        EndpointFixture code = endpoint("code-primary", "code-model");
+        EndpointFixture vision = endpoint(
+                "vision-primary",
+                "vision-model",
+                Set.of(InferenceCapability.CHAT_COMPLETIONS));
+        EndpointFixture fallback = endpoint("vision-fallback", "fallback-model");
+        EndpointFixture classification = endpoint("classification-primary", "quick-model");
+        expectSuccess(fallback, "fallback-result");
+        ModelRouter router = router(
+                code.endpoint(),
+                List.of(vision.endpoint(), fallback.endpoint()),
+                classification.endpoint());
+
+        RoutedCompletion result = router.complete(TaskType.VISION, request());
+
+        assertRoutedTo(result, "vision-fallback", "fallback-model", "fallback-result");
+        assertThat(vision.circuitBreaker().getMetrics().getNumberOfFailedCalls()).isZero();
+    }
+
+    @Test
+    void fallsBackWhenEndpointBudgetRejectsWithoutChangingCircuitState() {
+        InferenceAdmissionController exhaustedController = new InferenceAdmissionController(
+                new InferenceBudget(1, 10, Duration.ZERO));
+        EndpointFixture code = endpoint(
+                "code-primary",
+                "code-model",
+                InferenceServiceContract.allCapabilities(),
+                exhaustedController);
+        EndpointFixture fallback = endpoint("code-fallback", "fallback-model");
+        EndpointFixture vision = endpoint("vision-primary", "vision-model");
+        EndpointFixture classification = endpoint("classification-primary", "quick-model");
+        expectSuccess(fallback, "fallback-result");
+        ModelRouter router = new ModelRouter(Map.of(
+                TaskType.CODE, List.of(code.endpoint(), fallback.endpoint()),
+                TaskType.VISION, List.of(vision.endpoint()),
+                TaskType.QUICK_CLASSIFICATION, List.of(classification.endpoint())));
+
+        InferencePermit held = exhaustedController.acquire();
+        try {
+            RoutedCompletion result = router.complete(TaskType.CODE, request());
+            assertRoutedTo(result, "code-fallback", "fallback-model", "fallback-result");
+            assertThat(code.circuitBreaker().getMetrics().getNumberOfFailedCalls()).isZero();
+            assertThat(exhaustedController.snapshot().concurrencyRejections()).isEqualTo(1);
+        } finally {
+            held.close();
+        }
     }
 
     @Test
@@ -391,7 +463,36 @@ class ModelRouterTest {
                 null);
     }
 
+    private ModelRequest toolRequest() {
+        return new ModelRequest(
+                List.of(ChatMessage.user("route")),
+                List.of(LlmClient.Tool.function(
+                        "lookup", "lookup data", objectMapper.createObjectNode())),
+                null,
+                null);
+    }
+
     private EndpointFixture endpoint(String name, String model) {
+        return endpoint(name, model, InferenceServiceContract.allCapabilities(),
+                InferenceAdmissionController.unlimited());
+    }
+
+    private EndpointFixture endpoint(
+            String name,
+            String model,
+            Set<InferenceCapability> capabilities) {
+        return endpoint(
+                name,
+                model,
+                capabilities,
+                InferenceAdmissionController.unlimited());
+    }
+
+    private EndpointFixture endpoint(
+            String name,
+            String model,
+            Set<InferenceCapability> capabilities,
+            InferenceAdmissionController admissionController) {
         endpointSequence++;
         String baseUrl = "https://endpoint-" + endpointSequence + ".test";
         RestClient.Builder builder = RestClient.builder().baseUrl(baseUrl);
@@ -403,7 +504,17 @@ class ModelRouterTest {
         clients.add(client);
         servers.add(server);
         return new EndpointFixture(
-                new ModelEndpoint(name, model, client, circuitBreaker),
+                new ModelEndpoint(
+                        name,
+                        model,
+                        client,
+                        circuitBreaker,
+                        new InferenceServiceContract(
+                                name,
+                                model,
+                                InferenceProtocol.OPENAI_CHAT_COMPLETIONS,
+                                capabilities),
+                        admissionController),
                 baseUrl,
                 server,
                 client,
@@ -417,6 +528,39 @@ class ModelRouterTest {
                           "model": "%s",
                           "messages": [{"role": "user", "content": "route"}],
                           "tools": [],
+                          "stream": false
+                        }
+                        """.formatted(fixture.endpoint().model()), true))
+                .andRespond(withSuccess("""
+                        {
+                          "id": "response-id",
+                          "object": "chat.completion",
+                          "created": 1720000000,
+                          "model": "%s",
+                          "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "%s"},
+                            "finish_reason": "stop"
+                          }]
+                        }
+                        """.formatted(fixture.endpoint().model(), contentText),
+                        MediaType.APPLICATION_JSON));
+    }
+
+    private void expectToolSuccess(EndpointFixture fixture, String contentText) {
+        fixture.server().expect(once(), requestTo(fixture.baseUrl() + CHAT_COMPLETIONS_PATH))
+                .andExpect(content().json("""
+                        {
+                          "model": "%s",
+                          "messages": [{"role": "user", "content": "route"}],
+                          "tools": [{
+                            "type": "function",
+                            "function": {
+                              "name": "lookup",
+                              "description": "lookup data",
+                              "parameters": {}
+                            }
+                          }],
                           "stream": false
                         }
                         """.formatted(fixture.endpoint().model()), true))

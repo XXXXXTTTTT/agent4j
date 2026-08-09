@@ -10,6 +10,7 @@ import com.agent.core.observability.ModelUsage;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -79,8 +80,12 @@ public final class ModelRouter {
                     endpoint.name(),
                     endpoint.model()));
             try {
-                LlmClient.ChatCompletionResponse response = endpoint.circuitBreaker()
-                        .executeSupplier(() -> validatedComplete(endpoint, request));
+                requireCapabilities(endpoint, requiredCapabilities(taskType, request));
+                LlmClient.ChatCompletionResponse response;
+                try (InferencePermit ignored = endpoint.admissionController().acquire()) {
+                    response = endpoint.circuitBreaker()
+                            .executeSupplier(() -> validatedComplete(endpoint, request));
+                }
                 succeedSpan(span, response);
                 recordTokenUsage(response);
                 return new RoutedCompletion(endpoint.name(), endpoint.model(), response);
@@ -98,6 +103,31 @@ public final class ModelRouter {
         ModelRoutingException routingException = new ModelRoutingException(taskType);
         failures.forEach(routingException::addSuppressed);
         throw routingException;
+    }
+
+    private EnumSet<InferenceCapability> requiredCapabilities(
+            TaskType taskType,
+            ModelRequest request) {
+        EnumSet<InferenceCapability> required = EnumSet.of(
+                InferenceCapability.CHAT_COMPLETIONS);
+        if (!request.tools().isEmpty()) {
+            required.add(InferenceCapability.TOOL_CALLING);
+        }
+        if (taskType == TaskType.VISION) {
+            required.add(InferenceCapability.VISION_INPUT);
+        }
+        return required;
+    }
+
+    private void requireCapabilities(
+            ModelEndpoint endpoint,
+            EnumSet<InferenceCapability> required) {
+        EnumSet<InferenceCapability> missing = EnumSet.copyOf(required);
+        missing.removeAll(endpoint.serviceContract().capabilities());
+        if (!missing.isEmpty()) {
+            throw new IllegalStateException(
+                    "模型端点缺少必需能力: " + missing);
+        }
     }
 
     private void recordTokenUsage(LlmClient.ChatCompletionResponse response) {
