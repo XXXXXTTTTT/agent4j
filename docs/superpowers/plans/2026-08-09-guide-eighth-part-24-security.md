@@ -263,7 +263,7 @@ git diff --check
 
 Expected: 0 failures、0 errors、`BUILD SUCCESS`，普通 EDD 不隐式调用真实模型。
 
-- [ ] **Step 5: Commit and merge**
+- [x] **Step 5: Commit and merge**
 
 ```powershell
 git add docs/ENGINEERING_PITFALLS.md docs/superpowers/plans/2026-08-09-guide-eighth-part-24-security.md agent-eval/src/test/java/com/agent/eval/SecurityRedTeamEddTest.java
