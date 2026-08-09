@@ -60,10 +60,37 @@
 - [ ] **Step 4: Append the 7B pitfall to `docs/ENGINEERING_PITFALLS.md`.** Record shared Page cross-run contamination, CSS evidence scope mismatch, operation timeout cancellation, and evidence-less success prevention with concrete class/test references.
 - [ ] **Step 5: Run green and commit:** same focused EDD command; commit `test(eval): add gui agent evidence workflow edd`.
 
+### Task 5B: Live GUI model EDD
+
+**Files:** create `agent-eval/src/test/java/com/agent/eval/LiveGuiAgentWorkflowEddTest.java`; update the
+7B design and engineering pitfall record.
+
+- [ ] **Step 1: Write the opt-in Live EDD first.** Require the exact existing LLM environment variables,
+  start the same local form, and wire the real endpoint to the real GUI graph and Chromium. Default-disabled
+  execution must use a JUnit assumption; enabled execution must never install a Mock HTTP server.
+- [ ] **Step 2: Run the real endpoint red/green gate.** Load `D:\agent4j\.env` into the Maven process and run
+  `LiveGuiAgentWorkflowEddTest`; require non-skipped execution, real provider monitoring, final DOM mutation,
+  valid evidence hashes, Tool Registry audit, and a strict LIVE report without prompt/response bodies.
+- [ ] **Step 3: Keep deterministic and Live reports distinct.** The existing GUI EDD remains the repeatable
+  contract test; the Live EDD is the model-quality and end-to-end protocol test.
+
+### Task 5C: Merge-review hardening
+
+**Files:** modify `BrowserSessionRegistry`, `PlaywrightBrowserService`, `GuiAgentNode`,
+`ProductionGraphConfiguration` and their focused tests.
+
+- [ ] **Step 1: Reproduce each review finding with a failing test.** Cover cross-Run session reuse,
+  open/close serialization, retryable close failure, production ToolAuditSink delivery, critical Hook error state,
+  and sub-millisecond Playwright timeout rejection.
+- [ ] **Step 2: Implement the smallest fixes.** Share one lifecycle lock, remove sessions only after successful
+  close, inject durable production audit logging, preserve `gui.error`, and pass timeout to every supported
+  Playwright API.
+- [ ] **Step 3: Run all focused tests and repeat the full Task 6 gate before merge.**
+
 ### Task 6: Full verification and merge
 
 - [ ] **Step 1: Run the complete Java 21 gate without skipping frontend tests:** `mvn -pl agent-core,agent-web,agent-eval -am test`.
-- [ ] **Step 2: Run clean Java 21 package:** `mvn clean package -DskipTests -Dfrontend.skip=true`.
-- [ ] **Step 3: Run `git diff --check`, inspect status and forbidden paths, then fast-forward merge `feat/guide-seventh-part-7b` into `master`**.
-- [ ] **Step 4: On merged `master`, rerun `ProductionGuiAgentIntegrationTest`, `GuiAgentWorkflowEddTest`, and `BrowserToolDefinitionsTest` with `-Dfrontend.skip=true`**.
-- [ ] **Step 5: Remove only `D:\agent4j\.worktrees\guide-seventh-part-7b`, prune worktree metadata, delete the merged feature branch, and verify `master` is clean.
+- [ ] **Step 2: Run clean Java 21 package:** `mvn clean package '-DskipTests' '-Dfrontend.skip=true'`.
+- [ ] **Step 3: Run `git diff --check`, inspect status and forbidden paths, then fast-forward merge `feat/guide-seventh-part-7b` into `master`.**
+- [ ] **Step 4: On merged `master`, rerun `ProductionGuiAgentIntegrationTest`, `GuiAgentWorkflowEddTest`, and `BrowserToolDefinitionsTest` with `'-Dfrontend.skip=true'`.**
+- [ ] **Step 5: Remove only `D:\agent4j\.worktrees\guide-seventh-part-7b`, prune worktree metadata, delete the merged feature branch, and verify `master` is clean.**

@@ -122,6 +122,28 @@ taskId/status/steps/toolCalls/evidenceRefs/finalUrl/domSha256/screenshotSha256/p
 
 EDD 必须断言页面最终 DOM 状态、至少一张真实 PNG、每个动作均有 Tool Registry 审计、最终 summary 引用已存在证据 ID，且未调用 Coder/Ops。无 Playwright 浏览器的环境使用 JUnit assumption 明确跳过；当前环境必须实际执行。
 
+### 真实模型 GUI EDD
+
+确定性视觉 EDD 只证明浏览器、图和工具契约，不证明外部模型质量。新增显式 opt-in 的
+`LiveGuiAgentWorkflowEddTest`：仅在 `AGENT_LLM_ENABLED=true` 时读取现有
+`AGENT_LLM_BASE_URL`、`AGENT_LLM_API_KEY`、`AGENT_LLM_CHAT_COMPLETIONS_PATH` 和
+`AGENT_LLM_VISION_MODEL`，使用真实 `LlmClient`、`ModelRouter`、`GuiAgentNode`、Tool Registry、
+Playwright Chromium 和本地表单执行完整动作循环。普通 Maven 门禁不隐式加载 `.env`，因此不会产生
+外部调用或配额消耗；显式 Live 门禁由调用命令把根目录 `.env` 注入测试进程。
+
+Live 报告固定包含
+`taskId/mode/endpoint/model/status/steps/toolCalls/finalUrl/domSha256/screenshotSha256/passed/errorType`，
+不记录 API Key、完整 Prompt、完整模型回答或截图正文。Live 失败必须保留测试报告和日志中的完整异常，
+不得回退到 Mock 后宣称通过。
+
+### 合并前审查修复门禁
+
+生产 `ToolRegistry` 必须注入实际 `ToolAuditSink` 并把参数 SHA、状态、耗时和错误类型写入滚动日志。
+`BrowserSessionRegistry` 的 open 与 close 使用同一生命周期锁，关闭成功后才移除会话，关闭失败保留句柄
+供再次清理，并拒绝工厂把同一个活跃实例交给两个 Run。Playwright 的页面 DOM 与 locator DOM 均使用
+带 timeout 的 evaluate，所有有界 API 设置 Page/Context 默认 timeout，且拒绝转换后小于 1ms 的值。
+关键 Harness Hook 失败写入 `gui.error`，关闭会话且不生成 `final_response`。
+
 ## 8. 不在本里程碑范围
 
 不实现桌面坐标操作、远程桌面、文件上传、支付/发布类动作、跨域导航、第五篇 Handoff 子运行和第八篇安全红队任务集。这些能力在相应篇章单独设计，不能通过 7B 的工具参数偷偷开放。
