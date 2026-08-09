@@ -1,6 +1,6 @@
 # Agent4j 技术攻关、踩坑复盘与面试表达指南
 
-> 证据基线：Phase 5 与第三篇 3C Task 9 定向验收（2026-08-08）。本文依据 Phase 1 至
+> 证据基线：第七篇 7B 真实 GUI EDD 定向验收（2026-08-09）。本文依据 Phase 1 至
 > 当前分支的 Git 补丁、`docs/superpowers/specs/` 设计文档、生产代码和自动化测试整理。
 > 当前证据包含真实 pgvector PostgreSQL、同仓库 single-flight、生产知识路由和六场景 EDD。
 
@@ -2304,16 +2304,17 @@ Tool Registry 控制一次工具调用能占用多久，Playwright timeout 控�
 
 ### 【解决方案/代码级实现】严格动作协议与已存在证据引用门禁
 
-`BrowserActionDecision` 拒绝 Markdown fence、未知字段、错误类型和动作专属字段越权；`done` 必须
-包含非空 summary 以及至少一个已采集的 evidenceRef。`GuiAgentNode` 只在所有引用都属于当前 Run 的
-证据集合且会话清理成功后写入 `final_response`，否则写入完整 `gui.error`。
+`BrowserActionDecision` 拒绝 Markdown fence、未知字段、错误类型和动作专属字段越权；模型只能通过
+严格 Schema 的唯一 `browser_action` Function 返回动作。`done` 必须包含非空 summary、至少一个已采集
+的 evidenceRef，且 summary 必须逐字出现在被引用证据 DOM 中。`GuiAgentNode` 只在所有引用属于当前 Run、
+页面证据支持结论且会话清理成功后写入 `final_response`，否则写入完整 `gui.error`。
 
 ### 【证据】真实 Chromium EDD 覆盖动作、DOM、PNG 和审计链
 
 `GuiAgentWorkflowEddTest` 启动真实本地 `HttpServer`，通过真实 Playwright Chromium 执行
-`navigate -> page evidence -> fill -> locator evidence -> click -> locator evidence -> done`。测试断言
-最终 DOM 为 `submitted: Agent4J`、截图具有 PNG 文件签名、六次 Tool Registry 审计顺序精确、最终
-摘要引用 `evidence-2`，并确认状态中不存在 Coder/Ops 输出。EDD 报告严格只含
+`navigate -> page evidence -> fill -> locator evidence -> page evidence -> click -> locator evidence -> page evidence -> done`。
+测试断言最终 DOM 为 `submitted: Agent4J`、截图具有 PNG 文件签名、八次 Tool Registry 审计顺序精确、
+最终摘要引用 `evidence-4`，并确认状态中不存在 Coder/Ops 输出。EDD 报告严格只含
 `taskId/status/steps/toolCalls/evidenceRefs/finalUrl/domSha256/screenshotSha256/passed`。
 
 ### 【问题现象】契约型 EDD 通过，但供应商监控没有请求记录，无法说明真实模型质量
@@ -2352,3 +2353,175 @@ API Key 或完整回答。2026-08-09 的真实运行命中 `https://zz.cxwms.com
 测试现在通过 `CoderNode.WORKSPACE_PATH_KEY` 写入当前 EDD 工作目录的绝对规范化路径，保留 Planner
 对缺失状态的严格拒绝语义。修复后再次真实调用端点，6 个场景和 RAG 增强测试均通过；这证明报告中的
 绿灯同时覆盖了模型请求、Planner 路由、记忆/知识上下文和协议解析，而不是仅由 Mock 响应驱动。
+
+### 【问题现象】生产工具执行成功，但滚动日志没有任何工具审计事件
+
+代码层的 `DefaultToolRegistry` 已经支持 `ToolAuditSink`，测试也能收集每次调用；生产配置却曾经
+使用 `ToolAuditSink.noop()` 兼容入口。结果是浏览器动作真实执行了，审计字段却只停留在内存测试，
+线上无法按 `runId`、用户、节点和工具定位一次高风险操作。
+
+### 【根因分析】测试注入的观测器和生产 Bean 装配不是同一条路径
+
+接口存在不代表生产链路接通。直接构造图的测试为了简化依赖调用了 noop 重载，生产 Spring Bean 又复用
+了该重载，导致审计副作用被静默丢弃。
+
+### 【解决方案/代码级实现】生产注入 Logback 审计端口，兼容入口只用于隔离测试
+
+`ProductionGraphConfiguration.productionToolAuditSink` 注入真正的 `ToolAuditSink`，把完整
+`ToolAuditEvent` 的 `runId/nodeName/userId/callId/toolName/risk/status/durationMs/argumentsSha256/
+errorType/cancellationRequested` 写入现有控制台和滚动文件。四参数直接构造入口显式保留 noop，
+但生产 `@Bean` 必须走注入重载；`ProductionGuiAgentIntegrationTest` 通过真实 Spring 装配验证事件已
+抵达 sink。敏感参数只记录 SHA-256，不把值写入日志。
+
+### 【问题现象】并发 open/close 或关闭失败时，浏览器会话泄漏或无法重试清理
+
+两个虚拟线程同时为同一 Run 打开会话可能覆盖句柄；`close(UUID)` 先从 Map 移除再调用 Playwright，
+一旦 close 抛错，后续清理已经找不到会话。工厂若把同一活跃 Browser 实例返回给两个 Run，也会造成页面
+状态交叉污染。
+
+### 【根因分析】Map 的并发安全不等于资源生命周期的原子性
+
+创建、登记、关闭和移除必须是同一个生命周期协议。仅使用并发容器不能把“拿到句柄”和“清理成功”绑定
+起来；关闭失败的句柄必须继续归注册表所有，才能进行重试。
+
+### 【解决方案/代码级实现】统一生命周期锁与成功后移除
+
+`BrowserSessionRegistry` 用同一 `synchronized` 生命周期锁串行化 open、精确 close 和 close-all；
+只有 `BrowserAutomation.close()` 成功后才 `remove(runId, session)`，失败句柄保留并在下一次 close
+重试。注册时拒绝工厂返回已经属于其他 Run 的同一实例。`BrowserSessionRegistryTest` 覆盖复用拒绝、
+关闭失败重试、并发 close 和重复 close。
+
+### 【问题现象】Playwright 操作传入纳秒级正 Duration，却变成“无超时”
+
+`Duration.toMillis()` 对小于 1ms 的正值返回 0；Playwright 将 0 解释为禁用超时。调用方以为已经设置
+边界，浏览器 API 却可能无限等待。
+
+### 【根因分析】业务时间精度和第三方 API 的整数毫秒协议不一致
+
+只检查 `Duration` 非负不足以证明底层配置有效，转换后的值也必须满足 Playwright 的最小协议单位。
+
+### 【解决方案/代码级实现】转换后再次验证并设置 Page/Context 默认上限
+
+`PlaywrightBrowserService.validateTimeout` 在 `toMillis()` 后拒绝小于 1ms；导航、点击、填充、截图、
+DOM evaluate 和 locator evaluate 使用显式 timeout，并为不支持单独 timeout 的滚动 API 设置 Page 与
+BrowserContext 默认 timeout。`PlaywrightBrowserServiceTest` 以 1ns 回归用例锁定该边界。
+
+### 【问题现象】关键 Harness Hook 抛错穿透节点，Web 端只看到图执行异常，没有 `gui.error`
+
+GUI 工具的 BEFORE/AFTER/FAILURE Hook 属于运行时审计边界。关键 Hook 失败如果直接重新抛出，
+`GuiAgentNode` 无法写入状态错误字段，前端也不会得到可恢复的节点证据；浏览器会话还可能继续占用。
+
+### 【根因分析】Hook 异常与普通节点异常没有统一状态出口
+
+通用图引擎可以包装异常，但 GUI 节点需要在关闭专属会话后把完整堆栈放入自己的状态协议，不能让异常
+包装层替代业务错误字段。
+
+### 【解决方案/代码级实现】所有 GUI 失败统一写 `gui.error` 并禁止最终响应
+
+`GuiAgentNode.executeGui` 捕获关键 Hook、工具、Playwright、模型协议和清理异常，先关闭当前 Run 会话，
+再写完整堆栈到 `gui.error` 与 `gui` trace；失败路径不写 `final_response`。清理异常附加到首个失败的
+suppressed 列表，保证审计和资源治理信息都可追踪。`GuiAgentNodeTest` 的关键 Hook 拒绝用例验证该状态
+契约。
+
+### 【问题现象】契约型 GUI EDD 通过，但供应商监控没有请求；真实 EDD 又被模型输出和视觉能力打穿
+
+确定性 EDD 使用 Mock 模型只能证明真实 Chromium、工具 Schema、审计和证据哈希。第一次 Live GUI EDD
+加载根目录 `.env` 后确实命中 `https://zz.cxwms.com/v1/chat/completions`，但探测发现同一
+`gpt-5.4-mini` 的纯文本请求 HTTP 200，最小 PNG 多模态请求 HTTP 400，完整截图请求 HTTP 500；后续
+真实调用还暴露了自由 JSON 的 `summary/reason/unknown field` 漂移以及局部证据遮蔽全局结果。
+
+### 【根因分析】三个边界被错误地当成一个问题
+
+第一，外部模型是否支持图片是端点能力问题；第二，自由文本 JSON 是否遵守动作协议是输出约束问题；
+第三，点击按钮后的结果是否出现在指定 locator 是证据范围问题。只改 Prompt 或只增加截图都不能同时
+解决三者，也不能让普通 Maven 测试隐式依赖外部服务。
+
+### 【解决方案/代码级实现】视觉优先、DOM 降级、Function Calling 与双层证据门禁
+
+`GuiAgentNode` 先提交真实多模态请求；路由失败或 HTTP 200 但动作协议无效时，沿同一
+`TaskType.VISION` 路由用 DOM 文本重试，两次失败保留 suppressed 异常。模型决策改为强制唯一
+`browser_action` Function，函数定义声明 `strict=true`、`additionalProperties=false`、八个字段全部
+required，并用 `anyOf` 精确表达 click/fill/scroll/done 的字段约束；节点拒绝正文动作、错误函数名和多个
+ToolCall，只解析函数 arguments。每次局部证据后追加一次 page 证据，防止 `#submit` 的局部 DOM 隐藏
+`#result` 的变化；`done` 必须引用最新 page 证据，且 summary 逐字出现在该证据的 `innerText` 中，才允许
+写入 `final_response`。
+
+### 【证据】真实模型、真实浏览器和真实审计均已命中
+
+2026-08-09 的 Live GUI EDD 使用根目录 `.env`、真实 `gpt-5.4-mini`、真实 Playwright Chromium、
+临时本地表单和生产同构 Tool Registry。最终一次执行产生 3 次 HTTP 200 模型请求（每次均记录
+input/output tokens、状态码与耗时），完成真实 `browser.fill`、`browser.click`、page DOM/PNG 证据
+采集，最终 DOM 包含 `submitted: Agent4J`，报告 `mode=LIVE`、`status=COMPLETED`、`passed=true`。
+报告只保留 endpoint/model、步数、工具次数、最终 URL 与证据 SHA-256，不落盘 API Key、Prompt、完整
+Completion 或截图正文；失败运行仍保留 Surefire 堆栈供审计复盘。
+
+### 【问题现象】浏览器清理失败后注册表仍保留句柄，但真实 Playwright 服务无法再次清理
+
+注册表只有在 `BrowserAutomation.close()` 成功后才移除 Run。若 Playwright 的 Page 或 Context 第一次
+关闭抛错，旧实现却在第一次调用就把 `closed` 设为 true、关闭 executor，后续重试直接 return；注册表的
+句柄虽然还在，实际 Chromium 资源已经失去清理入口。
+
+### 【根因分析】资源所有权重试协议与底层实现的幂等状态不一致
+
+上层把“关闭失败”视为可重试，底层却把失败路径和成功路径都标成终态，并且无界等待 cleanup future。
+这同时造成泄漏风险和图节点永久挂起风险。
+
+### 【解决方案/代码级实现】逐资源成功后置空、失败保留，清理等待有硬上限
+
+`PlaywrightBrowserService` 只有整个资源链清理成功后才设置 `closed=true` 并关闭 executor；Page、Context、
+Browser、Playwright 各自只有 close 成功后才清空字段，失败对象在下一次调用中继续尝试。cleanup future 使用
+固定关闭上限；超时后保留仍在运行的清理句柄，后续调用不会启动并发清理，任务结束后才允许重试，并返回
+`BrowserAutomationException`。`PlaywrightBrowserServiceTest` 验证第一次失败、第二次成功、超时和不可取消
+清理任务路径；`BrowserSessionRegistryTest` 验证上层仍保留失败句柄。
+
+### 【问题现象】GUI 状态随着每个局部证据重复保存完整 DOM、可见文本和 Base64 PNG
+
+每次 fill/click 后同时采集 locator 与 page 证据。若把 `browser.evidence` 的完整输出原样追加到
+`gui.evidence`，多步流程会把 checkpoint、SSE 和下一轮 Prompt 迅速放大到 MB 级，历史截图也重复消耗
+数据库和网络带宽。
+
+### 【根因分析】证据引用元数据和证据正文生命周期不一致
+
+动作使用稳定 ID、URL、selector 和哈希来审计，但 Web 画廊和断点恢复还必须能通过同一个 evidence ID
+恢复 DOM、可见文本和截图。只保留最新正文会让历史引用变成无法读取的“悬空 ID”；原始工具输出的单项预算也
+不能替代 Run 级状态设计。
+
+### 【解决方案/代码级实现】工具出口预算 + 每条证据独立保留正文
+
+`BrowserToolDefinitions` 对 DOM、visibleText 和 PNG 施加精确预算（64,000 code points、16,384 code
+points、4 MiB）；超限 PNG 直接失败，截断文本后重新计算对应 SHA-256。`GuiAgentNode.captureEvidence`
+为每个 evidence ID 保留受节点上限约束的 DOM、visibleText、截图 data URL 与对应哈希，当前证据仍单独写入
+`gui.dom`/`gui.screenshotDataUrl` 供下一轮模型观察。这样历史引用、前端画廊和审计记录都指向同一份可恢复
+证据，而不会依赖“最新状态”猜测正文。
+
+### 【问题现象】非多模态网关返回 HTTP 200，但正文没有合法动作，Agent 直接失败
+
+部分供应商对图片请求并不返回 4xx，而是返回普通文本或错误 ToolCall。若降级只捕获
+`ModelRoutingException`，HTTP 200 的协议漂移不会进入 DOM 文本路径。
+
+### 【根因分析】传输成功不等于 Agent 协议成功
+
+HTTP 状态、模型响应结构和业务动作协议是三个独立边界。只在传输层判断失败会把供应商能力差异暴露给
+节点，而不是转成可恢复的同一任务路由。
+
+### 【解决方案/代码级实现】把动作解析纳入同一 VISION 降级边界
+
+`GuiAgentNode.completeDecision` 在保存原始 ToolCall arguments 后解析严格动作；模型返回正文、错误函数名、
+多 ToolCall 或非法 JSON 时抛出 `DecisionProtocolException`，与 `ModelRoutingException` 一样触发 DOM 文本
+重试。`GuiAgentNodeTest` 用 HTTP 200 普通文本回归了这条路径，并验证最终响应不丢失。
+
+### 【问题现象】Live EDD 初始化中途失败会留下本地 HTTP Server 或模型/工具 executor
+
+真实 EDD 先启动页面、再创建会话、Tool Registry 和 LLM Client。若任一步骤抛错，尚未进入原有
+try-with-resources 的对象不会自动关闭，测试进程可能残留端口、虚拟线程和浏览器句柄。
+
+### 【根因分析】资源声明晚于资源创建
+
+try-with-resources 只管理已经成功完成资源声明的对象；多资源初始化写在资源块外时，部分成功的前缀没有
+统一 finally。这个问题不会在通过场景暴露，只在供应商错误或 Chromium 启动失败时出现。
+
+### 【解决方案/代码级实现】可空句柄 + finally 全量清理
+
+`LiveGuiAgentWorkflowEddTest` 将 sessions/tools/client 初始化放入受保护的 try，finally 中逐个关闭并停止
+本地 `HttpServer`；清理辅助方法即使某一资源 close 抛错也继续关闭后续资源，并将后续异常作为 suppressed
+保留。状态失败仍生成脱敏 LIVE 报告。这样真实 API、浏览器和审计资源在成功与异常路径均有明确生命周期。
