@@ -16,11 +16,13 @@ import org.slf4j.MDC;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.net.SocketTimeoutException;
 import java.util.Map;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -29,6 +31,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 
 /**
  * 基于 Spring RestClient 和 Java 21 虚拟线程的 OpenAI 协议客户端。
@@ -43,6 +46,7 @@ public final class LlmClient implements AutoCloseable {
     private final ObjectMapper objectMapper;
     private final String chatCompletionsPath;
     private final String requestUrl;
+    private final LongSupplier nanoTime;
     private final ExecutorService executor;
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -63,6 +67,16 @@ public final class LlmClient implements AutoCloseable {
             ObjectMapper objectMapper,
             String chatCompletionsPath,
             String requestUrl) {
+        this(restClient, objectMapper, chatCompletionsPath, requestUrl, System::nanoTime);
+    }
+
+    /** 使用可控单调时钟创建客户端，供同包确定性测试使用。 */
+    LlmClient(
+            RestClient restClient,
+            ObjectMapper objectMapper,
+            String chatCompletionsPath,
+            String requestUrl,
+            LongSupplier nanoTime) {
         this.restClient = Objects.requireNonNull(restClient, "restClient 不能为空");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
         if (chatCompletionsPath == null || chatCompletionsPath.isBlank()) {
@@ -73,6 +87,7 @@ public final class LlmClient implements AutoCloseable {
             throw new IllegalArgumentException("requestUrl 不能为空");
         }
         this.requestUrl = requestUrl;
+        this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime 不能为空");
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
     }
 
@@ -85,7 +100,7 @@ public final class LlmClient implements AutoCloseable {
     public ChatCompletionResponse complete(ChatCompletionRequest request) {
         Objects.requireNonNull(request, "request 不能为空");
         return runOnVirtualThread(request.model(), () -> {
-            long startedAt = System.nanoTime();
+            long startedAt = nanoTime.getAsLong();
             try {
                 ChatCompletionResponse response = restClient.post()
                         .uri(chatCompletionsPath)
@@ -115,12 +130,15 @@ public final class LlmClient implements AutoCloseable {
      * @param request  请求参数
      * @param consumer 增量响应消费者
      */
-    public void stream(ChatCompletionRequest request, Consumer<ChatCompletionChunk> consumer) {
+    public StreamingMetrics stream(
+            ChatCompletionRequest request,
+            Consumer<ChatCompletionChunk> consumer) {
         Objects.requireNonNull(request, "request 不能为空");
         Objects.requireNonNull(consumer, "consumer 不能为空");
-        runOnVirtualThread(request.model(), () -> {
-            long startedAt = System.nanoTime();
+        return runOnVirtualThread(request.model(), () -> {
+            long startedAt = nanoTime.getAsLong();
             AtomicReference<Usage> usage = new AtomicReference<>();
+            StreamMetricsAccumulator metrics = new StreamMetricsAccumulator(startedAt);
             try {
                 Integer status = restClient.post()
                         .uri(chatCompletionsPath)
@@ -133,12 +151,14 @@ public final class LlmClient implements AutoCloseable {
                                 if (chunk.usage() != null) {
                                     usage.set(chunk.usage());
                                 }
-                                consumer.accept(chunk);
+                                metrics.accept(chunk, consumer);
                             });
                             return responseStatus;
                         });
-                logSuccess(request.model(), usage.get(), status == null ? 200 : status, startedAt);
-                return null;
+                int httpStatus = status == null ? 200 : status;
+                StreamingMetrics result = metrics.complete(httpStatus);
+                logStreamSuccess(request.model(), usage.get(), result);
+                return result;
             } catch (Exception exception) {
                 logFailure(request.model(), exception, startedAt);
                 throw exception;
@@ -206,6 +226,31 @@ public final class LlmClient implements AutoCloseable {
                 elapsedMillis(startedAt));
     }
 
+    private void logStreamSuccess(
+            String model,
+            Usage usage,
+            StreamingMetrics metrics) {
+        int inputTokens = usage == null ? -1 : usage.promptTokens();
+        int outputTokens = usage == null ? -1 : usage.completionTokens();
+        long ttftMs = metrics.timeToFirstChunk()
+                .map(Duration::toMillis)
+                .orElse(-1L);
+        LOGGER.info(
+                "LLM 流式请求完成 url={} model={} inputTokens={} outputTokens={} httpStatus={} "
+                        + "durationMs={} ttftMs={} chunks={} consumerBackpressureMs={} "
+                        + "maxConsumerBackpressureMs={}",
+                requestUrl,
+                model,
+                inputTokens,
+                outputTokens,
+                metrics.httpStatus(),
+                metrics.totalDuration().toMillis(),
+                ttftMs,
+                metrics.chunkCount(),
+                metrics.consumerBackpressureDuration().toMillis(),
+                metrics.maxConsumerBackpressureDuration().toMillis());
+    }
+
     private void logFailure(String model, Throwable failure, long startedAt) {
         RestClientResponseException responseException = findCause(
                 failure, RestClientResponseException.class);
@@ -230,7 +275,7 @@ public final class LlmClient implements AutoCloseable {
     }
 
     private long elapsedMillis(long startedAt) {
-        return java.time.Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
+        return Duration.ofNanos(elapsedNanos(startedAt, nanoTime.getAsLong())).toMillis();
     }
 
     private <T extends Throwable> T findCause(Throwable failure, Class<T> type) {
@@ -295,6 +340,56 @@ public final class LlmClient implements AutoCloseable {
             throw new LlmClientException("LLM 请求执行失败", cause);
         } catch (RuntimeException exception) {
             throw new LlmClientException("LLM 请求调度失败", exception);
+        }
+    }
+
+    private long elapsedNanos(long startedAt, long finishedAt) {
+        return Math.max(0L, finishedAt - startedAt);
+    }
+
+    private final class StreamMetricsAccumulator {
+
+        private final long startedAt;
+        private Long firstChunkAt;
+        private long chunkCount;
+        private long consumerBackpressureNanos;
+        private long maxConsumerBackpressureNanos;
+
+        private StreamMetricsAccumulator(long startedAt) {
+            this.startedAt = startedAt;
+        }
+
+        private void accept(
+                ChatCompletionChunk chunk,
+                Consumer<ChatCompletionChunk> consumer) {
+            long callbackStartedAt = nanoTime.getAsLong();
+            if (firstChunkAt == null) {
+                firstChunkAt = callbackStartedAt;
+            }
+            try {
+                consumer.accept(chunk);
+            } finally {
+                long callbackDuration = elapsedNanos(
+                        callbackStartedAt, nanoTime.getAsLong());
+                chunkCount++;
+                consumerBackpressureNanos += callbackDuration;
+                maxConsumerBackpressureNanos = Math.max(
+                        maxConsumerBackpressureNanos, callbackDuration);
+            }
+        }
+
+        private StreamingMetrics complete(int httpStatus) {
+            Optional<Duration> ttft = firstChunkAt == null
+                    ? Optional.empty()
+                    : Optional.of(Duration.ofNanos(
+                            elapsedNanos(startedAt, firstChunkAt)));
+            return new StreamingMetrics(
+                    httpStatus,
+                    ttft,
+                    Duration.ofNanos(elapsedNanos(startedAt, nanoTime.getAsLong())),
+                    chunkCount,
+                    Duration.ofNanos(consumerBackpressureNanos),
+                    Duration.ofNanos(maxConsumerBackpressureNanos));
         }
     }
 

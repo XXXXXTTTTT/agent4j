@@ -14,7 +14,9 @@ import org.springframework.web.client.RestClientResponseException;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -145,6 +147,9 @@ class LlmClientTest {
 
                 """;
 
+        List<LlmClient.ChatCompletionChunk> chunks = new ArrayList<>();
+        List<Boolean> callbackThreadTypes = new ArrayList<>();
+        AtomicLong nanoTime = new AtomicLong();
         server.expect(once(), requestTo("https://gateway.test/v1/chat/completions"))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(content().json("""
@@ -155,14 +160,23 @@ class LlmClientTest {
                           "stream": true
                         }
                         """, true))
-                .andRespond(withSuccess(sse, MediaType.TEXT_EVENT_STREAM));
-
-        List<LlmClient.ChatCompletionChunk> chunks = new ArrayList<>();
-        List<Boolean> callbackThreadTypes = new ArrayList<>();
-        try (LlmClient client = new LlmClient(builder.build(), objectMapper, CHAT_COMPLETIONS_PATH)) {
-            client.stream(request, chunk -> {
+                .andRespond(httpRequest -> {
+                    nanoTime.set(Duration.ofMillis(10).toNanos());
+                    return withSuccess(sse, MediaType.TEXT_EVENT_STREAM)
+                            .createResponse(httpRequest);
+                });
+        StreamingMetrics metrics;
+        try (LlmClient client = new LlmClient(
+                builder.build(),
+                objectMapper,
+                CHAT_COMPLETIONS_PATH,
+                CHAT_COMPLETIONS_PATH,
+                nanoTime::get)) {
+            metrics = client.stream(request, chunk -> {
                 chunks.add(chunk);
                 callbackThreadTypes.add(Thread.currentThread().isVirtual());
+                nanoTime.addAndGet(Duration.ofMillis(
+                        chunks.size() == 1 ? 5 : 7).toNanos());
             });
         }
 
@@ -173,6 +187,31 @@ class LlmClientTest {
         assertThat(toolCall.index()).isZero();
         assertThat(toolCall.function().name()).isEqualTo("lookup");
         assertThat(callbackThreadTypes).containsExactly(true, true);
+        assertThat(metrics.httpStatus()).isEqualTo(200);
+        assertThat(metrics.timeToFirstChunk()).contains(Duration.ofMillis(10));
+        assertThat(metrics.totalDuration()).isEqualTo(Duration.ofMillis(22));
+        assertThat(metrics.chunkCount()).isEqualTo(2);
+        assertThat(metrics.consumerBackpressureDuration()).isEqualTo(Duration.ofMillis(12));
+        assertThat(metrics.maxConsumerBackpressureDuration()).isEqualTo(Duration.ofMillis(7));
+        server.verify();
+    }
+
+    @Test
+    void reportsEmptyTimeToFirstChunkWhenStreamContainsOnlyDone() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://gateway.test");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        server.expect(once(), requestTo("https://gateway.test/v1/chat/completions"))
+                .andRespond(withSuccess("data: [DONE]\n\n", MediaType.TEXT_EVENT_STREAM));
+
+        StreamingMetrics metrics;
+        try (LlmClient client = new LlmClient(
+                builder.build(), objectMapper, CHAT_COMPLETIONS_PATH)) {
+            metrics = client.stream(streamingRequest(), ignored -> {
+            });
+        }
+
+        assertThat(metrics.timeToFirstChunk()).isEmpty();
+        assertThat(metrics.chunkCount()).isZero();
         server.verify();
     }
 

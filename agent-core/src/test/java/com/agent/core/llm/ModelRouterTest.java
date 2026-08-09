@@ -170,6 +170,54 @@ class ModelRouterTest {
     }
 
     @Test
+    void streamsThroughCapableFallbackAndReturnsMetrics() {
+        EndpointFixture code = endpoint(
+                "code-primary",
+                "code-model",
+                Set.of(InferenceCapability.CHAT_COMPLETIONS));
+        EndpointFixture fallback = endpoint("code-fallback", "fallback-model");
+        EndpointFixture vision = endpoint("vision-primary", "vision-model");
+        EndpointFixture classification = endpoint("classification-primary", "quick-model");
+        expectStreamSuccess(fallback, "streamed");
+        ModelRouter router = new ModelRouter(Map.of(
+                TaskType.CODE, List.of(code.endpoint(), fallback.endpoint()),
+                TaskType.VISION, List.of(vision.endpoint()),
+                TaskType.QUICK_CLASSIFICATION, List.of(classification.endpoint())));
+        List<LlmClient.ChatCompletionChunk> chunks = new ArrayList<>();
+
+        RoutedStreamingCompletion result = router.stream(
+                TaskType.CODE, request(), chunks::add);
+
+        assertThat(result.endpointName()).isEqualTo("code-fallback");
+        assertThat(result.model()).isEqualTo("fallback-model");
+        assertThat(result.metrics().chunkCount()).isEqualTo(1);
+        assertThat(chunks.getFirst().choices().getFirst().delta().content())
+                .isEqualTo("streamed");
+        assertThat(code.circuitBreaker().getMetrics().getNumberOfFailedCalls()).isZero();
+    }
+
+    @Test
+    void streamingHttpFailureUsesFallbackAndRecordsCircuitFailure() {
+        EndpointFixture code = endpoint("code-primary", "code-model");
+        EndpointFixture fallback = endpoint("code-fallback", "fallback-model");
+        EndpointFixture vision = endpoint("vision-primary", "vision-model");
+        EndpointFixture classification = endpoint("classification-primary", "quick-model");
+        expectBadGateway(code);
+        expectStreamSuccess(fallback, "recovered");
+        ModelRouter router = new ModelRouter(Map.of(
+                TaskType.CODE, List.of(code.endpoint(), fallback.endpoint()),
+                TaskType.VISION, List.of(vision.endpoint()),
+                TaskType.QUICK_CLASSIFICATION, List.of(classification.endpoint())));
+
+        RoutedStreamingCompletion result = router.stream(
+                TaskType.CODE, request(), ignored -> {
+                });
+
+        assertThat(result.endpointName()).isEqualTo("code-fallback");
+        assertThat(code.circuitBreaker().getMetrics().getNumberOfFailedCalls()).isEqualTo(1);
+    }
+
+    @Test
     void observesEachEndpointAttemptAndTokenUsage() {
         EndpointFixture code = endpoint("code-primary", "code-model");
         EndpointFixture primary = endpoint("vision-primary", "vision-primary-model");
@@ -578,6 +626,25 @@ class ModelRouterTest {
                         }
                         """.formatted(fixture.endpoint().model(), contentText),
                         MediaType.APPLICATION_JSON));
+    }
+
+    private void expectStreamSuccess(EndpointFixture fixture, String contentText) {
+        fixture.server().expect(once(), requestTo(fixture.baseUrl() + CHAT_COMPLETIONS_PATH))
+                .andExpect(content().json("""
+                        {
+                          "model": "%s",
+                          "messages": [{"role": "user", "content": "route"}],
+                          "tools": [],
+                          "stream": true
+                        }
+                        """.formatted(fixture.endpoint().model()), true))
+                .andRespond(withSuccess("""
+                        data: {"id":"chunk-1","object":"chat.completion.chunk","created":1720000000,"model":"%s","choices":[{"index":0,"delta":{"role":"assistant","content":"%s"},"finish_reason":null}]}
+
+                        data: [DONE]
+
+                        """.formatted(fixture.endpoint().model(), contentText),
+                        MediaType.TEXT_EVENT_STREAM));
     }
 
     private void expectSuccessWithUsage(

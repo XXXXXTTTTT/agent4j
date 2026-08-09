@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 /**
  * 根据任务类型执行端点熔断与顺序降级的模型路由器。
@@ -105,6 +106,50 @@ public final class ModelRouter {
         throw routingException;
     }
 
+    /** 按任务路由执行 SSE 请求，并返回实际端点和流式指标。 */
+    public RoutedStreamingCompletion stream(
+            TaskType taskType,
+            ModelRequest request,
+            Consumer<LlmClient.ChatCompletionChunk> consumer) {
+        Objects.requireNonNull(taskType, "taskType 不能为空");
+        Objects.requireNonNull(request, "request 不能为空");
+        Objects.requireNonNull(consumer, "consumer 不能为空");
+        List<ModelEndpointException> failures = new ArrayList<>();
+        EnumSet<InferenceCapability> required = requiredCapabilities(taskType, request);
+        required.add(InferenceCapability.STREAMING);
+
+        for (ModelEndpoint endpoint : routes.get(taskType)) {
+            ModelCallSpan span = startSpan(new ModelCallStart(
+                    NodeExecutionContext.current(),
+                    taskType,
+                    endpoint.name(),
+                    endpoint.model()));
+            try {
+                requireCapabilities(endpoint, required);
+                StreamingMetrics metrics;
+                try (InferencePermit ignored = endpoint.admissionController().acquire()) {
+                    metrics = endpoint.circuitBreaker().executeSupplier(
+                            () -> validatedStream(endpoint, request, consumer));
+                }
+                succeedStreamingSpan(span, endpoint.model());
+                return new RoutedStreamingCompletion(
+                        endpoint.name(), endpoint.model(), metrics);
+            } catch (ExecutionBudgetExceededException exception) {
+                throw exception;
+            } catch (RuntimeException exception) {
+                failSpan(span, exception);
+                failures.add(new ModelEndpointException(
+                        endpoint.name(), endpoint.model(), exception));
+            } finally {
+                closeSpan(span);
+            }
+        }
+
+        ModelRoutingException routingException = new ModelRoutingException(taskType);
+        failures.forEach(routingException::addSuppressed);
+        throw routingException;
+    }
+
     private EnumSet<InferenceCapability> requiredCapabilities(
             TaskType taskType,
             ModelRequest request) {
@@ -159,6 +204,23 @@ public final class ModelRouter {
         return response;
     }
 
+    private StreamingMetrics validatedStream(
+            ModelEndpoint endpoint,
+            ModelRequest request,
+            Consumer<LlmClient.ChatCompletionChunk> consumer) {
+        LlmClient.ChatCompletionRequest completionRequest =
+                new LlmClient.ChatCompletionRequest(
+                        endpoint.model(),
+                        request.messages(),
+                        request.tools(),
+                        request.toolChoice(),
+                        request.temperature(),
+                        true);
+        return Objects.requireNonNull(
+                endpoint.client().stream(completionRequest, consumer),
+                "流式模型指标不能为空");
+    }
+
     private ModelCallSpan startSpan(ModelCallStart start) {
         try {
             return Objects.requireNonNull(
@@ -184,6 +246,15 @@ public final class ModelRouter {
                                     usage.totalTokens()))));
         } catch (RuntimeException exception) {
             logObserverFailure("模型调用成功观测失败", exception);
+        }
+    }
+
+    private void succeedStreamingSpan(ModelCallSpan span, String model) {
+        try {
+            span.succeed(new ModelCallSuccess(
+                    Optional.of(model), Optional.empty()));
+        } catch (RuntimeException exception) {
+            logObserverFailure("流式模型调用成功观测失败", exception);
         }
     }
 
