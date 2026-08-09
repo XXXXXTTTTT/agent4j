@@ -251,7 +251,7 @@ Expected: FAIL until all security ports are wired.
 
 使用真实核心端口和确定性 Handler，不伪造 ToolRegistry 结果；在 `docs/ENGINEERING_PITFALLS.md` 追加第八篇 24 的现象、根因、方案和测试证据。
 
-- [ ] **Step 4: Run focused and full verification**
+- [x] **Step 4: Run focused and full verification**
 
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Java\jdk-21'
