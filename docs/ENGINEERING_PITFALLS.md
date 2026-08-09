@@ -1978,3 +1978,83 @@ CLI 是 Agent 最容易产生外部副作用的能力。若节点把一整段自
 `cli.workspace-escape`、`cli.pty-output` 七条路线，报告严格只含
 `taskId/status/decision/commandSha256/exitCode/timedOut/terminalCalls/passed`。
 报告中的 `terminalCalls` 由 fake 或真实终端适配器实际计数，避免用授权结果推断副作用。
+
+## 第五篇 5A：Multi-Agent Handoff 与状态所有权
+
+### 【问题现象】模型可移交给任意自然语言目标，任务在 Agent 间无限接力
+
+如果把模型输出的 Agent 名称直接交给运行时，大小写、别名或提示注入都可能把任务发往未授权
+目标。只限制图最大步数也不能阻止跨子图反复 A→B→A；每次子图都有自己的步数预算，但整条调用链
+仍会持续消耗线程、token 和时间。
+
+### 【根因分析】Agent 目录、允许边和跨运行预算没有成为执行前的强类型门禁
+
+单图的节点注册表只能证明节点存在，不能表达哪个 Agent 能把哪些状态交给哪个目标。若深度、剩余
+次数和访问链只是 Prompt 文字，模型可以忽略；若依赖字符串模糊匹配，还会让同一输入无法稳定重放。
+
+### 【解决方案/代码级实现】精确目录加白名单，深度、次数和访问环三重拒绝
+
+`AgentDescriptor` 固定精确 `agentId`、`graphId`、只读输入键、拥有输出键和
+`handoffTargets`；`AgentCatalog` 在构造阶段原子拒绝重复 Agent、未知目标和自移交。
+`HandoffExecutionContext` 保存 `currentDepth/maxDepth/remainingHandoffs/visitedAgents`，每次
+`descend` 同时检查深度、次数和访问环。`AgentHandoffExecutor` 在创建目标图之前完成白名单和上下文
+校验，因此拒绝路线的图创建次数与 Trace 事件数都为零。
+
+### 【问题现象】FORK 泄漏全部状态，FRESH 缺少任务 briefing
+
+直接复制 `AgentState` 会把父 Agent 私有变量、历史 trace 和无关对话一起交给子 Agent；完全空白的
+Fresh 子 Agent 又无法知道工作区和任务目标。验证 Agent 如果使用 Fork，还会继承主 Agent 的判断
+偏差，重复给错误实现背书。
+
+### 【根因分析】对话继承与状态授权被错误地绑定成同一个开关
+
+Fork/Fresh 只回答“是否继承对话历史”，不能替代状态键权限。项目路径等执行输入仍需显式传递，
+私有状态则无论哪种模式都不应泄漏。
+
+### 【解决方案/代码级实现】对话模式与最小状态投影正交
+
+`HandoffContextMode.FORK` 复制父 messages 后追加明确任务，`FRESH` 只创建一条任务 user message；
+两者都只复制目标 `readableStateKeys`，父 trace 从不进入子运行。执行型子任务使用 Fork，独立审查
+使用 Fresh，避免确认偏误；Fresh 的完整背景由 `AgentHandoff.content` 与显式只读输入共同提供。
+
+### 【问题现象】子 Agent 越权修改父状态，结果合并发生静默覆盖
+
+子图可以用 `withVariable` 写任意字符串键。如果执行完成后直接把 child variables 覆盖到父状态，
+一个 Reviewer 就能改写 Coder 输出或工作区路径；两个子运行写同一键时，最后完成者还会无声覆盖
+先完成结果。
+
+### 【根因分析】`AgentState` 的不可变性只防止原地修改，不等于跨 Agent 所有权
+
+Record 和 `Map.copyOf` 能保证对象不可变，却不知道哪个 Agent 有权写哪个键。没有先完整校验再合并
+的两阶段过程，发现后续冲突时前面的键可能已经写入新状态。
+
+### 【解决方案/代码级实现】只读键防篡改、输出键所有权和原子冲突检查
+
+`AgentStateProjector` 记录初始子状态，完成后先验证所有只读键仍存在且值相同，再拒绝目标
+`ownedStateKeys` 之外的新增/变更，确认所有 `requestedOutputKeys` 都存在。合并前先检查父状态：
+不存在才写入、相同值保持、不同值抛 `AgentStateMergeException`；全部检查完成后才创建合并状态，
+子 messages 与 trace 不合并，只向父 trace 追加不含正文的 handoff 标识。
+
+### 【问题现象】子运行超时后 Future 已失败，阻塞虚拟线程却仍在后台运行
+
+只对 `CompletableFuture` 调用 `orTimeout` 会让等待者得到超时，却不会可靠中断底层子图。阻塞节点
+继续占用外部连接，随后重试会叠加重复副作用；子图请求 HITL 时若没有独立 Checkpoint，还可能被
+误报为正常完成。
+
+### 【解决方案/代码级实现】可取消 Future、独立 Run 标识和明确 HITL 失败
+
+`AgentHandoffExecutor` 为每次子运行生成不同于父运行的 `childRunId`，在命名虚拟线程中创建独立
+`StateGraph`。等待线程使用 `Future.get(timeout)`；超时立即 `cancel(true)`，由 `StateGraph` 取消
+正在执行的节点并关闭图。嵌套中断转为 `AgentHandoffInterruptedException`，不伪造完成状态。
+`AgentHandoffEvent` 分别记录 Started、节点开始/过程/完成、Completed 和 Failed，事件携带父子 Run
+关联但不记录任务正文或状态值。
+
+### 【证据】
+
+`AgentCatalogTest`、`AgentHandoffTest`、`AgentStateProjectorTest` 和
+`AgentHandoffExecutorTest` 覆盖精确目录、循环/预算、FORK/FRESH、状态越权、冲突、虚拟线程、
+超时中断和嵌套 HITL。`MultiAgentHandoffEddTest` 固定评测
+`handoff.fork`、`handoff.fresh`、`handoff.target-denied`、`handoff.cycle-denied`、
+`handoff.depth-denied`、`handoff.state-ownership`、`handoff.merge-conflict`、`handoff.timeout`
+八条路线，报告严格只含
+`taskId/status/contextMode/fromAgent/toAgent/childRunDistinct/mergedKeys/eventCount/passed`。
