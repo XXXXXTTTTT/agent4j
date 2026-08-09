@@ -81,4 +81,3 @@
 - [ ] **Step 3: Run `git diff --check`, inspect status and forbidden files, then fast-forward merge to `master`.**
 - [ ] **Step 4: Re-run focused profile/CLI/EDD checks on merged `master`.**
 - [ ] **Step 5: Remove the 7A worktree and delete the merged branch.**
-
