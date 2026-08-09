@@ -2144,3 +2144,39 @@ POM 是结构化 XML，不能通过自由文本 grep 猜测依赖；源码、测
 `ArchitectureConstraintTest` 的 4 个测试验证禁止依赖、禁止 import、核心端口和映射完整性；命令
 `mvn -pl agent-core -Dtest=ArchitectureConstraintTest test` 在 JDK 21 下返回 4/4 通过。
 本里程碑不修改生产代码或现有合法依赖，因此框架边界变化会在依赖引入的同一提交中直接失败。
+
+## 第六篇 6B：受控 Agent Profile 与只读拓扑查询
+
+### 【问题现象】为了追求低代码配置，Web API 容易演变成任意类名、表达式或图定义执行入口
+
+如果 Controller 接收用户提交的 Java 类名、Spring Bean 名、路由表达式或完整 JSON 图，再由反射或
+表达式引擎创建节点，调用方就能绕过构造器注入、工具能力掩码、workspace 权限和 HITL 门禁。动态图
+即使只用于“预览”，只要复用了执行构造流程，也可能提前创建浏览器、PTY 或容器资源；配置内容还会
+成为新的代码注入和审计重放边界。
+
+### 【根因分析】把展示元数据、拓扑查询和运行时装配混成了一个可变协议
+
+Dify / Coze 风格的产品界面需要展示 Agent 名称、能力、模型任务和图结构，但这些只读信息不等于用户
+有权修改可执行对象。若 profile 标识通过大小写、别名或模糊匹配解析，同一请求可能映射到不同图；若
+列表查询逐个创建图，又会把轻量元数据请求放大为基础设施资源消耗。
+
+### 【解决方案/代码级实现】构造器注入 Profile，精确查找，查询图后立即关闭
+
+`AgentProfile` 使用 record 固定 `profileId`、`graphId`、展示字段、`TaskType` 集合、能力集合和
+`ExecutionBudget`；构造器冻结集合，不归一化任何标识或能力标签。`AgentProfileRegistry` 只接收
+Spring 注入的 `AgentProfile` 与现有 `GraphRegistry`，按精确 `profileId` 查找并拒绝重复标识。
+列表接口只读取声明元数据，不创建图；详情和拓扑接口通过 profile 中的精确 `graphId` 创建一次
+`StateGraph`，调用 `inspectTopology()` 后使用 try-with-resources 立即关闭，节点执行次数保持为零。
+
+Web 层只提供 `GET /api/agent-profiles`、`GET /api/agent-profiles/{profileId}` 和
+`GET /api/agent-profiles/{profileId}/topology`。未知 profile 使用
+`AgentProfileNotFoundException`，未知 graph 继续使用 `GraphNotFoundException`，两者都进入既有
+404 ProblemDetail；空白标识进入 400。项目没有新增 POST/PUT/PATCH/DELETE，也没有反射、表达式或
+用户提交图定义的入口。
+
+### 【证据】核心生命周期和 Web 合约分别验证
+
+`AgentProfileRegistryTest` 验证元数据不可变、精确查找、稳定排序、单次图创建、拓扑读取不执行节点
+以及未知 graph 透传；`AgentProfileControllerTest` 验证列表无图检查副作用、详情与拓扑 JSON、空白
+标识 400、未知 profile/graph 404。`AgentWebApplicationTest` 验证示例环境实际装配
+`demo-agent` Profile，并精确关联同名 graph。
