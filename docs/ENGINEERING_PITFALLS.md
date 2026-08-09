@@ -2058,3 +2058,57 @@ Record 和 `Map.copyOf` 能保证对象不可变，却不知道哪个 Agent 有�
 `handoff.depth-denied`、`handoff.state-ownership`、`handoff.merge-conflict`、`handoff.timeout`
 八条路线，报告严格只含
 `taskId/status/contextMode/fromAgent/toAgent/childRunDistinct/mergedKeys/eventCount/passed`。
+
+## 第五篇 5B：StateGraph 拓扑校验与显式子图组合
+
+### 【问题现象】图能成功构造，却在运行到死端、孤立节点或纯循环后才失败
+
+原有 Builder 只检查节点和边的局部注册合法性。一个入口可达的节点可以没有出边，另一个节点
+可以永远到不了 `__END__`，而条件环只有在模型选择特定路线后才暴露。若把这些错误留到运行期，
+失败会消耗模型调用、沙箱资源和虚拟线程，且错误证据已经混入业务状态。
+
+### 【根因分析】构造合法不等于拓扑可终止，条件路由也不能用一次运行代替结构分析
+
+`Condition` 是运行时函数，不能在校验阶段执行或猜测返回值；但所有条件路由目标在 Builder 中已经
+是精确声明。缺少不可变快照时，校验结果还可能受到后续 Builder 修改影响，审计无法重放。
+
+### 【解决方案/代码级实现】快照分析与严格门禁分离
+
+`GraphTopologyAnalyzer` 只读取注册节点和声明边，生成不可变 `GraphTopology`。入口 DFS 计算
+`unreachableNodes`，空出边节点进入 `deadEndNodes`，从 `__END__` 反向 DFS 得到
+`nodesWithoutEndPath`，Tarjan SCC 精确标记 `cyclicNodes`。条件环只要结构上存在 `__END__` 出口即
+有效，纯循环仍交给 `ExecutionBudget` 在运行中以强类型 `ExecutionStopReason` 停止。
+`StateGraph.inspectTopology()` 只返回证据，`validateTopology()` 才抛出携带完整快照的
+`GraphTopologyException`；执行入口保持兼容，不自动改变既有预算语义。
+
+### 【问题现象】把子图当作普通节点会泄漏全量状态，或把子图中断伪装成父图节点异常
+
+直接复制 `AgentState` 会将父图的私有变量、消息和 trace 带入子图；直接覆盖合并又会让子图静默修改
+父状态。另一方面，子图在 HITL 节点返回 `Interrupted` 后，如果调度器统一包装为
+`GraphExecutionException`，上层无法恢复审批断点。
+
+### 【根因分析】父子运行边界没有显式协议，调度器异常包装抹掉结构化语义
+
+没有投影/合并端口时，状态所有权只能靠约定；没有独立子图 `GraphExecutionRequest` 时，runId、进度
+和中断请求也无法关联。`StateGraph.executeNode` 的通用 `ExecutionException` 包装若不识别组合异常，
+就会把可恢复中断降级为不可分类失败。
+
+### 【解决方案/代码级实现】显式桥接、同 Run 关联、精确异常透传
+
+`SubgraphStateBridge` 只提供 `project(parentState)` 与 `merge(parentState, childState)`，子图状态不
+自动复制。`SubgraphNode` 先投影状态、创建一次独立 `StateGraph`、调用 `validateTopology()`，再以父
+节点 `NodeExecutionContext.runId()` 创建子请求；子节点始终运行在独立虚拟线程执行器中。
+父节点的 progress 发布器通过包级 `progressReporter()` 捕获，子图监听器只发布固定摘要：
+`subgraph:<id>:started`、节点 started/progress/completed 和 `subgraph:<id>:completed`，避免递归
+绑定子监听器。子图完成后才调用 merge；`GraphTopologyException`、`SubgraphInterruptedException`
+和 `SubgraphExecutionException` 保留精确类型，后者完整保留底层 cause。调度器在 Future 解包时透传
+这些结构化异常，HITL 不再伪装成顶层完成。
+
+### 【证据】单元测试与 EDD 同时验证结构、线程和异常边界
+
+`GraphTopologyTest`、`StateGraphTopologyTest` 和 `SubgraphNodeTest` 覆盖快照不可变性、条件环、无效
+拓扑、父子状态隔离、同 RunId、虚拟线程、进度顺序、子图创建次数、失败 cause 与中断请求。
+`StateGraphCompositionEddTest` 固定评测 `graph.linear`、`graph.react-cycle`、`graph.unreachable`、
+`graph.dead-end`、`graph.no-end-path`、`graph.subgraph-bridge`、`graph.subgraph-interrupt`、
+`graph.loop-budget` 八条路线，报告严格只含
+`taskId/status/valid/unreachableNodes/deadEndNodes/nodesWithoutEndPath/cyclicNodes/stopReason/passed`。
