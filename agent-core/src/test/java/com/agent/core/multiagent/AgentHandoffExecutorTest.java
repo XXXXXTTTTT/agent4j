@@ -111,6 +111,42 @@ class AgentHandoffExecutorTest {
     }
 
     @Test
+    void cancelingReturnedFutureInterruptsChildSubrun() throws InterruptedException {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch interrupted = new CountDownLatch(1);
+        GraphRegistry graphs = new GraphRegistry(Map.of("worker-graph", () -> {
+            StateGraph graph = new StateGraph(3);
+            graph.addNode("worker", state -> {
+                started.countDown();
+                try {
+                    Thread.sleep(Duration.ofSeconds(5));
+                } catch (InterruptedException exception) {
+                    interrupted.countDown();
+                    throw exception;
+                }
+                return state.withVariable("worker.result", "late");
+            });
+            graph.setEntryPoint("worker");
+            graph.addEdge("worker", StateGraph.END);
+            return graph;
+        }));
+        List<AgentHandoffEvent> events = new CopyOnWriteArrayList<>();
+
+        try (AgentHandoffExecutor executor = new AgentHandoffExecutor(
+                catalog(Set.of("worker")), graphs, events::add)) {
+            var future = executor.execute(
+                    UUID.randomUUID(),
+                    parentState(),
+                    handoff(Duration.ofSeconds(2)),
+                    HandoffExecutionContext.root("planner", 2, 2));
+
+            assertThat(started.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(future.cancel(true)).isTrue();
+            assertThat(interrupted.await(1, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    @Test
     void rejectsTargetOutsideSourceWhitelistBeforeCreatingGraph() {
         AtomicBoolean graphCreated = new AtomicBoolean();
         GraphRegistry graphs = new GraphRegistry(Map.of("worker-graph", () -> {

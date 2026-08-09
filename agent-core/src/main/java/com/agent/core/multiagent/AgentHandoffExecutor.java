@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -64,9 +65,9 @@ public final class AgentHandoffExecutor implements AutoCloseable {
         UUID childRunId = distinctRunId(parentRunId);
 
         CompletableFuture<AgentHandoffResult> result = new CompletableFuture<>();
-        final Future<AgentHandoffResult> childTask;
+        Future<AgentHandoffResult> submittedTask = null;
         try {
-            childTask = executor.submit(() -> runChild(
+            submittedTask = executor.submit(() -> runChild(
                     parentRunId,
                     childRunId,
                     parentState,
@@ -75,9 +76,18 @@ public final class AgentHandoffExecutor implements AutoCloseable {
                     target,
                     handoff,
                     childContext));
+            Future<AgentHandoffResult> childTask = submittedTask;
+            result.whenComplete((ignored, failure) -> {
+                if (result.isCancelled()) {
+                    childTask.cancel(true);
+                }
+            });
             executor.execute(() -> awaitChild(
                     parentRunId, childRunId, source, target, handoff, childTask, result));
         } catch (RejectedExecutionException exception) {
+            if (submittedTask != null) {
+                submittedTask.cancel(true);
+            }
             throw new IllegalStateException("Handoff 执行器已拒绝任务", exception);
         }
         return result;
@@ -212,6 +222,16 @@ public final class AgentHandoffExecutor implements AutoCloseable {
                     target,
                     handoff,
                     mapFailure(handoff, childRunId, target, exception.getCause()),
+                    result);
+        } catch (CancellationException exception) {
+            completeFailure(
+                    parentRunId,
+                    childRunId,
+                    source,
+                    target,
+                    handoff,
+                    new AgentHandoffExecutionException(
+                            handoff.taskId(), childRunId, target.agentId(), exception),
                     result);
         }
     }
