@@ -93,6 +93,6 @@ Record the signal-forwarding, readiness-before-traffic, resource-limit, and back
 
 Use JDK 21 and run `mvn -pl agent-core,agent-web,agent-eval -am test`, `mvn clean package -DskipTests -Dfrontend.skip=true`, both Compose config commands, and `git diff --check`.
 
-- [x] **Step 5: Commit and merge**
+- [x] **Step 5: Commit and close**
 
-Commit the plan/doc/EDD updates, fast-forward the feature branch into `master`, rerun the deployment-focused tests on merged `master`, remove only the chapter 25 worktree and branch, and run `git worktree prune`.
+Commit the plan/doc/EDD updates and rerun the deployment-focused tests on `master`. This chapter started from a clean `master` and was implemented directly there, so no chapter 25 feature worktree or branch exists to merge or remove.
