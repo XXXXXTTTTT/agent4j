@@ -183,7 +183,7 @@ public final class ReviewerNode implements Node {
             throws InterruptedException, ExecutionException {
         NavigationResult navigation = await(
                 browserAutomation.navigate(requestedUri, browserTimeout));
-        String dom = await(browserAutomation.extractDom());
+        String dom = await(browserAutomation.extractDom(browserTimeout));
         BrowserScreenshot screenshot = await(browserAutomation.screenshot(browserTimeout));
         return new BrowserEvidence(
                 Objects.requireNonNull(navigation, "导航结果不能为空"),

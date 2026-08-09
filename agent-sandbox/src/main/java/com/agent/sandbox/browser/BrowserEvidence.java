@@ -9,12 +9,14 @@ import java.util.Objects;
  * @param finalUrl   采集时的最终 URL
  * @param selector   精确证据选择器
  * @param dom        页面或元素 DOM
+ * @param visibleText 页面或元素的可见文本
  * @param screenshot PNG 截图
  */
 public record BrowserEvidence(
         URI finalUrl,
         String selector,
         String dom,
+        String visibleText,
         BrowserScreenshot screenshot) {
 
     /** 校验字段并复制截图。 */
@@ -22,6 +24,7 @@ public record BrowserEvidence(
         Objects.requireNonNull(finalUrl, "finalUrl 不能为空");
         Objects.requireNonNull(selector, "selector 不能为空");
         Objects.requireNonNull(dom, "dom 不能为空");
+        Objects.requireNonNull(visibleText, "visibleText 不能为空");
         Objects.requireNonNull(screenshot, "screenshot 不能为空");
         if (selector.isBlank()) {
             throw new IllegalArgumentException("selector 不能为空");

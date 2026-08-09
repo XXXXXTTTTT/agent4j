@@ -71,6 +71,12 @@ class BrowserToolDefinitionsTest {
                         && !definition.name().equals("browser.evidence"))
                 .extracting(ToolDefinition::riskLevel)
                 .containsOnly(ToolRiskLevel.MEDIUM);
+        ToolDefinition fill = definitions.stream()
+                .filter(definition -> definition.name().equals("browser.fill"))
+                .findFirst()
+                .orElseThrow();
+        assertThat(fill.inputSchema().path("properties").path("value").has("minLength"))
+                .isFalse();
         sessions.close();
     }
 
@@ -87,6 +93,8 @@ class BrowserToolDefinitionsTest {
                     mapper.createObjectNode().put("url", "https://example.test/start"));
             ToolResult click = execute(tools, mapper, "click", "browser.click",
                     mapper.createObjectNode().put("selector", "#submit"));
+            ToolResult clear = execute(tools, mapper, "clear", "browser.fill",
+                    mapper.createObjectNode().put("selector", "#name").put("value", ""));
             ToolResult fill = execute(tools, mapper, "fill", "browser.fill",
                     mapper.createObjectNode().put("selector", "#name").put("value", "Agent4J"));
             ToolResult scroll = execute(tools, mapper, "scroll", "browser.scroll",
@@ -100,12 +108,14 @@ class BrowserToolDefinitionsTest {
             assertThat(navigation.output().path("statusCode").intValue()).isEqualTo(204);
             assertThat(click.output().path("completed").booleanValue()).isTrue();
             assertThat(fill.output().path("completed").booleanValue()).isTrue();
+            assertThat(clear.output().path("completed").booleanValue()).isTrue();
             assertThat(scroll.output().path("completed").booleanValue()).isTrue();
             assertThat(evidence.status()).isEqualTo(ToolResultStatus.SUCCEEDED);
             assertThat(evidence.output().path("finalUrl").textValue())
                     .isEqualTo("https://example.test/final");
             assertThat(evidence.output().path("selector").textValue()).isEqualTo("#result");
             assertThat(evidence.output().path("dom").textValue()).isEqualTo("<div>ready</div>");
+            assertThat(evidence.output().path("visibleText").textValue()).isEqualTo("ready");
             assertThat(evidence.output().path("screenshotDataUrl").textValue())
                     .isEqualTo("data:image/png;base64," + Base64.getEncoder()
                             .encodeToString(new byte[] {1, 2, 3}));
@@ -120,7 +130,7 @@ class BrowserToolDefinitionsTest {
             assertThat(browser.deltaY).isEqualTo(500);
             assertThat(browser.evidenceSelector.selector()).isEqualTo("#result");
             assertThat(browser.timeouts).containsExactly(
-                    TIMEOUT, TIMEOUT, TIMEOUT, TIMEOUT, TIMEOUT);
+                    TIMEOUT, TIMEOUT, TIMEOUT, TIMEOUT, TIMEOUT, TIMEOUT);
         } finally {
             sessions.close();
         }
@@ -166,6 +176,28 @@ class BrowserToolDefinitionsTest {
         }
     }
 
+    @Test
+    void rejectsEvidencePayloadOverConfiguredSizeBudget() {
+        ObjectMapper mapper = new ObjectMapper();
+        TestBrowser browser = new TestBrowser();
+        browser.largeScreenshot = true;
+        BrowserSessionRegistry sessions = new BrowserSessionRegistry(() -> browser);
+        sessions.open(RUN_ID);
+        try (DefaultToolRegistry tools = new DefaultToolRegistry()) {
+            tools.registerAll(BrowserToolDefinitions.definitions(sessions, mapper, TIMEOUT));
+
+            ToolResult result = execute(tools, mapper, "oversized", "browser.evidence",
+                    mapper.createObjectNode().put("selector", "page"));
+
+            assertThat(result.status()).isEqualTo(ToolResultStatus.FAILED);
+            assertThat(result.errorStack())
+                    .contains("截图超过证据大小上限")
+                    .contains("at ");
+        } finally {
+            sessions.close();
+        }
+    }
+
     private ToolResult execute(
             DefaultToolRegistry tools,
             ObjectMapper mapper,
@@ -195,6 +227,7 @@ class BrowserToolDefinitionsTest {
         private String filledValue;
         private int deltaY;
         private BrowserEvidenceSelector evidenceSelector;
+        private boolean largeScreenshot;
 
         @Override
         public CompletableFuture<NavigationResult> navigate(URI url, Duration timeout) {
@@ -241,11 +274,20 @@ class BrowserToolDefinitionsTest {
                     URI.create("https://example.test/final"),
                     selector.selector(),
                     "<div>ready</div>",
-                    new BrowserScreenshot(new byte[] {1, 2, 3}, "image/png")));
+                    "ready",
+                    new BrowserScreenshot(
+                            largeScreenshot ? new byte[BrowserToolDefinitions.MAX_EVIDENCE_SCREENSHOT_BYTES + 1]
+                                    : new byte[] {1, 2, 3},
+                            "image/png")));
         }
 
         @Override
         public CompletableFuture<String> extractDom() {
+            return CompletableFuture.completedFuture("<html></html>");
+        }
+
+        @Override
+        public CompletableFuture<String> extractDom(Duration timeout) {
             return CompletableFuture.completedFuture("<html></html>");
         }
 

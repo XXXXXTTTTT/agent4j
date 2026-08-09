@@ -18,7 +18,9 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -82,11 +84,11 @@ class PlaywrightBrowserServiceTest {
         assertThat(navigation.requestedUrl()).isEqualTo(pageUri);
         assertThat(navigation.finalUrl()).isEqualTo(pageUri);
         assertThat(navigation.statusCode()).hasValue(200);
-        assertThat(service.extractDom().join()).contains("before");
+        assertThat(service.extractDom(Duration.ofSeconds(15)).join()).contains("before");
 
         service.click("#change", Duration.ofSeconds(15)).join();
 
-        assertThat(service.extractDom().join()).contains("after");
+        assertThat(service.extractDom(Duration.ofSeconds(15)).join()).contains("after");
         BrowserScreenshot screenshot = service.screenshot(Duration.ofSeconds(15)).join();
         assertThat(screenshot.pngBytes()).startsWith(PNG_SIGNATURE);
         assertThat(readPngHeight(screenshot.pngBytes())).isGreaterThanOrEqualTo(1600);
@@ -105,6 +107,7 @@ class PlaywrightBrowserServiceTest {
         assertThat(evidence.selector()).isEqualTo("#result");
         assertThat(evidence.finalUrl()).isEqualTo(pageUri);
         assertThat(evidence.dom()).contains("result");
+        assertThat(evidence.visibleText()).isEqualTo("result");
         assertThat(evidence.screenshot().pngBytes()).startsWith(PNG_SIGNATURE);
     }
 
@@ -134,6 +137,12 @@ class PlaywrightBrowserServiceTest {
                 BrowserEvidenceSelector.page(), Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("timeout");
+        assertThatThrownBy(() -> service.scroll(1, Duration.ofNanos(1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("1 毫秒");
+        assertThatThrownBy(() -> service.extractDom(Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("timeout");
     }
 
     @Test
@@ -154,11 +163,75 @@ class PlaywrightBrowserServiceTest {
         assertClosedFailure(service.click("#change", Duration.ofSeconds(1))::join);
         assertClosedFailure(service.fill("#input", "value", Duration.ofSeconds(1))::join);
         assertClosedFailure(service.scroll(100, Duration.ofSeconds(1))::join);
-        assertClosedFailure(service.extractDom()::join);
+        assertClosedFailure(service.extractDom(Duration.ofSeconds(1))::join);
         assertClosedFailure(service.screenshot(Duration.ofSeconds(1))::join);
         assertClosedFailure(service.capture(
                 BrowserEvidenceSelector.page(), Duration.ofSeconds(1))::join);
         assertThatCode(service::close).doesNotThrowAnyException();
+    }
+
+    @Test
+    void retriesCleanupAfterFailureAndBoundsEachCleanupWait() {
+        AtomicInteger attempts = new AtomicInteger();
+        PlaywrightBrowserService retrying = new PlaywrightBrowserService(
+                () -> attempts.incrementAndGet() == 1
+                        ? CompletableFuture.failedFuture(
+                                new IllegalStateException("first cleanup failed"))
+                        : CompletableFuture.completedFuture(null),
+                Duration.ofMillis(100));
+
+        assertThatThrownBy(retrying::close)
+                .isInstanceOf(BrowserAutomationException.class)
+                .hasMessageContaining("清理失败")
+                .hasRootCauseMessage("first cleanup failed");
+
+        assertThatCode(retrying::close).doesNotThrowAnyException();
+        assertThat(attempts).hasValue(2);
+
+        CompletableFuture<Void> blockedCleanup = new CompletableFuture<>();
+        AtomicInteger blockedAttempts = new AtomicInteger();
+        PlaywrightBrowserService bounded = new PlaywrightBrowserService(
+                () -> blockedAttempts.incrementAndGet() == 1
+                        ? blockedCleanup
+                        : CompletableFuture.completedFuture(null),
+                Duration.ofMillis(20));
+
+        assertThatThrownBy(bounded::close)
+                .isInstanceOf(BrowserAutomationException.class)
+                .hasMessageContaining("超时");
+        assertThatCode(bounded::close).doesNotThrowAnyException();
+        assertThat(blockedAttempts).hasValue(2);
+    }
+
+    @Test
+    void doesNotStartAnotherCleanupWhileTimedOutCleanupIsStillRunning() {
+        NonCancellableFuture blockedCleanup = new NonCancellableFuture();
+        AtomicInteger attempts = new AtomicInteger();
+        PlaywrightBrowserService service = new PlaywrightBrowserService(
+                () -> attempts.incrementAndGet() == 1
+                        ? blockedCleanup
+                        : CompletableFuture.completedFuture(null),
+                Duration.ofMillis(20));
+
+        assertThatThrownBy(service::close)
+                .isInstanceOf(BrowserAutomationException.class)
+                .hasMessageContaining("超时");
+        assertThatThrownBy(service::close)
+                .isInstanceOf(BrowserAutomationException.class)
+                .hasMessageContaining("仍在进行");
+        assertThat(attempts).hasValue(1);
+
+        blockedCleanup.complete(null);
+        assertThatCode(service::close).doesNotThrowAnyException();
+        assertThat(attempts).hasValue(2);
+    }
+
+    private static final class NonCancellableFuture extends CompletableFuture<Void> {
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            return false;
+        }
     }
 
     private void servePage(HttpExchange exchange) throws IOException {

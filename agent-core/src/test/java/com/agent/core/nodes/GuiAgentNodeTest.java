@@ -7,6 +7,7 @@ import com.agent.core.engine.StateGraph;
 import com.agent.core.gui.BrowserSessionRegistry;
 import com.agent.core.harness.HarnessEvent;
 import com.agent.core.harness.HarnessEventType;
+import com.agent.core.harness.HarnessHook;
 import com.agent.core.harness.HarnessHookChain;
 import com.agent.core.llm.LlmClient;
 import com.agent.core.llm.ModelEndpoint;
@@ -29,6 +30,7 @@ import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
@@ -46,10 +48,12 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.client.ExpectedCount.once;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 
 class GuiAgentNodeTest {
 
@@ -78,15 +82,15 @@ class GuiAgentNodeTest {
         TestBrowser browser = new TestBrowser();
         TestRuntime runtime = runtime(browser, 3);
         expectDecision(clickDecision());
-        expectDecision(doneDecision("evidence-1", "表单提交完成"));
+        expectDecision(doneDecision("evidence-2", "submitted"));
 
         AgentState result = runtime.execute(initialState());
 
         assertThat(result.variables())
                 .containsEntry(GuiAgentNode.URL_KEY, "https://page.test/start")
                 .containsEntry(GuiAgentNode.GOAL_KEY, "提交测试表单")
-                .containsEntry(GuiAgentNode.SUMMARY_KEY, "表单提交完成")
-                .containsEntry(PlannerNode.FINAL_RESPONSE_KEY, "表单提交完成")
+                .containsEntry(GuiAgentNode.SUMMARY_KEY, "submitted")
+                .containsEntry(PlannerNode.FINAL_RESPONSE_KEY, "submitted")
                 .containsEntry(GuiAgentNode.FINAL_URL_KEY, "https://page.test/final")
                 .containsEntry(GuiAgentNode.DOM_KEY, "<div>submitted</div>")
                 .containsEntry(GuiAgentNode.MODEL_KEY, "vision-model")
@@ -94,9 +98,19 @@ class GuiAgentNodeTest {
         assertThat(result.variables().get(GuiAgentNode.SCREENSHOT_DATA_URL_KEY))
                 .startsWith("data:image/png;base64,");
         JsonNode evidence = objectMapper.readTree(result.variables().get(GuiAgentNode.EVIDENCE_KEY));
-        assertThat(evidence).hasSize(2);
+        assertThat(evidence).hasSize(3);
         assertThat(evidence.get(0).path("id").textValue()).isEqualTo("evidence-0");
         assertThat(evidence.get(1).path("id").textValue()).isEqualTo("evidence-1");
+        assertThat(evidence.get(2).path("id").textValue()).isEqualTo("evidence-2");
+        assertThat(evidence.get(2).path("selector").textValue()).isEqualTo("page");
+        assertThat(evidence.get(0).path("dom").textValue()).isEqualTo("<div>ready</div>");
+        assertThat(evidence.get(0).path("visibleText").textValue()).isEqualTo("ready");
+        assertThat(evidence.get(1).path("dom").textValue()).isEqualTo("<div>submitted</div>");
+        assertThat(evidence.get(1).path("visibleText").textValue()).isEqualTo("submitted");
+        assertThat(evidence.get(2).path("visibleText").textValue()).isEqualTo("submitted");
+        assertThat(evidence).allSatisfy(item ->
+                assertThat(item.path("screenshotDataUrl").textValue())
+                        .startsWith("data:image/png;base64,"));
         JsonNode actions = objectMapper.readTree(result.variables().get(GuiAgentNode.ACTIONS_KEY));
         assertThat(actions).hasSize(2);
         assertThat(actions.get(0).path("action").textValue()).isEqualTo("click");
@@ -105,7 +119,8 @@ class GuiAgentNodeTest {
         assertThat(browser.clickedSelector).isEqualTo("#submit");
         assertThat(browser.closed).isTrue();
         assertThat(runtime.audits).extracting(ToolAuditEvent::toolName).containsExactly(
-                "browser.navigate", "browser.evidence", "browser.click", "browser.evidence");
+                "browser.navigate", "browser.evidence", "browser.click",
+                "browser.evidence", "browser.evidence");
         assertThat(runtime.events).extracting(HarnessEvent::eventType).contains(
                 HarnessEventType.BEFORE_TOOL,
                 HarnessEventType.AFTER_TOOL);
@@ -119,12 +134,12 @@ class GuiAgentNodeTest {
         browser.clickFailure = new IllegalStateException("button detached");
         TestRuntime runtime = runtime(browser, 3);
         expectDecision(clickDecision());
-        expectDecision(doneDecision("evidence-0", "保留失败前证据"));
+        expectDecision(doneDecision("evidence-0", "ready"));
 
         AgentState result = runtime.execute(initialState());
 
         assertThat(result.variables())
-                .containsEntry(PlannerNode.FINAL_RESPONSE_KEY, "保留失败前证据")
+                .containsEntry(PlannerNode.FINAL_RESPONSE_KEY, "ready")
                 .doesNotContainKey(GuiAgentNode.ERROR_KEY);
         JsonNode actions = objectMapper.readTree(result.variables().get(GuiAgentNode.ACTIONS_KEY));
         assertThat(actions.get(0).path("toolStatus").textValue()).isEqualTo("FAILED");
@@ -159,6 +174,58 @@ class GuiAgentNodeTest {
     }
 
     @Test
+    void rejectsDoneWhenReferencedDomDoesNotContainSummary() throws Exception {
+        TestBrowser browser = new TestBrowser();
+        TestRuntime runtime = runtime(browser, 1);
+        expectDecision(doneDecision("evidence-0", "不存在的完成文本"));
+
+        AgentState result = runtime.execute(initialState());
+
+        assertThat(result.variables().get(GuiAgentNode.ERROR_KEY))
+                .contains("done.summary")
+                .contains("最新页面证据可见文本")
+                .contains("at ");
+        assertThat(result.variables()).doesNotContainKey(PlannerNode.FINAL_RESPONSE_KEY);
+        assertThat(browser.closed).isTrue();
+        server.verify();
+        runtime.close();
+    }
+
+    @Test
+    void rejectsDoneUsingHiddenHtmlText() throws Exception {
+        TestBrowser hiddenBrowser = new TestBrowser();
+        hiddenBrowser.hiddenDomText = "hidden completion";
+        TestRuntime hiddenRuntime = runtime(hiddenBrowser, 1);
+        expectDecision(doneDecision("evidence-0", "hidden completion"));
+
+        AgentState hiddenResult = hiddenRuntime.execute(initialState());
+
+        assertThat(hiddenResult.variables().get(GuiAgentNode.ERROR_KEY))
+                .contains("可见文本")
+                .contains("at ");
+        assertThat(hiddenResult.variables()).doesNotContainKey(PlannerNode.FINAL_RESPONSE_KEY);
+        server.verify();
+        hiddenRuntime.close();
+    }
+
+    @Test
+    void rejectsDoneUsingHistoricalEvidenceAfterSuccessfulAction() throws Exception {
+        TestBrowser historicalBrowser = new TestBrowser();
+        TestRuntime historicalRuntime = runtime(historicalBrowser, 2);
+        expectDecision(clickDecision());
+        expectDecision(doneDecision("evidence-0", "ready"));
+
+        AgentState historicalResult = historicalRuntime.execute(initialState());
+
+        assertThat(historicalResult.variables().get(GuiAgentNode.ERROR_KEY))
+                .contains("最新页面证据")
+                .contains("at ");
+        assertThat(historicalResult.variables()).doesNotContainKey(PlannerNode.FINAL_RESPONSE_KEY);
+        server.verify();
+        historicalRuntime.close();
+    }
+
+    @Test
     void stopsAtMaxStepsAndClosesTheRunSession() throws Exception {
         TestBrowser browser = new TestBrowser();
         TestRuntime runtime = runtime(browser, 1);
@@ -177,10 +244,44 @@ class GuiAgentNodeTest {
     }
 
     @Test
+    void returnsGuiErrorWhenCriticalHarnessHookRejectsBrowserTool() throws Exception {
+        TestBrowser browser = new TestBrowser();
+        HarnessHook critical = new HarnessHook() {
+            @Override
+            public void onEvent(HarnessEvent event) {
+                if (event.eventType() == HarnessEventType.BEFORE_TOOL) {
+                    throw new IllegalStateException("critical gui hook failed");
+                }
+            }
+
+            @Override
+            public boolean critical() {
+                return true;
+            }
+        };
+        TestRuntime runtime = runtime(browser, 2, new HarnessHookChain(List.of(critical)));
+
+        AgentState result = runtime.execute(initialState());
+
+        assertThat(result.variables().get(GuiAgentNode.ERROR_KEY))
+                .contains("HarnessHookException")
+                .contains("critical gui hook failed")
+                .contains("at ");
+        assertThat(result.variables()).doesNotContainKey(PlannerNode.FINAL_RESPONSE_KEY);
+        assertThat(browser.closed).isTrue();
+        runtime.close();
+    }
+
+    @Test
     void rejectsMalformedModelJsonAndStoresTheRawResponse() throws Exception {
         TestBrowser browser = new TestBrowser();
         TestRuntime runtime = runtime(browser, 2);
         expectDecision("""
+                {"action":"done","selector":"","value":"","deltaY":0,
+                 "evidenceSelector":"","reason":"完成","summary":"完成",
+                 "evidenceRefs":["evidence-0"],"unknown":true}
+                """);
+        expectTextDecision("""
                 {"action":"done","selector":"","value":"","deltaY":0,
                  "evidenceSelector":"","reason":"完成","summary":"完成",
                  "evidenceRefs":["evidence-0"],"unknown":true}
@@ -198,7 +299,89 @@ class GuiAgentNodeTest {
         runtime.close();
     }
 
+    @Test
+    void rejectsWrongBrowserActionFunctionName() throws Exception {
+        TestBrowser browser = new TestBrowser();
+        TestRuntime runtime = runtime(browser, 1);
+        String response = responseJsonWithToolCalls(
+                "other_action", List.of(doneDecision("evidence-0", "ready")));
+        expectDecisionResponse(response);
+        expectDecisionResponse(response);
+
+        AgentState result = runtime.execute(initialState());
+
+        assertThat(result.variables().get(GuiAgentNode.ERROR_KEY))
+                .contains("ToolCall name 必须为 browser_action")
+                .contains("at ");
+        assertThat(result.variables()).doesNotContainKey(PlannerNode.FINAL_RESPONSE_KEY);
+        assertThat(browser.closed).isTrue();
+        server.verify();
+        runtime.close();
+    }
+
+    @Test
+    void rejectsMultipleBrowserActionToolCalls() throws Exception {
+        TestBrowser browser = new TestBrowser();
+        TestRuntime runtime = runtime(browser, 1);
+        String done = doneDecision("evidence-0", "ready");
+        String response = responseJsonWithToolCalls(
+                "browser_action", List.of(done, done));
+        expectDecisionResponse(response);
+        expectDecisionResponse(response);
+
+        AgentState result = runtime.execute(initialState());
+
+        assertThat(result.variables().get(GuiAgentNode.ERROR_KEY))
+                .contains("必须只包含一个 ToolCall")
+                .contains("at ");
+        assertThat(result.variables()).doesNotContainKey(PlannerNode.FINAL_RESPONSE_KEY);
+        assertThat(browser.closed).isTrue();
+        server.verify();
+        runtime.close();
+    }
+
+    @Test
+    void fallsBackToDomTextWhenMultimodalRequestIsRejected() throws Exception {
+        TestBrowser browser = new TestBrowser();
+        TestRuntime runtime = runtime(browser, 1);
+        expectMultimodalFailure(HttpStatus.BAD_REQUEST);
+        expectTextDecision(doneDecision("evidence-0", "ready"));
+
+        AgentState result = runtime.execute(initialState());
+
+        assertThat(result.variables())
+                .containsEntry(PlannerNode.FINAL_RESPONSE_KEY, "ready")
+                .containsEntry(GuiAgentNode.SUMMARY_KEY, "ready")
+                .doesNotContainKey(GuiAgentNode.ERROR_KEY);
+        assertThat(browser.closed).isTrue();
+        server.verify();
+        runtime.close();
+    }
+
+    @Test
+    void fallsBackToDomTextWhenMultimodalResponseViolatesActionProtocol() throws Exception {
+        TestBrowser browser = new TestBrowser();
+        TestRuntime runtime = runtime(browser, 1);
+        expectMultimodalTextResponse("images are not supported");
+        expectTextDecision(doneDecision("evidence-0", "ready"));
+
+        AgentState result = runtime.execute(initialState());
+
+        assertThat(result.variables())
+                .containsEntry(PlannerNode.FINAL_RESPONSE_KEY, "ready")
+                .doesNotContainKey(GuiAgentNode.ERROR_KEY);
+        server.verify();
+        runtime.close();
+    }
+
     private TestRuntime runtime(TestBrowser browser, int maxSteps) {
+        return runtime(browser, maxSteps, new HarnessHookChain(List.of()));
+    }
+
+    private TestRuntime runtime(
+            TestBrowser browser,
+            int maxSteps,
+            HarnessHookChain harness) {
         List<ToolAuditEvent> audits = new CopyOnWriteArrayList<>();
         List<HarnessEvent> events = new CopyOnWriteArrayList<>();
         BrowserSessionRegistry sessions = new BrowserSessionRegistry(() -> browser);
@@ -216,10 +399,13 @@ class GuiAgentNodeTest {
                 tools,
                 TIMEOUT,
                 maxSteps);
+        List<HarnessHook> hooks = new ArrayList<>();
+        hooks.add(events::add);
+        hooks.addAll(harness.hooks());
         StateGraph graph = new StateGraph(
                 BUDGET,
                 InterruptPolicy.never(),
-                new HarnessHookChain(List.of(events::add)));
+                new HarnessHookChain(hooks));
         graph.addNode("gui", node)
                 .addEdge("gui", StateGraph.END)
                 .setEntryPoint("gui");
@@ -245,13 +431,76 @@ class GuiAgentNodeTest {
     }
 
     private void expectDecision(String decision) throws Exception {
+        expectDecisionResponse(responseJson(decision));
+    }
+
+    private void expectDecisionResponse(String response) {
         server.expect(once(), requestTo(BASE_URL + CHAT_PATH))
                 .andExpect(content().string(containsString("\"model\":\"vision-model\"")))
                 .andExpect(content().string(containsString("提交测试表单")))
+                .andExpect(content().string(containsString(
+                        "\"name\":\"browser_action\"")))
+                .andExpect(content().string(containsString(
+                        "\"tool_choice\":{\"type\":\"function\",\"function\":{\"name\":\"browser_action\"}}")))
+                .andExpect(content().string(containsString("\"strict\":true")))
+                .andExpect(content().string(containsString("\"anyOf\"")))
+                .andExpect(content().string(containsString("\"const\":\"click\"")))
+                .andExpect(content().string(containsString("\"minItems\":1")))
+                .andExpect(content().string(containsString(
+                        "fill、click、scroll 的 summary 必须是空字符串")))
+                .andExpect(content().string(containsString(
+                        "reason 在所有动作中必须是非空字符串")))
+                .andExpect(content().string(containsString(
+                        "done 的 summary 必须逐字等于引用证据 DOM 中出现的可见文本")))
+                .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
+    }
+
+    private void expectMultimodalFailure(HttpStatus status) {
+        server.expect(once(), requestTo(BASE_URL + CHAT_PATH))
+                .andExpect(content().string(containsString("\"image_url\"")))
+                .andRespond(withStatus(status)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"error\":{\"type\":\"upstream_error\"}}"));
+    }
+
+    private void expectMultimodalTextResponse(String text) throws Exception {
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("id", "gui-text-response");
+        response.put("object", "chat.completion");
+        response.put("created", 1);
+        response.put("model", "vision-model");
+        ObjectNode choice = response.putArray("choices").addObject();
+        choice.put("index", 0);
+        choice.putObject("message")
+                .put("role", "assistant")
+                .put("content", text);
+        choice.put("finish_reason", "stop");
+        server.expect(once(), requestTo(BASE_URL + CHAT_PATH))
+                .andExpect(content().string(containsString("\"image_url\"")))
+                .andRespond(withSuccess(
+                        objectMapper.writeValueAsString(response),
+                        MediaType.APPLICATION_JSON));
+    }
+
+    private void expectTextDecision(String decision) throws Exception {
+        server.expect(once(), requestTo(BASE_URL + CHAT_PATH))
+                .andExpect(content().string(containsString("\"model\":\"vision-model\"")))
+                .andExpect(content().string(containsString("提交测试表单")))
+                .andExpect(content().string(not(containsString("\"image_url\""))))
+                .andExpect(content().string(containsString(
+                        "\"name\":\"browser_action\"")))
+                .andExpect(content().string(containsString(
+                        "\"tool_choice\":{\"type\":\"function\",\"function\":{\"name\":\"browser_action\"}}")))
                 .andRespond(withSuccess(responseJson(decision), MediaType.APPLICATION_JSON));
     }
 
     private String responseJson(String decision) throws Exception {
+        return responseJsonWithToolCalls("browser_action", List.of(decision));
+    }
+
+    private String responseJsonWithToolCalls(
+            String functionName,
+            List<String> arguments) throws Exception {
         ObjectNode response = objectMapper.createObjectNode();
         response.put("id", "gui-response");
         response.put("object", "chat.completion");
@@ -259,10 +508,18 @@ class GuiAgentNodeTest {
         response.put("model", "vision-model");
         ObjectNode choice = response.putArray("choices").addObject();
         choice.put("index", 0);
-        choice.putObject("message")
-                .put("role", "assistant")
-                .put("content", decision);
-        choice.put("finish_reason", "stop");
+        ObjectNode message = choice.putObject("message").put("role", "assistant");
+        message.putNull("content");
+        var toolCalls = message.putArray("tool_calls");
+        for (int index = 0; index < arguments.size(); index++) {
+            toolCalls.addObject()
+                    .put("id", "browser-action-call-" + index)
+                    .put("type", "function")
+                    .putObject("function")
+                    .put("name", functionName)
+                    .put("arguments", arguments.get(index));
+        }
+        choice.put("finish_reason", "tool_calls");
         return objectMapper.writeValueAsString(response);
     }
 
@@ -342,6 +599,7 @@ class GuiAgentNodeTest {
         private boolean closed;
         private String clickedSelector;
         private RuntimeException clickFailure;
+        private String hiddenDomText = "";
 
         @Override
         public CompletableFuture<NavigationResult> navigate(URI url, Duration timeout) {
@@ -380,15 +638,25 @@ class GuiAgentNodeTest {
                 Duration timeout) {
             captureCount++;
             String dom = submitted ? "<div>submitted</div>" : "<div>ready</div>";
+            if (!hiddenDomText.isEmpty()) {
+                dom = "<script>" + hiddenDomText + "</script>" + dom;
+            }
+            String visibleText = submitted ? "submitted" : "ready";
             return CompletableFuture.completedFuture(new BrowserEvidence(
                     URI.create("https://page.test/final"),
                     selector.selector(),
                     dom,
+                    visibleText,
                     new BrowserScreenshot(new byte[] {(byte) captureCount}, "image/png")));
         }
 
         @Override
         public CompletableFuture<String> extractDom() {
+            return CompletableFuture.completedFuture("<html></html>");
+        }
+
+        @Override
+        public CompletableFuture<String> extractDom(Duration timeout) {
             return CompletableFuture.completedFuture("<html></html>");
         }
 

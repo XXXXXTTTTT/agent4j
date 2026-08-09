@@ -426,6 +426,11 @@ class ReviewerNodeTest {
         }
 
         @Override
+        public CompletableFuture<String> extractDom(Duration timeout) {
+            return CompletableFuture.completedFuture("<html><body>ready</body></html>");
+        }
+
+        @Override
         public CompletableFuture<BrowserScreenshot> screenshot(Duration timeout) {
             screenshotTimeout = timeout;
             return CompletableFuture.completedFuture(

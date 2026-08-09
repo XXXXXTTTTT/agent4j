@@ -25,7 +25,11 @@ import com.agent.core.nodes.ReviewerNode;
 import com.agent.core.intent.ModelIntentClassifier;
 import com.agent.core.intent.ModelRouterIntentModel;
 import com.agent.core.trace.RunLogPublisher;
+import com.agent.core.tool.DefaultToolAuthorizer;
 import com.agent.core.tool.DefaultToolRegistry;
+import com.agent.core.tool.JacksonToolSchemaValidator;
+import com.agent.core.tool.ToolAuditEvent;
+import com.agent.core.tool.ToolAuditSink;
 import com.agent.core.tool.ToolRegistry;
 import com.agent.core.tool.builtin.CodePatchTool;
 import com.agent.core.tool.builtin.BrowserToolDefinitions;
@@ -78,12 +82,50 @@ public class ProductionGraphConfiguration {
             AstService astService,
             ObjectMapper objectMapper,
             BrowserSessionRegistry browserSessions,
-            ProductionAgentProperties properties) {
-        DefaultToolRegistry registry = new DefaultToolRegistry();
+            ProductionAgentProperties properties,
+            ToolAuditSink auditSink) {
+        DefaultToolRegistry registry = new DefaultToolRegistry(
+                new JacksonToolSchemaValidator(),
+                new DefaultToolAuthorizer(),
+                auditSink,
+                objectMapper,
+                System::nanoTime);
         registry.register(CodePatchTool.definition(astService, objectMapper));
         registry.registerAll(BrowserToolDefinitions.definitions(
                 browserSessions, objectMapper, properties.browserTimeout()));
         return registry;
+    }
+
+    /** 为直接构造生产图的兼容入口提供无外部副作用的审计端口。 */
+    ToolRegistry productionToolRegistry(
+            AstService astService,
+            ObjectMapper objectMapper,
+            BrowserSessionRegistry browserSessions,
+            ProductionAgentProperties properties) {
+        return productionToolRegistry(
+                astService,
+                objectMapper,
+                browserSessions,
+                properties,
+                ToolAuditSink.noop());
+    }
+
+    /** 将工具审计事件写入现有 Logback 控制台与滚动文件。 */
+    @Bean
+    ToolAuditSink productionToolAuditSink() {
+        return event -> LOGGER.info(
+                "Tool audit runId={} nodeName={} userId={} callId={} toolName={} risk={} status={} durationMs={} argumentsSha256={} errorType={} cancellationRequested={}",
+                event.runId(),
+                event.nodeName(),
+                event.userId(),
+                event.callId(),
+                event.toolName(),
+                event.riskLevel().map(Enum::name).orElse(""),
+                event.status(),
+                event.durationMs(),
+                event.argumentsSha256(),
+                event.errorType(),
+                event.cancellationRequested());
     }
 
     /** 创建按 Run 隔离浏览器会话的注册表。 */

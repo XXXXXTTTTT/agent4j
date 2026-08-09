@@ -25,6 +25,9 @@ class BrowserModelTest {
                 .getMethod("extractDom")
                 .getReturnType()).isEqualTo(CompletableFuture.class);
         assertThat(BrowserAutomation.class
+                .getMethod("extractDom", Duration.class)
+                .getReturnType()).isEqualTo(CompletableFuture.class);
+        assertThat(BrowserAutomation.class
                 .getMethod("screenshot", Duration.class)
                 .getReturnType()).isEqualTo(CompletableFuture.class);
     }

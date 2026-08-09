@@ -68,11 +68,19 @@ public interface BrowserAutomation extends AutoCloseable {
     }
 
     /**
-     * 提取当前页面的完整 DOM。
+     * 提取当前页面的完整 DOM（兼容旧版协议）。
      *
      * @return 异步 DOM 字符串
      */
     CompletableFuture<String> extractDom();
+
+    /**
+     * 提取当前页面的完整 DOM。
+     *
+     * @param timeout DOM 提取超时时间
+     * @return 异步 DOM 字符串
+     */
+    CompletableFuture<String> extractDom(Duration timeout);
 
     /**
      * 截取当前完整页面。

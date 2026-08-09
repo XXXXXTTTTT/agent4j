@@ -397,7 +397,20 @@ public final class LlmClient implements AutoCloseable {
          * @return 函数工具
          */
         public static Tool function(String name, String description, JsonNode parameters) {
-            return new Tool("function", new FunctionDefinition(name, description, parameters));
+            return new Tool(
+                    "function",
+                    new FunctionDefinition(name, description, parameters, null));
+        }
+
+        /** 创建显式声明严格 JSON Schema 的函数工具定义。 */
+        public static Tool function(
+                String name,
+                String description,
+                JsonNode parameters,
+                boolean strict) {
+            return new Tool(
+                    "function",
+                    new FunctionDefinition(name, description, parameters, strict));
         }
 
         /**
@@ -413,7 +426,11 @@ public final class LlmClient implements AutoCloseable {
      * 函数工具元数据。
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record FunctionDefinition(String name, String description, JsonNode parameters) {
+    public record FunctionDefinition(
+            String name,
+            String description,
+            JsonNode parameters,
+            Boolean strict) {
 
         /**
          * 校验函数工具元数据。

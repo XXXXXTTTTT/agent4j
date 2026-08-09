@@ -31,12 +31,15 @@ public final class BrowserSessionRegistry implements AutoCloseable {
         }
         BrowserAutomation session = Objects.requireNonNull(
                 sessionFactory.get(), "sessionFactory 不得返回 null");
+        if (sessions.values().stream().anyMatch(existing -> existing == session)) {
+            throw new IllegalStateException("sessionFactory 必须为每个 Run 返回独占会话");
+        }
         sessions.put(runId, session);
         return session;
     }
 
     /** 获取精确 Run 的已注册会话。 */
-    public BrowserAutomation require(UUID runId) {
+    public synchronized BrowserAutomation require(UUID runId) {
         ensureOpen();
         Objects.requireNonNull(runId, "runId 不能为空");
         BrowserAutomation session = sessions.get(runId);
@@ -47,24 +50,24 @@ public final class BrowserSessionRegistry implements AutoCloseable {
     }
 
     /** 移除并关闭精确 Run 的会话，未知 Run 不产生副作用。 */
-    public void close(UUID runId) {
+    public synchronized void close(UUID runId) {
         Objects.requireNonNull(runId, "runId 不能为空");
-        BrowserAutomation session = sessions.remove(runId);
+        BrowserAutomation session = sessions.get(runId);
         if (session != null) {
             session.close();
+            sessions.remove(runId, session);
         }
     }
 
     /** 关闭全部会话，并把后续清理失败附加到首个异常。 */
     @Override
-    public void close() {
-        if (!closed.compareAndSet(false, true)) {
-            return;
-        }
+    public synchronized void close() {
+        closed.set(true);
         RuntimeException failure = null;
-        for (UUID runId : new ArrayList<>(sessions.keySet())) {
+        for (var entry : new ArrayList<>(sessions.entrySet())) {
             try {
-                close(runId);
+                entry.getValue().close();
+                sessions.remove(entry.getKey(), entry.getValue());
             } catch (RuntimeException exception) {
                 if (failure == null) {
                     failure = exception;

@@ -32,6 +32,17 @@ class LlmClientTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
+    void serializesStrictFunctionDefinitionWhenExplicitlyRequested() {
+        JsonNode parameters = objectMapper.createObjectNode().put("type", "object");
+
+        JsonNode tool = objectMapper.valueToTree(
+                LlmClient.Tool.function("browser_action", "Browser action", parameters, true));
+
+        assertThat(tool.at("/function/strict").booleanValue()).isTrue();
+        assertThat(tool.at("/function/name").textValue()).isEqualTo("browser_action");
+    }
+
+    @Test
     void completesFunctionCallingRequestOnVirtualThread() {
         RestClient.Builder builder = RestClient.builder().baseUrl("https://gateway.test");
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();

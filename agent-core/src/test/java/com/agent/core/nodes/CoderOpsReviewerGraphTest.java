@@ -172,6 +172,12 @@ class CoderOpsReviewerGraphTest {
         }
 
         @Override
+        public CompletableFuture<String> extractDom(Duration timeout) {
+            return CompletableFuture.completedFuture(
+                    "<html><body>after</body></html>");
+        }
+
+        @Override
         public CompletableFuture<BrowserScreenshot> screenshot(Duration timeout) {
             return CompletableFuture.completedFuture(
                     new BrowserScreenshot(new byte[] {1, 2, 3}, "image/png"));

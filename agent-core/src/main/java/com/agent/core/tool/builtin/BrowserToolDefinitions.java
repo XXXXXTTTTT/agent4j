@@ -36,6 +36,9 @@ public final class BrowserToolDefinitions {
     public static final String EVIDENCE_NAME = "browser.evidence";
     public static final int MAX_TEXT_CODE_POINTS = 16_384;
     public static final int MAX_SCROLL_DELTA = 10_000;
+    public static final int MAX_EVIDENCE_DOM_CODE_POINTS = 64_000;
+    public static final int MAX_EVIDENCE_VISIBLE_TEXT_CODE_POINTS = 16_384;
+    public static final int MAX_EVIDENCE_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 
     private BrowserToolDefinitions() {
     }
@@ -89,7 +92,7 @@ public final class BrowserToolDefinitions {
             Duration timeout) {
         ObjectNode schema = selectorSchema(mapper);
         schema.withObject("properties").set(
-                "value", stringSchema(mapper, MAX_TEXT_CODE_POINTS));
+                "value", boundedStringSchema(mapper, MAX_TEXT_CODE_POINTS));
         schema.withArray("required").add("value");
         return definition(FILL_NAME, "向精确选择器定位的输入控件填充值",
                 schema, ToolRiskLevel.MEDIUM, timeout,
@@ -97,7 +100,7 @@ public final class BrowserToolDefinitions {
                     BrowserAutomation browser = sessions.require(context.runId());
                     return completed(mapper, browser, timeout,
                         () -> browser.fill(
-                                text(call, "selector"), text(call, "value"), timeout));
+                                text(call, "selector"), value(call, "value"), timeout));
                 });
     }
 
@@ -175,13 +178,21 @@ public final class BrowserToolDefinitions {
         BrowserEvidence evidence = await(sessions.require(context.runId())
                 .capture(evidenceSelector, timeout));
         byte[] png = evidence.screenshot().pngBytes();
+        if (png.length > MAX_EVIDENCE_SCREENSHOT_BYTES) {
+            throw new IllegalArgumentException("截图超过证据大小上限");
+        }
+        String dom = truncateCodePoints(
+                evidence.dom(), MAX_EVIDENCE_DOM_CODE_POINTS);
+        String visibleText = truncateCodePoints(
+                evidence.visibleText(), MAX_EVIDENCE_VISIBLE_TEXT_CODE_POINTS);
         return mapper.createObjectNode()
                 .put("finalUrl", evidence.finalUrl().toString())
                 .put("selector", evidence.selector())
-                .put("dom", evidence.dom())
+                .put("dom", dom)
+                .put("visibleText", visibleText)
                 .put("screenshotDataUrl", "data:image/png;base64,"
                         + Base64.getEncoder().encodeToString(png))
-                .put("domSha256", sha256(evidence.dom().getBytes(StandardCharsets.UTF_8)))
+                .put("domSha256", sha256(dom.getBytes(StandardCharsets.UTF_8)))
                 .put("screenshotSha256", sha256(png));
     }
 
@@ -218,9 +229,13 @@ public final class BrowserToolDefinitions {
     }
 
     private static ObjectNode stringSchema(ObjectMapper mapper, int maximumLength) {
+        return boundedStringSchema(mapper, maximumLength)
+                .put("minLength", 1);
+    }
+
+    private static ObjectNode boundedStringSchema(ObjectMapper mapper, int maximumLength) {
         return mapper.createObjectNode()
                 .put("type", "string")
-                .put("minLength", 1)
                 .put("maxLength", maximumLength);
     }
 
@@ -230,6 +245,16 @@ public final class BrowserToolDefinitions {
             throw new IllegalArgumentException(field + " 不能为空");
         }
         return value;
+    }
+
+    private static String value(ToolCall call, String field) {
+        JsonNode value = call.arguments().get(field);
+        if (value == null || !value.isTextual()
+                || value.textValue().codePointCount(0, value.textValue().length())
+                > MAX_TEXT_CODE_POINTS) {
+            throw new IllegalArgumentException(field + " 必须是有界字符串");
+        }
+        return value.textValue();
     }
 
     private static URI validateUrl(String value) {
@@ -263,6 +288,14 @@ public final class BrowserToolDefinitions {
         } catch (Exception exception) {
             throw new IllegalStateException("JDK 必须提供 SHA-256", exception);
         }
+    }
+
+    private static String truncateCodePoints(String value, int maximumCodePoints) {
+        int codePoints = value.codePointCount(0, value.length());
+        if (codePoints <= maximumCodePoints) {
+            return value;
+        }
+        return value.substring(0, value.offsetByCodePoints(0, maximumCodePoints));
     }
 
     private static void requirePositive(Duration timeout) {
