@@ -5,6 +5,7 @@ import com.agent.core.llm.LlmClient;
 import com.agent.core.llm.ModelEndpoint;
 import com.agent.core.llm.ModelRouter;
 import com.agent.core.llm.TaskType;
+import com.agent.core.tool.DefaultToolRegistry;
 import com.agent.sandbox.ast.AstService;
 import com.agent.sandbox.ast.WorkspaceSnapshotService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -125,26 +126,44 @@ class CoderNodeTest {
                 .andRespond(withSuccess(coderResponse(objectMapper), MediaType.APPLICATION_JSON));
 
         try (client) {
-            CoderNode node = new CoderNode(
-                    new AstService(),
-                    router,
-                    objectMapper,
-                    new WorkspaceSnapshotService(10, 4096));
+            try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+                registry.register(com.agent.core.tool.builtin.CodePatchTool.definition(
+                        new AstService(), objectMapper));
+                CoderNode node = new CoderNode(
+                        new AstService(),
+                        router,
+                        objectMapper,
+                        new WorkspaceSnapshotService(10, 4096),
+                        registry);
             AgentState result = node.execute(AgentState.empty()
                     .withVariable(PlannerNode.TASK_KEY, "把 value.txt 改成 after")
                     .withVariable(PlannerNode.PLAN_KEY, "修改 value.txt 并运行测试")
+                    .withVariable(PlannerNode.USER_ID_KEY, "user-1")
+                    .withVariable(PlannerNode.KNOWLEDGE_CONTEXT_KEY, "仓库规则: 使用小范围补丁")
+                    .withVariable(PlannerNode.KNOWLEDGE_FINGERPRINT_KEY, "knowledge-sha")
+                    .withVariable(PlannerNode.KNOWLEDGE_SOURCES_KEY, "2")
                     .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString()));
 
             assertThat(result.variables()).as("coder variables").doesNotContainKey(CoderNode.ERROR_KEY);
             assertThat(Files.readString(workspace.resolve("value.txt"))).isEqualTo("after\n");
+            assertThat(result.variables().get(CoderNode.REQUEST_KEY))
+                    .contains("仓库规则: 使用小范围补丁")
+                    .contains("knowledge-sha")
+                    .contains("2");
             assertThat(result.variables())
-                    .containsEntry(CoderNode.COMMAND_KEY, "cat value.txt")
+                    .containsEntry(CoderNode.COMMAND_NAME_KEY, "test.cat")
+                    .containsEntry(CoderNode.COMMAND_ARGUMENTS_KEY, "[\"value.txt\"]")
+                    .containsEntry(OpsNode.COMMAND_NAME_KEY, "test.cat")
+                    .containsEntry(OpsNode.COMMAND_ARGUMENTS_KEY, "[\"value.txt\"]")
+                    .containsEntry(CoderNode.KNOWLEDGE_FINGERPRINT_KEY, "knowledge-sha")
+                    .containsEntry(CoderNode.KNOWLEDGE_SOURCES_KEY, "2")
                     .containsEntry(CoderNode.UPDATED_FILES_KEY, "value.txt")
                     .containsEntry(CoderNode.MODEL_KEY, "coder-model")
                     .containsKey(CoderNode.REQUEST_KEY)
                     .containsKey(CoderNode.RESPONSE_KEY)
                     .doesNotContainKey(CoderNode.ERROR_KEY);
             assertThat(result.trace()).containsExactly("coder");
+            }
         }
         server.verify();
     }
@@ -152,6 +171,60 @@ class CoderNodeTest {
     private String coderResponse(ObjectMapper objectMapper) throws Exception {
         var response = objectMapper.createObjectNode();
         response.put("id", "coder-response");
+        response.put("object", "chat.completion");
+        response.put("created", 1720000000L);
+        response.put("model", "coder-model");
+        var choice = response.putArray("choices").addObject();
+        choice.put("index", 0);
+        var message = choice.putObject("message");
+        message.put("role", "assistant");
+        message.put("content", objectMapper.writeValueAsString(java.util.Map.of(
+                "summary", "修改值文件",
+                "unifiedDiff", validDiff(),
+                "commandName", "test.cat",
+                "commandArguments", java.util.List.of("value.txt"))));
+        choice.put("finish_reason", "stop");
+        return objectMapper.writeValueAsString(response);
+    }
+
+    @Test
+    void rejectsLegacyRawCommandProtocol() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://coder.test");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        LlmClient client = new LlmClient(builder.build(), objectMapper, "/v1/chat/completions");
+        ModelEndpoint endpoint = new ModelEndpoint(
+                "coder-endpoint", "coder-model", client,
+                CircuitBreaker.ofDefaults("coder-breaker-legacy"));
+        ModelRouter router = new ModelRouter(java.util.Map.of(
+                TaskType.CODE, java.util.List.of(endpoint),
+                TaskType.VISION, java.util.List.of(endpoint),
+                TaskType.QUICK_CLASSIFICATION, java.util.List.of(endpoint)));
+        server.expect(once(), requestTo("https://coder.test/v1/chat/completions"))
+                .andRespond(withSuccess(legacyCoderResponse(objectMapper), MediaType.APPLICATION_JSON));
+        try (client; DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            registry.register(com.agent.core.tool.builtin.CodePatchTool.definition(
+                    new AstService(), objectMapper));
+            CoderNode node = new CoderNode(
+                    new AstService(), router, objectMapper,
+                    new WorkspaceSnapshotService(10, 4096), registry);
+            AgentState result = node.execute(AgentState.empty()
+                    .withVariable(PlannerNode.TASK_KEY, "修改 value.txt")
+                    .withVariable(PlannerNode.PLAN_KEY, "应用补丁")
+                    .withVariable(PlannerNode.USER_ID_KEY, "user-1")
+                    .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString()));
+            assertThat(result.variables().get(CoderNode.ERROR_KEY))
+                    .contains("MismatchedInputException")
+                    .contains("commandName")
+                    .contains("at ");
+            assertThat(Files.readString(workspace.resolve("value.txt"))).isEqualTo("before\n");
+        }
+        server.verify();
+    }
+
+    private String legacyCoderResponse(ObjectMapper objectMapper) throws Exception {
+        var response = objectMapper.createObjectNode();
+        response.put("id", "legacy-response");
         response.put("object", "chat.completion");
         response.put("created", 1720000000L);
         response.put("model", "coder-model");

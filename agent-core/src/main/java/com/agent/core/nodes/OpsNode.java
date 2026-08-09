@@ -28,6 +28,8 @@ import java.util.function.Consumer;
 public final class OpsNode implements Node {
 
     public static final String COMMAND_KEY = "ops.command";
+    public static final String COMMAND_NAME_KEY = "ops.commandName";
+    public static final String COMMAND_ARGUMENTS_KEY = "ops.commandArguments";
     public static final String EXIT_CODE_KEY = "ops.exitCode";
     public static final String STDOUT_KEY = "ops.stdout";
     public static final String STDERR_KEY = "ops.stderr";
