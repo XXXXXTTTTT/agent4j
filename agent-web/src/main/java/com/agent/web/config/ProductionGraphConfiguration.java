@@ -22,7 +22,9 @@ import com.agent.core.nodes.OpsNode;
 import com.agent.core.nodes.PlannerNode;
 import com.agent.core.nodes.PlannerPromptTemplates;
 import com.agent.core.nodes.ReviewerNode;
+import com.agent.core.security.DefaultOutputRedactor;
 import com.agent.core.security.DefaultPromptInjectionDetector;
+import com.agent.core.security.DefaultToolParameterPolicy;
 import com.agent.core.security.SecurityViolationSink;
 import com.agent.core.intent.ModelIntentClassifier;
 import com.agent.core.intent.ModelRouterIntentModel;
@@ -43,6 +45,7 @@ import com.agent.sandbox.pty.DockerTarget;
 import com.agent.sandbox.pty.PtyTarget;
 import com.agent.sandbox.pty.SandboxTerminalService;
 import com.agent.sandbox.pty.TerminalTarget;
+import com.agent.web.security.JdbcSecurityViolationSink;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -50,8 +53,11 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.file.Path;
 import java.time.Duration;
@@ -85,13 +91,17 @@ public class ProductionGraphConfiguration {
             ObjectMapper objectMapper,
             BrowserSessionRegistry browserSessions,
             ProductionAgentProperties properties,
-            ToolAuditSink auditSink) {
+            ToolAuditSink auditSink,
+            SecurityViolationSink securityViolationSink) {
         DefaultToolRegistry registry = new DefaultToolRegistry(
                 new JacksonToolSchemaValidator(),
                 new DefaultToolAuthorizer(),
                 auditSink,
                 objectMapper,
-                System::nanoTime);
+                System::nanoTime,
+                new DefaultToolParameterPolicy(Map.of()),
+                new DefaultOutputRedactor(),
+                securityViolationSink);
         registry.register(CodePatchTool.definition(astService, objectMapper));
         registry.registerAll(BrowserToolDefinitions.definitions(
                 browserSessions, objectMapper, properties.browserTimeout()));
@@ -103,13 +113,30 @@ public class ProductionGraphConfiguration {
             AstService astService,
             ObjectMapper objectMapper,
             BrowserSessionRegistry browserSessions,
+            ProductionAgentProperties properties,
+            ToolAuditSink auditSink) {
+        return productionToolRegistry(
+                astService,
+                objectMapper,
+                browserSessions,
+                properties,
+                auditSink,
+                SecurityViolationSink.noop());
+    }
+
+    /** 为直接构造生产图的兼容入口提供无外部副作用的安全端口。 */
+    ToolRegistry productionToolRegistry(
+            AstService astService,
+            ObjectMapper objectMapper,
+            BrowserSessionRegistry browserSessions,
             ProductionAgentProperties properties) {
         return productionToolRegistry(
                 astService,
                 objectMapper,
                 browserSessions,
                 properties,
-                ToolAuditSink.noop());
+                ToolAuditSink.noop(),
+                SecurityViolationSink.noop());
     }
 
     /** 将工具审计事件写入现有 Logback 控制台与滚动文件。 */
@@ -128,6 +155,16 @@ public class ProductionGraphConfiguration {
                 event.argumentsSha256(),
                 event.errorType(),
                 event.cancellationRequested());
+    }
+
+    /** 创建写入 PostgreSQL 的安全违规端口。 */
+    @Bean
+    SecurityViolationSink productionSecurityViolationSink(
+            JdbcClient jdbcClient,
+            PlatformTransactionManager transactionManager) {
+        return new JdbcSecurityViolationSink(
+                jdbcClient,
+                new TransactionTemplate(transactionManager));
     }
 
     /** 创建按 Run 隔离浏览器会话的注册表。 */
@@ -234,6 +271,7 @@ public class ProductionGraphConfiguration {
             RunLogPublisher logPublisher,
             ObjectMapper objectMapper,
             HarnessHookChain harness,
+            SecurityViolationSink securityViolationSink,
             ToolRegistry toolRegistry,
             CliApprovalInterruptPolicy approvalPolicy,
             BrowserSessionRegistry browserSessions) {
@@ -250,6 +288,7 @@ public class ProductionGraphConfiguration {
         Objects.requireNonNull(logPublisher, "logPublisher 不能为空");
         Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
         Objects.requireNonNull(harness, "harness 不能为空");
+        Objects.requireNonNull(securityViolationSink, "securityViolationSink 不能为空");
         Objects.requireNonNull(toolRegistry, "toolRegistry 不能为空");
         Objects.requireNonNull(approvalPolicy, "approvalPolicy 不能为空");
         Objects.requireNonNull(browserSessions, "browserSessions 不能为空");
@@ -266,6 +305,7 @@ public class ProductionGraphConfiguration {
                 logPublisher,
                 objectMapper,
                 harness,
+                securityViolationSink,
                 target,
                 knowledgeProperties.maxTokens(),
                 toolRegistry,
@@ -314,6 +354,7 @@ public class ProductionGraphConfiguration {
                 logPublisher,
                 objectMapper,
                 harness,
+                SecurityViolationSink.noop(),
                 standaloneToolRegistry(
                         astService,
                         objectMapper,
@@ -407,6 +448,7 @@ public class ProductionGraphConfiguration {
             RunLogPublisher logPublisher,
             ObjectMapper objectMapper,
             HarnessHookChain harness,
+            SecurityViolationSink securityViolationSink,
             TerminalTarget target,
             int knowledgeMaxTokens,
             ToolRegistry toolRegistry,
@@ -428,7 +470,7 @@ public class ProductionGraphConfiguration {
                         promptCatalog),
                 properties.plannerContextMaxTokens(),
                 new DefaultPromptInjectionDetector(),
-                SecurityViolationSink.noop());
+                securityViolationSink);
         CoderNode coder = new CoderNode(
                 astService, modelRouter, objectMapper, snapshotService, toolRegistry);
         OpsNode ops = new OpsNode(terminalService, approvalPolicy, logPublisher);
