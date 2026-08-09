@@ -134,9 +134,7 @@ class GuiAgentWorkflowEddTest {
             assertThat(result.trace()).containsExactly("gui");
             assertThat(result.variables())
                     .containsEntry(PlannerNode.FINAL_RESPONSE_KEY,
-                            "页面已显示 submitted: Agent4J")
-                    .containsEntry(GuiAgentNode.DOM_KEY,
-                            "<div id=\"result\">submitted: Agent4J</div>")
+                            "submitted: Agent4J")
                     .containsEntry(GuiAgentNode.FINAL_URL_KEY, pageUri.toString())
                     .doesNotContainKeys(
                             GuiAgentNode.ERROR_KEY,
@@ -145,21 +143,25 @@ class GuiAgentWorkflowEddTest {
                             ReviewerNode.APPROVED_KEY);
             JsonNode evidence = mapper.readTree(
                     result.variables().get(GuiAgentNode.EVIDENCE_KEY));
-            assertThat(evidence).hasSize(3);
-            assertThat(evidence.get(2).path("id").textValue()).isEqualTo("evidence-2");
-            assertThat(evidence.get(2).path("dom").textValue())
+            assertThat(result.variables().get(GuiAgentNode.DOM_KEY))
+                    .contains("submitted: Agent4J");
+            assertThat(evidence).hasSize(5);
+            assertThat(evidence.get(4).path("id").textValue()).isEqualTo("evidence-4");
+            assertThat(evidence.get(4).path("dom").textValue())
                     .contains("submitted: Agent4J");
             byte[] screenshot = screenshotBytes(
-                    evidence.get(2).path("screenshotDataUrl").textValue());
+                    result.variables().get(GuiAgentNode.SCREENSHOT_DATA_URL_KEY));
             assertThat(screenshot).startsWith(PNG_SIGNATURE);
             assertThat(audits).extracting(ToolAuditEvent::toolName).containsExactly(
                     "browser.navigate",
                     "browser.evidence",
                     "browser.fill",
                     "browser.evidence",
+                    "browser.evidence",
                     "browser.click",
+                    "browser.evidence",
                     "browser.evidence");
-            writeAndVerifyReport(mapper, result, audits.size(), evidence.get(2));
+            writeAndVerifyReport(mapper, result, audits.size(), evidence.get(4));
         } finally {
             pageServer.stop(0);
         }
@@ -210,8 +212,8 @@ class GuiAgentWorkflowEddTest {
             case 1 -> action(mapper, "click", "#submit", "", 0,
                     "#result", "提交表单", "", List.of());
             case 2 -> action(mapper, "done", "", "", 0,
-                    "", "页面结果已确认", "页面已显示 submitted: Agent4J",
-                    List.of("evidence-2"));
+                    "", "页面结果已确认", "submitted: Agent4J",
+                    List.of("evidence-4"));
             default -> throw new IllegalStateException("超出确定性视觉响应数量: " + index);
         };
     }
@@ -245,10 +247,15 @@ class GuiAgentWorkflowEddTest {
         response.put("model", "vision-model");
         ObjectNode choice = response.putArray("choices").addObject();
         choice.put("index", 0);
-        choice.putObject("message")
-                .put("role", "assistant")
-                .put("content", decision);
-        choice.put("finish_reason", "stop");
+        ObjectNode message = choice.putObject("message").put("role", "assistant");
+        message.putNull("content");
+        message.putArray("tool_calls").addObject()
+                .put("id", "browser-action-call")
+                .put("type", "function")
+                .putObject("function")
+                .put("name", "browser_action")
+                .put("arguments", decision);
+        choice.put("finish_reason", "tool_calls");
         return mapper.writeValueAsString(response);
     }
 
@@ -286,9 +293,9 @@ class GuiAgentWorkflowEddTest {
         written.fieldNames().forEachRemaining(fields::add);
         assertThat(fields).containsExactlyInAnyOrderElementsOf(REPORT_FIELDS);
         assertThat(written.path("steps").intValue()).isEqualTo(3);
-        assertThat(written.path("toolCalls").intValue()).isEqualTo(6);
+        assertThat(written.path("toolCalls").intValue()).isEqualTo(8);
         assertThat(written.path("evidenceRefs").get(0).textValue())
-                .isEqualTo("evidence-2");
+                .isEqualTo("evidence-4");
         assertThat(written.path("domSha256").textValue()).matches("[0-9a-f]{64}");
         assertThat(written.path("screenshotSha256").textValue()).matches("[0-9a-f]{64}");
         assertThat(written.path("passed").booleanValue()).isTrue();
