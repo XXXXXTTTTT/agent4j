@@ -94,6 +94,12 @@ suppressed exception 写入 `gui.error`，避免图片能力不兼容掩盖后�
 
 每轮先确保目标 URL 已导航，再调用 `browser.evidence` 形成当前观察；模型动作通过 `HarnessToolExecutor` 触发 Harness BEFORE/AFTER/FAILURE 事件；动作成功后再次采集证据并把证据 ID 放入下一轮上下文。操作失败保留工具错误栈，允许模型在剩余步数内重规划；达到 `maxSteps` 时写入 `gui.error`，不会无限循环。
 
+动作后的证据使用“双层观察”：先采集模型指定的 `evidenceSelector` 局部证据；当该选择器不是
+`page` 时，再自动采集一次完整页面证据，并把页面证据作为下一轮当前观察。这样既保留目标元素的精确
+截图和 DOM，也不会因按钮、输入框等局部范围遮蔽动作在 `#result`、Toast 或其他区域产生的全局副作用。
+`done.summary` 必须是引用证据 DOM 中实际出现的可见文本；只有 evidenceRef 存在且至少一份被引用 DOM
+包含该 summary 时才允许写入 `final_response`，禁止仅根据 onclick 源码或动作历史推断完成。
+
 ## 5. 生产图路由
 
 `ProductionGraphConfiguration` 注册浏览器工具和会话注册表，并在图中增加 `gui` 节点。Planner 的 `planner.taskKind=BROWSER_OPERATION` 路由到 `gui`，GUI 节点完成后到 `END`。其他路线保持：

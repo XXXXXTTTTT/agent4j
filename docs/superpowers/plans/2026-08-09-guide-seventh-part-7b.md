@@ -80,6 +80,9 @@
 - [ ] **Step 5: Force structured browser decisions.** After the Live model proves prompt-only JSON unstable,
   require one `browser_action` function with strict JSON Schema and exact forced `toolChoice`; reject text-only,
   wrong-name and multiple ToolCall responses, parse only function arguments, and rerun deterministic plus Live EDD.
+- [ ] **Step 6: Ground completion in global evidence.** Reproduce locator-only evidence hiding an out-of-scope
+  DOM mutation. After each successful action, retain the requested locator evidence and append page evidence;
+  require `done.summary` to occur in at least one referenced evidence DOM before writing `final_response`.
 
 ### Task 5C: Merge-review hardening
 
