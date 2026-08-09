@@ -29,4 +29,3 @@
 1. `ActuatorHealthConfigurationTest` 验证端点映射、健康组和关闭配置。
 2. `DeploymentEddTest` 读取两套 Compose、两个 Dockerfile、应用配置和恢复文档，精确断言 Java 21、探针、资源边界、`exec`、Flyway 与备份命令存在。
 3. Maven 模块测试、完整打包和 Docker Compose 配置解析均必须通过；Docker 可用时执行真实 Agent/PostgreSQL readiness smoke test，Docker 不可用时只跳过该 smoke test，不跳过确定性 EDD。
-

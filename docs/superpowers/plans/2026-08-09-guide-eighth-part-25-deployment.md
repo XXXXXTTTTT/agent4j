@@ -96,4 +96,3 @@ Use JDK 21 and run `mvn -pl agent-core,agent-web,agent-eval -am test`, `mvn clea
 - [ ] **Step 5: Commit and merge**
 
 Commit the plan/doc/EDD updates, fast-forward the feature branch into `master`, rerun the deployment-focused tests on merged `master`, remove only the chapter 25 worktree and branch, and run `git worktree prune`.
-
