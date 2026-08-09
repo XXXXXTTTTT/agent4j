@@ -2112,3 +2112,35 @@ Record 和 `Map.copyOf` 能保证对象不可变，却不知道哪个 Agent 有�
 `graph.dead-end`、`graph.no-end-path`、`graph.subgraph-bridge`、`graph.subgraph-interrupt`、
 `graph.loop-budget` 八条路线，报告严格只含
 `taskId/status/valid/unreachableNodes/deadEndNodes/nodesWithoutEndPath/cyclicNodes/stopReason/passed`。
+
+## 第六篇 6A：框架对比与架构守卫
+
+### 【问题现象】README 和设计文档声明“去框架化”，但构建文件可能悄悄引入 Agent 编排库
+
+只靠代码审查或文档约定，无法阻止后续提交在 `agent-core/pom.xml` 添加 LangChain、LangGraph 或
+其他 Agent 编排依赖；即使当前生产源码没有 import，依赖也可能通过自动配置、全局上下文或 transitive
+artifact 改变核心边界。另一方面，框架对比如果只写概念名称，面试和维护者无法知道哪个类型真正
+承担 State、Checkpoint、Tool 和 Runtime 职责。
+
+### 【根因分析】依赖边界与概念映射没有成为可执行协议
+
+POM 是结构化 XML，不能通过自由文本 grep 猜测依赖；源码、测试、README 和 AGENTS.md 的用途也不同，
+把所有文本中的框架名称都当成违规会误报。没有固定端口清单时，映射文档还能在核心类型改名后继续
+看似完整。
+
+### 【解决方案/代码级实现】解析构建描述、限制扫描范围、固定自研端口清单
+
+`ArchitectureConstraintTest` 使用安全 JAXP DOM 解析根 POM 和 `agent-core/pom.xml` 的
+`<dependency>`，只对解析出的 `groupId:artifactId` 检查固定禁止片段
+`langchain4j`、`langgraph4j`、`spring-ai`、`autogen`、`crewai`、`llamaindex`。源码门禁只递归
+`agent-core/src/main/java`，拒绝设计中列出的精确 Agent 框架 import，不扫描文档和测试。
+测试同时确认 `AgentState`、`Node`、`Condition`、`StateGraph`、`Checkpointer`、`ToolRegistry`、
+`ModelRouter`、`AgentRunService` 八个核心端口文件存在。
+`docs/ARCHITECTURE_MAPPING.md` 用表格记录这些自研类型与框架概念的边界，明确映射不是运行时依赖；
+测试验证固定类型名称和“Agent4J 自研”声明，避免文档漂移。
+
+### 【证据】架构守卫在本地构建中可重复执行
+
+`ArchitectureConstraintTest` 的 4 个测试验证禁止依赖、禁止 import、核心端口和映射完整性；命令
+`mvn -pl agent-core -Dtest=ArchitectureConstraintTest test` 在 JDK 21 下返回 4/4 通过。
+本里程碑不修改生产代码或现有合法依赖，因此框架边界变化会在依赖引入的同一提交中直接失败。
