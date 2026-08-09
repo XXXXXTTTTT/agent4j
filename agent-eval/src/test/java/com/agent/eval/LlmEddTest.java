@@ -7,6 +7,7 @@ import com.agent.core.llm.ModelEndpoint;
 import com.agent.core.llm.ModelRouter;
 import com.agent.core.llm.TaskType;
 import com.agent.core.memory.MemoryContext;
+import com.agent.core.nodes.CoderNode;
 import com.agent.core.nodes.PlannerNode;
 import com.agent.rag.pipeline.ModelHypotheticalDocumentGenerator;
 import com.agent.rag.pipeline.ModelQueryRewriter;
@@ -15,6 +16,7 @@ import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.client.RestClient;
 
@@ -28,12 +30,16 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 使用真实 OpenAI 兼容端点执行预设对话 EDD。默认不启用，避免普通构建依赖外部服务。 */
 @Tag("edd")
 class LlmEddTest {
+
+    @TempDir
+    Path workspace;
 
     @Test
     void evaluatesConversationRoutesAndWritesAuditReport() throws Exception {
@@ -51,7 +57,8 @@ class LlmEddTest {
                 objectMapper,
                 configuration.chatCompletionsPath(),
                 configuration.baseUrl() + configuration.chatCompletionsPath())) {
-            ModelRouter router = router(configuration, client);
+            AtomicInteger modelCallAttempts = new AtomicInteger();
+            ModelRouter router = router(configuration, client, modelCallAttempts);
             List<EddScenario> scenarios = List.of(
                     new EddScenario("model.identity", "你是什么模型", false,
                             response -> !response.isBlank()),
@@ -84,7 +91,10 @@ class LlmEddTest {
             List<EddScenarioResult> results = scenarios.stream()
                     .map(scenario -> executeScenario(scenario, router))
                     .toList();
-            writeReport(configuration, results, objectMapper);
+            writeReport(configuration, results, modelCallAttempts.get(), objectMapper);
+            assertThat(modelCallAttempts.get())
+                    .as("真实 LLM EDD 必须至少发起一次模型调用")
+                    .isGreaterThan(0);
             assertThat(results).allSatisfy(result -> assertThat(result.passed())
                     .as(result.id() + " EDD 失败: " + result.error())
                     .isTrue());
@@ -108,7 +118,8 @@ class LlmEddTest {
                 objectMapper,
                 configuration.chatCompletionsPath(),
                 configuration.baseUrl() + configuration.chatCompletionsPath())) {
-            ModelRouter router = router(configuration, client);
+            AtomicInteger modelCallAttempts = new AtomicInteger();
+            ModelRouter router = router(configuration, client, modelCallAttempts);
             results = List.of(
                     runQueryRewrite(router, objectMapper),
                     runHyde(router, objectMapper));
@@ -164,7 +175,8 @@ class LlmEddTest {
             if (scenario.expectedAgent()) {
                 state = state
                         .withVariable(PlannerNode.REPOSITORY_ID_KEY, "edd-repository")
-                        .withVariable(PlannerNode.USER_ID_KEY, "edd-user");
+                        .withVariable(PlannerNode.USER_ID_KEY, "edd-user")
+                        .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString());
             }
             AgentState result = node.execute(state);
             String route = result.variables().get(PlannerNode.ROUTE_KEY);
@@ -175,9 +187,10 @@ class LlmEddTest {
                     : PlannerNode.CHAT_ROUTE.equals(route);
             passed = passed && scenario.responseGate().test(response)
                     && !result.variables().containsKey(PlannerNode.ERROR_KEY);
+            String stateError = result.variables().getOrDefault(PlannerNode.ERROR_KEY, "");
             return new EddScenarioResult(
                     scenario.id(), passed, route, responsePreview(response),
-                    Duration.between(started, Instant.now()).toMillis(), "");
+                    Duration.between(started, Instant.now()).toMillis(), stateError);
         } catch (Throwable throwable) {
             return new EddScenarioResult(
                     scenario.id(), false, "", "",
@@ -188,19 +201,28 @@ class LlmEddTest {
     private void writeReport(
             EddConfiguration configuration,
             List<EddScenarioResult> results,
+            int modelCallAttempts,
             ObjectMapper objectMapper) {
         try {
             Path directory = Path.of("target", "edd");
             Files.createDirectories(directory);
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(
                     directory.resolve("llm-edd-" + Instant.now().toEpochMilli() + ".json").toFile(),
-                    new EddReport(configuration.baseUrl(), Instant.now(), results));
+                    new EddReport(
+                            configuration.baseUrl(),
+                            Instant.now(),
+                            "live-openai-compatible",
+                            modelCallAttempts,
+                            results));
         } catch (Exception exception) {
             throw new IllegalStateException("写入 LLM EDD 报告失败", exception);
         }
     }
 
-    private ModelRouter router(EddConfiguration configuration, LlmClient client) {
+    private ModelRouter router(
+            EddConfiguration configuration,
+            LlmClient client,
+            AtomicInteger modelCallAttempts) {
         EnumMap<TaskType, List<ModelEndpoint>> routes = new EnumMap<>(TaskType.class);
         for (TaskType taskType : TaskType.values()) {
             routes.put(taskType, List.of(
@@ -209,7 +231,10 @@ class LlmEddTest {
                     endpoint(taskType.name().toLowerCase() + "-fallback",
                             configuration.fallbackModel(), client)));
         }
-        return new ModelRouter(routes);
+        return new ModelRouter(routes, start -> {
+            modelCallAttempts.incrementAndGet();
+            return com.agent.core.observability.ModelCallObserver.noop().start(start);
+        });
     }
 
     private String modelFor(TaskType taskType, EddConfiguration configuration) {
@@ -293,6 +318,8 @@ class LlmEddTest {
     private record EddReport(
             String endpoint,
             Instant generatedAt,
+            String transport,
+            int modelCallAttempts,
             List<EddScenarioResult> scenarios) {
     }
 
