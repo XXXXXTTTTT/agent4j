@@ -1,5 +1,8 @@
 package com.agent.core.nodes;
 
+import com.agent.core.cli.CliApprovalInterruptPolicy;
+import com.agent.core.cli.CliAuthorization;
+import com.agent.core.cli.CliAuthorizationDecision;
 import com.agent.core.engine.AgentState;
 import com.agent.core.engine.Node;
 import com.agent.core.engine.NodeExecutionContext;
@@ -30,6 +33,9 @@ public final class OpsNode implements Node {
     public static final String COMMAND_KEY = "ops.command";
     public static final String COMMAND_NAME_KEY = "ops.commandName";
     public static final String COMMAND_ARGUMENTS_KEY = "ops.commandArguments";
+    public static final String COMMAND_SHA256_KEY = "ops.commandSha256";
+    public static final String AUTHORIZATION_DECISION_KEY = "ops.authorizationDecision";
+    public static final String AUTHORIZATION_REASON_KEY = "ops.authorizationReason";
     public static final String EXIT_CODE_KEY = "ops.exitCode";
     public static final String STDOUT_KEY = "ops.stdout";
     public static final String STDERR_KEY = "ops.stderr";
@@ -41,6 +47,7 @@ public final class OpsNode implements Node {
     private final TerminalTarget target;
     private final Duration timeout;
     private final RunLogPublisher logPublisher;
+    private final CliApprovalInterruptPolicy approvalPolicy;
 
     /**
      * 创建命令执行节点。
@@ -73,9 +80,23 @@ public final class OpsNode implements Node {
         this.target = Objects.requireNonNull(target, "target 不能为空");
         this.timeout = Objects.requireNonNull(timeout, "timeout 不能为空");
         this.logPublisher = Objects.requireNonNull(logPublisher, "logPublisher 不能为空");
+        this.approvalPolicy = null;
         if (timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("timeout 必须大于 0");
         }
+    }
+
+    /** 创建只执行目录授权计划的生产 Ops 节点。 */
+    public OpsNode(
+            TerminalCommandExecutor executor,
+            CliApprovalInterruptPolicy approvalPolicy,
+            RunLogPublisher logPublisher) {
+        this.executor = Objects.requireNonNull(executor, "executor 不能为空");
+        this.target = null;
+        this.timeout = null;
+        this.logPublisher = Objects.requireNonNull(logPublisher, "logPublisher 不能为空");
+        this.approvalPolicy = Objects.requireNonNull(
+                approvalPolicy, "approvalPolicy 不能为空");
     }
 
     /**
@@ -86,7 +107,8 @@ public final class OpsNode implements Node {
      */
     @Override
     public AgentState execute(AgentState state) {
-        return executeCommand(state, ignored -> { }, new AtomicReference<>(), false);
+        return executeCommand(
+                state, ignored -> { }, new AtomicReference<>(), false);
     }
 
     /** 在 Run 上下文中执行命令并发布原始终端片段。 */
@@ -100,7 +122,8 @@ public final class OpsNode implements Node {
         boolean harness = NodeExecutionContext.current()
                 .filter(context::equals)
                 .isPresent();
-        return executeCommand(state, logConsumer, logFailure, harness);
+        return executeCommand(
+                state, logConsumer, logFailure, harness);
     }
 
     private AgentState executeCommand(
@@ -110,11 +133,38 @@ public final class OpsNode implements Node {
             boolean harness) {
         Objects.requireNonNull(state, "state 不能为空");
         AgentState result;
+        AgentState evidence = state;
         try {
-            String command = requireCommand(state);
+            CommandRequest request;
+            String command;
+            if (approvalPolicy == null) {
+                command = requireCommand(state);
+                request = new CommandRequest(target, command, timeout);
+            } else {
+                CliAuthorization authorization = approvalPolicy.authorizeForExecution(
+                        state, NodeExecutionContext.approvalBypassed());
+                command = authorization.plan().request().bashCommand();
+                evidence = state
+                        .withVariable(COMMAND_KEY, command)
+                        .withVariable(COMMAND_SHA256_KEY,
+                                authorization.plan().commandSha256())
+                        .withVariable(AUTHORIZATION_DECISION_KEY,
+                                authorization.decision().name())
+                        .withVariable(AUTHORIZATION_REASON_KEY,
+                                authorization.reason());
+                if (authorization.decision() != CliAuthorizationDecision.ALLOWED) {
+                    IllegalStateException failure = new IllegalStateException(
+                            "CLI 命令尚未获得执行授权: " + authorization.reason());
+                    return evidence
+                            .withVariable(ERROR_KEY, stackTrace(failure))
+                            .withTraceEntry("ops");
+                }
+                request = authorization.plan().request();
+            }
             NodeExecutionContext.progress("开始执行终端命令: " + command);
-            CommandResult commandResult = executeTerminal(command, logConsumer, harness);
-            result = state
+            CommandResult commandResult = executeTerminal(
+                    request, command, logConsumer, harness);
+            result = evidence
                     .withVariable(EXIT_CODE_KEY, Integer.toString(commandResult.exitCode()))
                     .withVariable(STDOUT_KEY, commandResult.stdout())
                     .withVariable(STDERR_KEY, commandResult.stderr())
@@ -127,7 +177,7 @@ public final class OpsNode implements Node {
             if (exception instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            result = state
+            result = evidence
                     .withVariable(ERROR_KEY, stackTrace(exception))
                     .withTraceEntry("ops");
         }
@@ -139,6 +189,7 @@ public final class OpsNode implements Node {
     }
 
     private CommandResult executeTerminal(
+            CommandRequest request,
             String command,
             Consumer<TerminalLog> logConsumer,
             boolean harness) throws Exception {
@@ -147,11 +198,11 @@ public final class OpsNode implements Node {
                     "terminal",
                     Map.of("command", command),
                     () -> executor.execute(
-                                    new CommandRequest(target, command, timeout),
+                                    request,
                                     logConsumer)
                             .get());
         }
-        return executor.execute(new CommandRequest(target, command, timeout), logConsumer).get();
+        return executor.execute(request, logConsumer).get();
     }
 
     private void publishLog(

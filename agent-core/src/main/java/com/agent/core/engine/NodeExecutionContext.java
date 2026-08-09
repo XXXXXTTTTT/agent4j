@@ -31,6 +31,7 @@ public record NodeExecutionContext(UUID runId, String nodeName) {
     private static final ThreadLocal<Runnable> PROGRESS_CLOCK = new ThreadLocal<>();
     private static final ThreadLocal<AgentState> STATE = new ThreadLocal<>();
     private static final ThreadLocal<HarnessHookChain> HARNESS = new ThreadLocal<>();
+    private static final ThreadLocal<Boolean> APPROVAL_BYPASSED = new ThreadLocal<>();
 
     /** 校验节点执行上下文。 */
     public NodeExecutionContext {
@@ -92,6 +93,11 @@ public record NodeExecutionContext(UUID runId, String nodeName) {
     public static long consumedTokens() {
         AtomicLong counter = TOKENS.get();
         return counter == null ? 0 : counter.get();
+    }
+
+    /** 返回当前节点是否通过批准恢复的一次性中断旁路进入。 */
+    public static boolean approvalBypassed() {
+        return Boolean.TRUE.equals(APPROVAL_BYPASSED.get());
     }
 
     /** 在当前节点上下文中发布工具边界事件并执行动作。 */
@@ -178,6 +184,28 @@ public record NodeExecutionContext(UUID runId, String nodeName) {
             HarnessHookChain harness,
             Callable<T> callable)
             throws Exception {
+        return callWithin(
+                context,
+                progressPublisher,
+                tokenLimit,
+                progressClock,
+                state,
+                harness,
+                false,
+                callable);
+    }
+
+    /** 在节点上下文中绑定批准恢复的一次性信号。 */
+    static <T> T callWithin(
+            NodeExecutionContext context,
+            Consumer<String> progressPublisher,
+            LongConsumer tokenLimit,
+            Runnable progressClock,
+            AgentState state,
+            HarnessHookChain harness,
+            boolean approvalBypassed,
+            Callable<T> callable)
+            throws Exception {
         Objects.requireNonNull(context, "context 不能为空");
         Objects.requireNonNull(progressPublisher, "progressPublisher 不能为空");
         Objects.requireNonNull(tokenLimit, "tokenLimit 不能为空");
@@ -195,6 +223,7 @@ public record NodeExecutionContext(UUID runId, String nodeName) {
         PROGRESS_CLOCK.set(progressClock);
         STATE.set(state);
         HARNESS.set(harness);
+        APPROVAL_BYPASSED.set(approvalBypassed);
         MDC.put("runId", context.runId().toString());
         MDC.put("traceId", context.runId().toString());
         MDC.put("nodeName", context.nodeName());
@@ -208,6 +237,7 @@ public record NodeExecutionContext(UUID runId, String nodeName) {
             PROGRESS_CLOCK.remove();
             STATE.remove();
             HARNESS.remove();
+            APPROVAL_BYPASSED.remove();
             MDC.remove("runId");
             MDC.remove("traceId");
             MDC.remove("nodeName");

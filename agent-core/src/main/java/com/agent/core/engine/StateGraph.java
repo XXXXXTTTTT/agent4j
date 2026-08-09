@@ -254,6 +254,7 @@ public final class StateGraph implements AutoCloseable {
         ExecutionTracker tracker = new ExecutionTracker(budget);
 
         while (!END.equals(currentNode)) {
+            boolean approvalBypassed = bypassInterrupt;
             try {
                 tracker.checkAll(steps, noProgress);
             } catch (ExecutionBudgetExceededException exception) {
@@ -288,7 +289,8 @@ public final class StateGraph implements AutoCloseable {
             AgentState previousState = currentState;
             try {
                 currentState = executeNode(
-                        request.runId(), currentNode, currentState, listener, tracker);
+                        request.runId(), currentNode, currentState, listener, tracker,
+                        approvalBypassed);
                 tracker.checkActive();
             } catch (ExecutionBudgetExceededException exception) {
                 publishBudgetExhausted(
@@ -323,7 +325,8 @@ public final class StateGraph implements AutoCloseable {
             String nodeName,
             AgentState state,
             GraphExecutionListener listener,
-            ExecutionTracker tracker) {
+            ExecutionTracker tracker,
+            boolean approvalBypassed) {
         Node node = nodes.get(nodeName);
         if (node == null) {
             throw new IllegalStateException("节点未注册: " + nodeName);
@@ -339,6 +342,7 @@ public final class StateGraph implements AutoCloseable {
                         tracker::markProgress,
                         state,
                         harness,
+                        approvalBypassed,
                         () -> node.execute(context, state)));
         try {
             while (true) {

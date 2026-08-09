@@ -1,13 +1,22 @@
 package com.agent.core.nodes;
 
+import com.agent.core.cli.CliApprovalInterruptPolicy;
+import com.agent.core.cli.CliAuthorizationDecision;
+import com.agent.core.cli.CliCommandCatalog;
+import com.agent.core.cli.CliCommandDefinition;
+import com.agent.core.cli.CliRiskLevel;
 import com.agent.core.engine.AgentState;
 import com.agent.core.engine.ExecutionBudget;
+import com.agent.core.engine.GraphExecutionRequest;
+import com.agent.core.engine.GraphExecutionResult;
+import com.agent.core.engine.GraphExecutionListener;
 import com.agent.core.engine.InterruptPolicy;
 import com.agent.core.engine.NodeExecutionContext;
 import com.agent.core.engine.StateGraph;
 import com.agent.core.harness.HarnessEvent;
 import com.agent.core.harness.HarnessEventType;
 import com.agent.core.harness.HarnessHookChain;
+import com.agent.core.intent.RequiredCapability;
 import com.agent.core.trace.RunLogEvent;
 import com.agent.core.trace.RunLogStream;
 import com.agent.sandbox.pty.CommandRequest;
@@ -16,6 +25,7 @@ import com.agent.sandbox.pty.PtyTarget;
 import com.agent.sandbox.pty.Stream;
 import com.agent.sandbox.pty.TerminalCommandExecutor;
 import com.agent.sandbox.pty.TerminalLog;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -25,6 +35,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -229,5 +240,92 @@ class OpsNodeTest {
         assertThatThrownBy(() -> new OpsNode(
                 executor, target, Duration.ofSeconds(1), null))
                 .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    void governedExecutionUsesApprovedPlanAndWritesAuthorizationEvidence() throws Exception {
+        AtomicReference<CommandRequest> received = new AtomicReference<>();
+        TerminalCommandExecutor executor = (request, logs) -> {
+            received.set(request);
+            return CompletableFuture.completedFuture(new CommandResult(0, "ok", "", false));
+        };
+        ObjectMapper mapper = new ObjectMapper();
+        CliApprovalInterruptPolicy policy = new CliApprovalInterruptPolicy(
+                new CliCommandCatalog(List.of(new CliCommandDefinition(
+                        "test.write", "printf", List.of(), CliRiskLevel.MUTATING,
+                        Set.of(RequiredCapability.TERMINAL)))),
+                target,
+                Duration.ofSeconds(30),
+                mapper);
+        OpsNode node = new OpsNode(executor, policy, event -> { });
+        AgentState state = AgentState.empty()
+                .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString())
+                .withVariable(OpsNode.COMMAND_NAME_KEY, "test.write")
+                .withVariable(OpsNode.COMMAND_ARGUMENTS_KEY, "[\"value.txt\"]")
+                .withVariable(PlannerNode.REQUIRED_CAPABILITIES_KEY, "TERMINAL");
+        AgentState result;
+        try (StateGraph graph = new StateGraph(2, policy)) {
+            graph.addNode("ops", node)
+                    .addEdge("ops", StateGraph.END)
+                    .setEntryPoint("ops");
+            GraphExecutionListener listener = new GraphExecutionListener() {
+                @Override
+                public void onNodeStarted(String nodeName, AgentState nodeState) {
+                }
+
+                @Override
+                public void onNodeCompleted(
+                        String nodeName, String nextNode, AgentState nodeState) {
+                }
+            };
+            GraphExecutionResult interrupted = graph.execute(new GraphExecutionRequest(
+                    RUN_ID, state, "ops", false), listener);
+            assertThat(interrupted).isInstanceOf(GraphExecutionResult.Interrupted.class);
+            assertThat(received).hasNullValue();
+            GraphExecutionResult completed = graph.execute(new GraphExecutionRequest(
+                    RUN_ID, state, "ops", true), listener);
+            assertThat(completed).isInstanceOf(GraphExecutionResult.Completed.class);
+            result = ((GraphExecutionResult.Completed) completed).state();
+        }
+
+        assertThat(received.get().bashCommand()).isEqualTo("'printf' 'value.txt'");
+        assertThat(result.variables())
+                .containsEntry(OpsNode.COMMAND_KEY, "'printf' 'value.txt'")
+                .containsEntry(OpsNode.AUTHORIZATION_DECISION_KEY,
+                        CliAuthorizationDecision.ALLOWED.name())
+                .containsEntry(OpsNode.AUTHORIZATION_REASON_KEY, "用户已批准")
+                .containsEntry(OpsNode.EXIT_CODE_KEY, "0");
+        assertThat(result.variables().get(OpsNode.COMMAND_SHA256_KEY)).hasSize(64);
+    }
+
+    @Test
+    void governedExecutionDoesNotCreateTerminalFutureWithoutApproval() {
+        AtomicBoolean invoked = new AtomicBoolean();
+        TerminalCommandExecutor executor = (request, logs) -> {
+            invoked.set(true);
+            return CompletableFuture.completedFuture(new CommandResult(0, "", "", false));
+        };
+        CliApprovalInterruptPolicy policy = new CliApprovalInterruptPolicy(
+                new CliCommandCatalog(List.of(new CliCommandDefinition(
+                        "test.write", "printf", List.of(), CliRiskLevel.MUTATING,
+                        Set.of(RequiredCapability.TERMINAL)))),
+                target,
+                Duration.ofSeconds(30),
+                new ObjectMapper());
+        OpsNode node = new OpsNode(executor, policy, event -> { });
+        AgentState result = node.execute(AgentState.empty()
+                .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString())
+                .withVariable(OpsNode.COMMAND_NAME_KEY, "test.write")
+                .withVariable(OpsNode.COMMAND_ARGUMENTS_KEY, "[]")
+                .withVariable(PlannerNode.REQUIRED_CAPABILITIES_KEY, "TERMINAL"));
+
+        assertThat(invoked).isFalse();
+        assertThat(result.variables())
+                .containsEntry(OpsNode.AUTHORIZATION_DECISION_KEY,
+                        CliAuthorizationDecision.APPROVAL_REQUIRED.name())
+                .containsEntry(OpsNode.AUTHORIZATION_REASON_KEY, "等待用户批准");
+        assertThat(result.variables().get(OpsNode.ERROR_KEY))
+                .contains("CLI 命令尚未获得执行授权")
+                .contains("at ");
     }
 }
