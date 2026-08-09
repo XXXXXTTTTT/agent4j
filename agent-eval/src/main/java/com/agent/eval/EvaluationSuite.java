@@ -43,6 +43,10 @@ public record EvaluationSuite(
         if (byId.isEmpty()) {
             throw new IllegalArgumentException("capabilities 不能为空");
         }
+        Set<String> mappedCapabilityIds = Set.copyOf(taskCapabilities.values());
+        if (byId.keySet().stream().anyMatch(capabilityId -> !mappedCapabilityIds.contains(capabilityId))) {
+            throw new IllegalArgumentException("能力必须至少绑定一个任务");
+        }
         capabilities = capabilities.stream()
                 .sorted(java.util.Comparator.comparing(EvaluationCapability::id))
                 .toList();

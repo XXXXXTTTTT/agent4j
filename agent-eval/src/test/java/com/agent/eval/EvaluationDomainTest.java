@@ -75,4 +75,32 @@ class EvaluationDomainTest {
                 0.1, Duration.ofSeconds(1), BigDecimal.ONE, -1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void rejectsCapabilitiesWithoutMappedTasks() {
+        List<BenchmarkTask> tasks = new java.util.ArrayList<>();
+        for (int index = 1; index <= 50; index++) {
+            tasks.add(new BenchmarkTask("task-" + index, "CLI", "prompt", "criteria", java.util.Map.of()));
+        }
+        BenchmarkTaskSet taskSet = new BenchmarkTaskSet(tasks);
+        java.util.Map<String, String> mapping = new java.util.HashMap<>();
+        for (BenchmarkTask task : tasks) {
+            mapping.put(task.id(), "cli");
+        }
+
+        assertThatThrownBy(() -> new EvaluationSuite(
+                "suite",
+                taskSet,
+                mapping,
+                List.of(capability("cli"), capability("unused")),
+                new EvaluationGatePolicy(0.5, Duration.ofSeconds(1), BigDecimal.ONE, 1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("能力必须至少绑定一个任务");
+    }
+
+    private EvaluationCapability capability(String id) {
+        return new EvaluationCapability(
+                id, "7A", List.of("planner"), 0.5,
+                Duration.ofSeconds(1), BigDecimal.ONE);
+    }
 }
