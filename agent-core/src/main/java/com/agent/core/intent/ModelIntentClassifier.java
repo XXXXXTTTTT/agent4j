@@ -93,6 +93,7 @@ public final class ModelIntentClassifier implements IntentClassifier {
         if (code) {
             capabilities.add(RequiredCapability.CODE_READ);
             capabilities.add(RequiredCapability.CODE_WRITE);
+            capabilities.add(RequiredCapability.TERMINAL);
         }
         if (command) {
             capabilities.add(RequiredCapability.TERMINAL);

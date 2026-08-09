@@ -138,6 +138,10 @@ class ProductionCodeAgentIntegrationTest {
                             knowledgeContext().fingerprint())
                     .containsEntry(CoderNode.MODEL_KEY, "code-model")
                     .containsEntry(CoderNode.UPDATED_FILES_KEY, "value.txt")
+                    .containsEntry(CoderNode.COMMAND_NAME_KEY, "test.cat")
+                    .containsEntry(OpsNode.COMMAND_KEY, "'cat' 'value.txt'")
+                    .containsEntry(OpsNode.AUTHORIZATION_DECISION_KEY, "ALLOWED")
+                    .containsEntry(OpsNode.AUTHORIZATION_REASON_KEY, "只读命令自动允许")
                     .containsEntry(OpsNode.EXIT_CODE_KEY, "0")
                     .containsEntry(OpsNode.STDOUT_KEY, "after\n")
                     .containsEntry(ReviewerNode.MODEL_KEY, "vision-model")
@@ -154,6 +158,8 @@ class ProductionCodeAgentIntegrationTest {
                             CoderNode.ERROR_KEY,
                             OpsNode.ERROR_KEY,
                             ReviewerNode.ERROR_KEY);
+            assertThat(result.variables().get(OpsNode.COMMAND_SHA256_KEY)).hasSize(64);
+            assertThat(result.variables()).doesNotContainKey(CoderNode.COMMAND_KEY);
         }
         server.verify();
     }
@@ -281,7 +287,8 @@ class ProductionCodeAgentIntegrationTest {
             String change = objectMapper.writeValueAsString(Map.of(
                     "summary", "更新 value.txt",
                     "unifiedDiff", validDiff(),
-                    "command", "cat value.txt"));
+                    "commandName", "test.cat",
+                    "commandArguments", List.of("value.txt")));
             return response(objectMapper, "code-model", change);
         }
         return response(objectMapper, "code-model", "修改 value.txt 并运行 cat value.txt");

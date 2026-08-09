@@ -27,7 +27,8 @@ class ModelIntentClassifierTest {
         assertThat(decision.complexity()).isEqualTo(TaskComplexity.COMPLEX);
         assertThat(decision.requiredCapabilities()).containsExactlyInAnyOrder(
                 RequiredCapability.CODE_READ,
-                RequiredCapability.CODE_WRITE);
+                RequiredCapability.CODE_WRITE,
+                RequiredCapability.TERMINAL);
     }
 
     @Test
@@ -121,7 +122,8 @@ class ModelIntentClassifierTest {
         assertThat(decision.taskKind()).isEqualTo(TaskKind.CODE_CHANGE);
         assertThat(decision.requiredCapabilities()).containsExactlyInAnyOrder(
                 RequiredCapability.CODE_READ,
-                RequiredCapability.CODE_WRITE);
+                RequiredCapability.CODE_WRITE,
+                RequiredCapability.TERMINAL);
     }
 
     @Test

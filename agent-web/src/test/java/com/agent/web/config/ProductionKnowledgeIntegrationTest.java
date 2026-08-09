@@ -512,7 +512,8 @@ class ProductionKnowledgeIntegrationTest {
             return completionResponse(objectMapper, objectMapper.writeValueAsString(Map.of(
                     "summary", "更新 value.txt",
                     "unifiedDiff", validDiff(),
-                    "command", "cat value.txt")));
+                    "commandName", "test.cat",
+                    "commandArguments", List.of("value.txt"))));
         }
         return completionResponse(objectMapper, "修改 value.txt 并运行 cat value.txt");
     }

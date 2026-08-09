@@ -1,9 +1,13 @@
 package com.agent.web.config;
 
 import com.agent.core.engine.GraphFactory;
-import com.agent.core.engine.InterruptPolicy;
 import com.agent.core.engine.StateGraph;
 import com.agent.core.harness.HarnessHookChain;
+import com.agent.core.cli.CliApprovalInterruptPolicy;
+import com.agent.core.cli.CliCommandCatalog;
+import com.agent.core.cli.CliCommandDefinition;
+import com.agent.core.cli.CliRiskLevel;
+import com.agent.core.intent.RequiredCapability;
 import com.agent.core.llm.ModelRouter;
 import com.agent.core.llm.TaskType;
 import com.agent.core.profile.AgentProfile;
@@ -18,6 +22,9 @@ import com.agent.core.nodes.ReviewerNode;
 import com.agent.core.intent.ModelIntentClassifier;
 import com.agent.core.intent.ModelRouterIntentModel;
 import com.agent.core.trace.RunLogPublisher;
+import com.agent.core.tool.DefaultToolRegistry;
+import com.agent.core.tool.ToolRegistry;
+import com.agent.core.tool.builtin.CodePatchTool;
 import com.agent.sandbox.ast.AstService;
 import com.agent.sandbox.ast.WorkspaceSnapshotService;
 import com.agent.sandbox.browser.BrowserAutomation;
@@ -56,6 +63,47 @@ public class ProductionGraphConfiguration {
     @Bean
     AstService productionAstService() {
         return new AstService();
+    }
+
+    /** 注册生产 Coder 允许调用的内置补丁工具。 */
+    @Bean(destroyMethod = "close")
+    ToolRegistry productionToolRegistry(
+            AstService astService,
+            ObjectMapper objectMapper) {
+        DefaultToolRegistry registry = new DefaultToolRegistry();
+        registry.register(CodePatchTool.definition(astService, objectMapper));
+        return registry;
+    }
+
+    /** 声明模型可以选择的精确只读验证命令。 */
+    @Bean
+    CliCommandCatalog productionCliCommandCatalog() {
+        return new CliCommandCatalog(List.of(
+                new CliCommandDefinition(
+                        "test.cat",
+                        "cat",
+                        List.of(),
+                        CliRiskLevel.READ_ONLY,
+                        Set.of(RequiredCapability.TERMINAL)),
+                new CliCommandDefinition(
+                        "test.maven",
+                        "mvn",
+                        List.of("test"),
+                        CliRiskLevel.READ_ONLY,
+                        Set.of(RequiredCapability.TERMINAL))));
+    }
+
+    /** 创建与生产终端目标绑定的 CLI 审批策略。 */
+    @Bean
+    CliApprovalInterruptPolicy productionCliApprovalInterruptPolicy(
+            ProductionAgentProperties properties,
+            CliCommandCatalog catalog,
+            ObjectMapper objectMapper) {
+        return new CliApprovalInterruptPolicy(
+                catalog,
+                terminalTarget(properties),
+                properties.commandTimeout(),
+                objectMapper);
     }
 
     /** 创建受限工作区快照服务。 */
@@ -124,7 +172,9 @@ public class ProductionGraphConfiguration {
             WorkspaceSnapshotService snapshotService,
             RunLogPublisher logPublisher,
             ObjectMapper objectMapper,
-            HarnessHookChain harness) {
+            HarnessHookChain harness,
+            ToolRegistry toolRegistry,
+            CliApprovalInterruptPolicy approvalPolicy) {
         Objects.requireNonNull(properties, "properties 不能为空");
         Objects.requireNonNull(knowledgeProperties, "knowledgeProperties 不能为空");
         knowledgeProperties.validate();
@@ -138,6 +188,8 @@ public class ProductionGraphConfiguration {
         Objects.requireNonNull(logPublisher, "logPublisher 不能为空");
         Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
         Objects.requireNonNull(harness, "harness 不能为空");
+        Objects.requireNonNull(toolRegistry, "toolRegistry 不能为空");
+        Objects.requireNonNull(approvalPolicy, "approvalPolicy 不能为空");
         TerminalTarget target = terminalTarget(properties);
         return () -> createGraph(
                 properties,
@@ -152,7 +204,9 @@ public class ProductionGraphConfiguration {
                 objectMapper,
                 harness,
                 target,
-                knowledgeProperties.maxTokens());
+                knowledgeProperties.maxTokens(),
+                toolRegistry,
+                approvalPolicy);
     }
 
     /** 声明精确关联 `code-agent` 图的生产 Profile。 */
@@ -193,7 +247,9 @@ public class ProductionGraphConfiguration {
                 snapshotService,
                 logPublisher,
                 objectMapper,
-                harness);
+                harness,
+                standaloneToolRegistry(astService, objectMapper),
+                standaloneApprovalPolicy(properties, objectMapper));
     }
 
     GraphFactory codeAgentGraph(
@@ -281,7 +337,9 @@ public class ProductionGraphConfiguration {
             ObjectMapper objectMapper,
             HarnessHookChain harness,
             TerminalTarget target,
-            int knowledgeMaxTokens) {
+            int knowledgeMaxTokens,
+            ToolRegistry toolRegistry,
+            CliApprovalInterruptPolicy approvalPolicy) {
         var promptCatalog = PlannerPromptTemplates.catalog();
         PlannerNode planner = new PlannerNode(
                 modelRouter,
@@ -297,13 +355,13 @@ public class ProductionGraphConfiguration {
                         objectMapper,
                         promptCatalog),
                 properties.plannerContextMaxTokens());
-        CoderNode coder = new CoderNode(astService, modelRouter, objectMapper, snapshotService);
-        OpsNode ops = new OpsNode(
-                terminalService, target, properties.commandTimeout(), logPublisher);
+        CoderNode coder = new CoderNode(
+                astService, modelRouter, objectMapper, snapshotService, toolRegistry);
+        OpsNode ops = new OpsNode(terminalService, approvalPolicy, logPublisher);
         ReviewerNode reviewer = new ReviewerNode(
                 browserAutomation, modelRouter, objectMapper, properties.browserTimeout());
         return new StateGraph(
-                properties.executionBudget(), InterruptPolicy.never(), harness)
+                properties.executionBudget(), approvalPolicy, harness)
                 .addNode("planner", planner)
                 .addNode("coder", coder)
                 .addNode("ops", ops)
@@ -330,6 +388,22 @@ public class ProductionGraphConfiguration {
                                 ? "repair"
                                 : "finish",
                         Map.of("repair", "coder", "finish", StateGraph.END));
+    }
+
+    private ToolRegistry standaloneToolRegistry(
+            AstService astService,
+            ObjectMapper objectMapper) {
+        return productionToolRegistry(astService, objectMapper);
+    }
+
+    private CliApprovalInterruptPolicy standaloneApprovalPolicy(
+            ProductionAgentProperties properties,
+            ObjectMapper objectMapper) {
+        return new CliApprovalInterruptPolicy(
+                productionCliCommandCatalog(),
+                terminalTarget(properties),
+                properties.commandTimeout(),
+                objectMapper);
     }
 
     String plannerRoute(com.agent.core.engine.AgentState state) {
