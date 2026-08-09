@@ -17,7 +17,8 @@ public record ModelEndpoint(
         String model,
         LlmClient client,
         CircuitBreaker circuitBreaker,
-        InferenceServiceContract serviceContract) {
+        InferenceServiceContract serviceContract,
+        InferenceAdmissionController admissionController) {
 
     /** 保留已有调用方的 OpenAI 兼容构造器。 */
     public ModelEndpoint(
@@ -29,7 +30,19 @@ public record ModelEndpoint(
                 name,
                 model,
                 InferenceProtocol.OPENAI_CHAT_COMPLETIONS,
-                InferenceServiceContract.allCapabilities()));
+                InferenceServiceContract.allCapabilities()),
+                InferenceAdmissionController.unlimited());
+    }
+
+    /** 使用显式服务契约和兼容准入预算创建端点。 */
+    public ModelEndpoint(
+            String name,
+            String model,
+            LlmClient client,
+            CircuitBreaker circuitBreaker,
+            InferenceServiceContract serviceContract) {
+        this(name, model, client, circuitBreaker, serviceContract,
+                InferenceAdmissionController.unlimited());
     }
 
     /** 校验端点配置。 */
@@ -43,6 +56,7 @@ public record ModelEndpoint(
         Objects.requireNonNull(client, "client 不能为空");
         Objects.requireNonNull(circuitBreaker, "circuitBreaker 不能为空");
         Objects.requireNonNull(serviceContract, "serviceContract 不能为空");
+        Objects.requireNonNull(admissionController, "admissionController 不能为空");
         if (!name.equals(serviceContract.endpointName())) {
             throw new IllegalArgumentException("serviceContract.endpointName 必须与 name 一致");
         }
