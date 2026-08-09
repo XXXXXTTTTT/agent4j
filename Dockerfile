@@ -19,10 +19,13 @@ RUN mvn clean package -DskipTests -Dmaven.test.skip=true -DnpmRegistry=https://r
 FROM docker.m.daocloud.io/library/eclipse-temurin:21-jre
 
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /workspace/agent-web/target/agent-web-0.1.0-SNAPSHOT.jar app.jar
 
 ENV JAVA_OPTS="-XX:+UseG1GC -XX:MaxRAMPercentage=75.0 -Dfile.encoding=UTF-8"
 
 EXPOSE 8080
 
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]
