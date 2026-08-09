@@ -363,6 +363,15 @@ public final class StateGraph implements AutoCloseable {
             if (cause instanceof ExecutionBudgetExceededException budgetFailure) {
                 throw budgetFailure;
             }
+            if (cause instanceof GraphTopologyException topologyFailure) {
+                throw topologyFailure;
+            }
+            if (cause instanceof SubgraphInterruptedException interruptedFailure) {
+                throw interruptedFailure;
+            }
+            if (cause instanceof SubgraphExecutionException subgraphFailure) {
+                throw subgraphFailure;
+            }
             throw new GraphExecutionException(nodeName, cause);
         } catch (ExecutionBudgetExceededException exception) {
             future.cancel(true);
