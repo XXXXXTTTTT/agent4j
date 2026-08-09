@@ -42,4 +42,3 @@ docker rm -f agent4j-restore-test
 ```
 
 必须确认 `flyway_schema_history` 存在且版本不低于当前迁移版本，随后再将恢复库接入隔离的应用实例做 readiness 检查。生产恢复前需停止写入、核对 SHA-256，并由具备权限的操作者执行审批记录。
-
