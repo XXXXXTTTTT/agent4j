@@ -60,6 +60,12 @@ public record NodeExecutionContext(UUID runId, String nodeName) {
         }
     }
 
+    /** 返回当前节点的过程事件发布器；上下文外返回空操作发布器。 */
+    static Consumer<String> progressReporter() {
+        Consumer<String> publisher = PROGRESS.get();
+        return publisher == null ? ignored -> { } : publisher;
+    }
+
     /** 累计当前节点产生的模型 token，并交给预算检查器。 */
     public static void consumeTokens(long tokens) {
         if (tokens < 0) {
