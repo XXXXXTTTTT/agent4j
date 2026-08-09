@@ -17,25 +17,25 @@
 - Modify: `agent-web/src/main/resources/application.properties`
 - Create: `agent-web/src/test/java/com/agent/web/deployment/ActuatorHealthConfigurationTest.java`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Assert the application properties expose `/actuator/health/liveness` and `/actuator/health/readiness`, readiness includes `readinessState,db`, and graceful shutdown timeout is `30s`.
 
-- [ ] **Step 2: Run the test and verify it fails**
+- [x] **Step 2: Run the test and verify it fails**
 
 Run: `mvn -pl agent-web -am -Dtest=ActuatorHealthConfigurationTest -Dsurefire.failIfNoSpecifiedTests=false test`
 
 Expected: FAIL because Actuator and the deployment properties are absent.
 
-- [ ] **Step 3: Implement the minimum configuration**
+- [x] **Step 3: Implement the minimum configuration**
 
 Add `spring-boot-starter-actuator`; set `management.endpoint.health.probes.enabled=true`, `management.endpoints.web.exposure.include=health,info`, `management.endpoint.health.group.readiness.include=readinessState,db`, `server.shutdown=graceful`, and `spring.lifecycle.timeout-per-shutdown-phase=30s`.
 
-- [ ] **Step 4: Run the test and verify it passes**
+- [x] **Step 4: Run the test and verify it passes**
 
 Run the same Maven command; expected `Tests run: 1, Failures: 0, Errors: 0`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `git add agent-web/pom.xml agent-web/src/main/resources/application.properties agent-web/src/test/java/com/agent/web/deployment/ActuatorHealthConfigurationTest.java && git commit -m "feat(deployment): expose health probes and graceful shutdown"`
 
@@ -47,25 +47,25 @@ Run the same Maven command; expected `Tests run: 1, Failures: 0, Errors: 0`.
 - Modify: `docker-compose.yml`
 - Modify: `docker-compose.local.yml`
 
-- [ ] **Step 1: Write the failing deployment EDD assertions**
+- [x] **Step 1: Write the failing deployment EDD assertions**
 
 Create assertions for Java 21 runtime images, `exec java` entrypoints, curl readiness probes, explicit `cpus`, `mem_limit`, and `pids_limit` in both Compose files.
 
-- [ ] **Step 2: Run the EDD and verify it fails**
+- [x] **Step 2: Run the EDD and verify it fails**
 
 Run: `mvn -pl agent-eval -am -Dtest=DeploymentEddTest -Dsurefire.failIfNoSpecifiedTests=false test`
 
 Expected: FAIL on missing probe/resource/entrypoint assertions.
 
-- [ ] **Step 3: Implement the deployment contract**
+- [x] **Step 3: Implement the deployment contract**
 
 Install curl in both runtime images, change entrypoints to `exec java $JAVA_OPTS -jar app.jar`, add Agent readiness healthchecks after PostgreSQL dependency, and set `cpus: 2.0`, `mem_limit: 2g`, `pids_limit: 512` for Agent services. Keep existing workspace, Docker socket, and log mounts unchanged.
 
-- [ ] **Step 4: Verify Compose syntax**
+- [x] **Step 4: Verify Compose syntax**
 
 Run `docker compose -f docker-compose.local.yml --env-file .env config` and `docker compose -f docker-compose.yml --env-file .env config`; both must exit `0`.
 
-- [ ] **Step 5: Run the EDD and commit**
+- [x] **Step 5: Run the EDD and commit**
 
 Run the focused EDD again, then commit with `feat(deployment): bound compose runtime and readiness probes`.
 
@@ -77,15 +77,15 @@ Run the focused EDD again, then commit with `feat(deployment): bound compose run
 - Modify: `agent-eval/src/test/java/com/agent/eval/DeploymentEddTest.java`
 - Modify: `docs/superpowers/plans/2026-08-09-guide-eighth-part-25-deployment.md`
 
-- [ ] **Step 1: Add the runbook**
+- [x] **Step 1: Add the runbook**
 
 Document exact `docker compose exec -T postgres pg_dump`, checksum storage, restore into a disposable database, Flyway validation, and read-only verification queries. State that `.env` and dump files stay outside Git.
 
-- [ ] **Step 2: Add deterministic EDD evidence**
+- [x] **Step 2: Add deterministic EDD evidence**
 
 Write `agent-eval/target/edd/deployment-chapter-25.json` with the checked files, assertion IDs, pass count, and `modelCallAttempts=0`.
 
-- [ ] **Step 3: Update pitfalls**
+- [x] **Step 3: Update pitfalls**
 
 Record the signal-forwarding, readiness-before-traffic, resource-limit, and backup/recovery lessons with only command/test evidence.
 

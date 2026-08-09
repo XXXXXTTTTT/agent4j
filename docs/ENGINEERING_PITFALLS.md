@@ -2612,3 +2612,34 @@ Flyway `V3__security_violations.sql` 创建 `agent_security_violations` 表，�
 断言 `mode=deterministic`、`modelCallAttempts=0`、所有任务通过且报告不含 Prompt 原文或凭据格式。
 `JdbcSecurityViolationSinkTest` 在真实 Docker `postgres:16-alpine` 中执行 V1-V3 Flyway 迁移并验证字段
 往返，证明安全记录不是内存假数据。
+
+## 第八篇 25：Deployment 运行边界与恢复门禁
+
+### 【问题现象】容器可以启动，但编排层无法区分“进程活着”和“已经能接收 Agent 请求”
+
+原有 Compose 只等待 PostgreSQL 健康，Agent 服务没有 HTTP readiness 探针；Flyway 尚未完成或数据库连接
+失效时，负载均衡仍可能把请求发送到尚未可用的实例。Java 入口通过 shell 启动但没有 `exec`，SIGTERM
+不会稳定地直接传递给 Spring Boot 进程。
+
+### 【根因分析】运行生命周期、依赖就绪和容器资源没有形成同一份可验证契约
+
+Spring Boot 默认没有暴露编排探针，Compose 也没有声明 Agent 的 CPU、内存和 PID 上限；生产镜像与本地
+镜像的入口行为不一致。为兼容本地 Dockerfile，`.dockerignore` 还曾把整个 `agent-web/target` 目录送入
+生产多阶段构建，导致上下文达到约 269 MB，构建门禁超时。
+
+### 【解决方案/代码级实现】Actuator 探针、信号转发、资源上限和最小构建上下文
+
+`agent-web` 引入 Spring Boot Actuator，精确暴露 `/actuator/health/liveness` 与
+`/actuator/health/readiness`；readiness 同时检查 `readinessState` 和 `db`，配合 Flyway 完成后再接收流量。
+`server.shutdown=graceful` 和 30 秒关闭阶段预算保证运行中的请求有明确排空窗口。两套 Compose 的 Agent
+服务统一声明 `cpus: 2.0`、`mem_limit: 2g`、`pids_limit: 512`，并使用 curl readiness healthcheck。
+两个 Dockerfile 的入口都改为 `exec java $JAVA_OPTS -jar app.jar`，运行时镜像安装 curl。`.dockerignore`
+只重新包含本地模式所需的 `agent-web` JAR，生产构建上下文从实测约 269 MB 降到约 81 KB。
+
+### 【证据】确定性部署 EDD、双 Compose 解析和真实镜像构建
+
+`DeploymentEddTest` 精确检查两套 Compose、两个 Dockerfile、应用配置和恢复文档，写入
+`agent-eval/target/edd/deployment-chapter-25.json`，报告 `modelCallAttempts=0`。两条
+`docker compose ... config` 命令均返回 0；本地 Dockerfile 和生产多阶段 Dockerfile 均在 Docker Desktop
+上真实构建成功。恢复流程记录在 `docs/deployment/backup-recovery.md`，包含 `pg_dump`、隔离库
+`pg_restore`、Flyway 版本和只读校验命令，避免把破坏性恢复伪装成单元测试。

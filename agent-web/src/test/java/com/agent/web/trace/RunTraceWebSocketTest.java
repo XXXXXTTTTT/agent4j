@@ -36,7 +36,8 @@ import static org.mockito.Mockito.when;
 
 @SpringBootTest(
         classes = RunTraceWebSocketTest.TestApplication.class,
-        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "management.endpoint.health.group.readiness.include=readinessState")
 class RunTraceWebSocketTest {
 
     private static final UUID RUN_ID =

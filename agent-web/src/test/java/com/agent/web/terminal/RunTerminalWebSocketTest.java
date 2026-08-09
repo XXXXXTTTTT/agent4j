@@ -40,7 +40,8 @@ import static org.mockito.Mockito.when;
 
 @SpringBootTest(
         classes = RunTerminalWebSocketTest.TestApplication.class,
-        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "management.endpoint.health.group.readiness.include=readinessState")
 class RunTerminalWebSocketTest {
 
     private static final UUID RUN_ID = UUID.fromString(
