@@ -1,11 +1,16 @@
 package com.agent.web.config;
 
 import com.agent.core.engine.AgentState;
+import com.agent.core.engine.ExecutionBudget;
 import com.agent.core.engine.GraphFactory;
 import com.agent.core.engine.StateGraph;
+import com.agent.core.profile.AgentProfile;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.time.Duration;
+import java.util.Set;
 
 /** 提供 Docker 快速体验使用的显式演示图。 */
 @Configuration(proxyBeanMethods = false)
@@ -14,6 +19,12 @@ import org.springframework.context.annotation.Configuration;
         havingValue = "true",
         matchIfMissing = true)
 public class SampleGraphConfiguration {
+
+    private static final Duration LEGACY_DURATION = Duration.ofDays(3650);
+    private static final ExecutionBudget DEMO_BUDGET = new ExecutionBudget(
+            LEGACY_DURATION, LEGACY_DURATION, Long.MAX_VALUE, 4, Integer.MAX_VALUE);
+    private static final ExecutionBudget SAMPLE_BUDGET = new ExecutionBudget(
+            LEGACY_DURATION, LEGACY_DURATION, Long.MAX_VALUE, 1, Integer.MAX_VALUE);
 
     /** 注册面向用户快速体验的四阶段 Agent 图。 */
     @Bean("demo-agent")
@@ -48,6 +59,19 @@ public class SampleGraphConfiguration {
                 .addEdge("reviewer", StateGraph.END);
     }
 
+    /** 声明精确关联 `demo-agent` 图的演示 Profile。 */
+    @Bean
+    AgentProfile demoAgentProfile() {
+        return new AgentProfile(
+                "demo-agent",
+                "demo-agent",
+                "Agent4J 演示 Agent",
+                "展示 planner、coder、ops、reviewer 四阶段执行链",
+                Set.of(),
+                Set.of(),
+                DEMO_BUDGET);
+    }
+
     /** 注册精确 graphId 为 sample 的最小可运行图。 */
     @Bean("sample")
     GraphFactory sampleGraph() {
@@ -56,6 +80,19 @@ public class SampleGraphConfiguration {
                         state.withVariable("sample.status", "ready"))
                 .setEntryPoint("sample")
                 .addEdge("sample", StateGraph.END);
+    }
+
+    /** 声明精确关联 `sample` 图的最小 Profile。 */
+    @Bean
+    AgentProfile sampleAgentProfile() {
+        return new AgentProfile(
+                "sample",
+                "sample",
+                "Agent4J 最小示例",
+                "展示单节点状态图的最小运行结构",
+                Set.of(),
+                Set.of(),
+                SAMPLE_BUDGET);
     }
 
     private String demoDiff() {

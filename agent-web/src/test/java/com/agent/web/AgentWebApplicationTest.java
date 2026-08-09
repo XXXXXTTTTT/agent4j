@@ -5,6 +5,7 @@ import com.agent.core.engine.Checkpointer;
 import com.agent.core.engine.GraphFactory;
 import com.agent.core.engine.GraphRegistry;
 import com.agent.core.engine.StateGraph;
+import com.agent.core.profile.AgentProfileRegistry;
 import com.agent.web.config.RunRecoveryListener;
 import com.agent.web.controller.RunController;
 import com.agent.web.trace.InMemoryTraceEventBus;
@@ -42,6 +43,8 @@ class AgentWebApplicationTest {
     void assemblesHarnessBeansWithoutRegisteringProductionGraphs() {
         assertThat(context.getBean(Checkpointer.class)).isNotNull();
         assertThat(context.getBean(GraphRegistry.class)).isNotNull();
+        AgentProfileRegistry profiles = context.getBean(AgentProfileRegistry.class);
+        assertThat(profiles.get("demo-agent").graphId()).isEqualTo("demo-agent");
         assertThat(context.getBean(InMemoryTraceEventBus.class)).isNotNull();
         assertThat(context.getBean(AgentRunService.class)).isNotNull();
         assertThat(context.getBean(RunController.class)).isNotNull();

@@ -5,6 +5,8 @@ import com.agent.core.engine.InterruptPolicy;
 import com.agent.core.engine.StateGraph;
 import com.agent.core.harness.HarnessHookChain;
 import com.agent.core.llm.ModelRouter;
+import com.agent.core.llm.TaskType;
+import com.agent.core.profile.AgentProfile;
 import com.agent.core.knowledge.KnowledgeContextProvider;
 import com.agent.core.memory.MemoryContext;
 import com.agent.core.memory.MemoryContextProvider;
@@ -38,6 +40,7 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.Objects;
 import java.util.List;
+import java.util.Set;
 
 /** 装配真实模型、代码工具、沙箱和浏览器驱动的生产 Agent 图。 */
 @Configuration(proxyBeanMethods = false)
@@ -150,6 +153,20 @@ public class ProductionGraphConfiguration {
                 harness,
                 target,
                 knowledgeProperties.maxTokens());
+    }
+
+    /** 声明精确关联 `code-agent` 图的生产 Profile。 */
+    @Bean
+    AgentProfile codeAgentProfile(ProductionAgentProperties properties) {
+        Objects.requireNonNull(properties, "properties 不能为空");
+        return new AgentProfile(
+                "code-agent",
+                "code-agent",
+                "Agent4J Code Agent",
+                "执行规划、代码增量修改、沙箱测试与浏览器审查",
+                Set.of(TaskType.CODE, TaskType.VISION, TaskType.QUICK_CLASSIFICATION),
+                Set.of("AstService", "SandboxTerminalService", "BrowserAutomation"),
+                properties.executionBudget());
     }
 
     GraphFactory codeAgentGraph(

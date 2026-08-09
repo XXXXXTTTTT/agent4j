@@ -4,6 +4,8 @@ import com.agent.core.engine.AgentRunService;
 import com.agent.core.engine.Checkpointer;
 import com.agent.core.engine.GraphFactory;
 import com.agent.core.engine.GraphRegistry;
+import com.agent.core.profile.AgentProfile;
+import com.agent.core.profile.AgentProfileRegistry;
 import com.agent.core.conversation.ConversationContextProvider;
 import com.agent.web.log.InMemoryRunLogEventBus;
 import com.agent.web.persistence.JdbcCheckpointer;
@@ -156,6 +158,14 @@ public class HarnessConfiguration {
     @Bean
     GraphRegistry graphRegistry(Map<String, GraphFactory> graphFactories) {
         return new GraphRegistry(graphFactories);
+    }
+
+    /** 使用构造器声明的 Profile Bean 创建只读注册表。 */
+    @Bean
+    AgentProfileRegistry agentProfileRegistry(
+            Map<String, AgentProfile> profiles,
+            GraphRegistry graphRegistry) {
+        return new AgentProfileRegistry(profiles, graphRegistry);
     }
 
     /** 创建进程内实时 Trace 总线。 */
