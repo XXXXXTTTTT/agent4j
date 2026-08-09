@@ -1,6 +1,11 @@
 package com.agent.web.config;
 
 import com.agent.core.llm.LlmClient;
+import com.agent.core.llm.InferenceAdmissionController;
+import com.agent.core.llm.InferenceBudget;
+import com.agent.core.llm.InferenceCapability;
+import com.agent.core.llm.InferenceProtocol;
+import com.agent.core.llm.InferenceServiceContract;
 import com.agent.core.llm.ModelEndpoint;
 import com.agent.core.llm.ModelRouter;
 import com.agent.core.llm.TaskType;
@@ -22,6 +27,7 @@ import org.apache.hc.core5.util.Timeout;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** 将环境配置适配为 Core 使用的构造器注入模型路由。 */
 @Configuration(proxyBeanMethods = false)
@@ -69,16 +75,26 @@ public class ModelGatewayConfiguration {
             LlmClient client) {
         properties.validate();
         CircuitBreakerConfig breakerConfig = CircuitBreakerConfig.ofDefaults();
+        InferenceBudget budget = new InferenceBudget(
+                properties.maxConcurrentRequests(),
+                properties.maxRequestsPerMinute(),
+                properties.queueTimeout());
         EnumMap<TaskType, List<ModelEndpoint>> routes = new EnumMap<>(TaskType.class);
         routes.put(TaskType.CODE, List.of(
-                endpoint("code-primary", properties.codeModel(), client, breakerConfig),
-                endpoint("code-fallback", properties.fallbackModel(), client, breakerConfig)));
+                endpoint("code-primary", properties.codeModel(), client, breakerConfig,
+                        properties.codeCapabilities(), budget),
+                endpoint("code-fallback", properties.fallbackModel(), client, breakerConfig,
+                        properties.fallbackCapabilities(), budget)));
         routes.put(TaskType.VISION, List.of(
-                endpoint("vision-primary", properties.visionModel(), client, breakerConfig),
-                endpoint("vision-fallback", properties.fallbackModel(), client, breakerConfig)));
+                endpoint("vision-primary", properties.visionModel(), client, breakerConfig,
+                        properties.visionCapabilities(), budget),
+                endpoint("vision-fallback", properties.fallbackModel(), client, breakerConfig,
+                        properties.fallbackCapabilities(), budget)));
         routes.put(TaskType.QUICK_CLASSIFICATION, List.of(
-                endpoint("quick-primary", properties.quickClassificationModel(), client, breakerConfig),
-                endpoint("quick-fallback", properties.fallbackModel(), client, breakerConfig)));
+                endpoint("quick-primary", properties.quickClassificationModel(), client, breakerConfig,
+                        properties.quickClassificationCapabilities(), budget),
+                endpoint("quick-fallback", properties.fallbackModel(), client, breakerConfig,
+                        properties.fallbackCapabilities(), budget)));
         return new ModelRouter(Map.copyOf(routes));
     }
 
@@ -86,11 +102,19 @@ public class ModelGatewayConfiguration {
             String name,
             String model,
             LlmClient client,
-            CircuitBreakerConfig breakerConfig) {
+            CircuitBreakerConfig breakerConfig,
+            Set<InferenceCapability> capabilities,
+            InferenceBudget budget) {
         return new ModelEndpoint(
                 name,
                 model,
                 client,
-                CircuitBreaker.of(name, breakerConfig));
+                CircuitBreaker.of(name, breakerConfig),
+                new InferenceServiceContract(
+                        name,
+                        model,
+                        InferenceProtocol.OPENAI_CHAT_COMPLETIONS,
+                        capabilities),
+                new InferenceAdmissionController(budget));
     }
 }

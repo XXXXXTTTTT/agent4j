@@ -78,9 +78,18 @@ AGENT_LLM_CODE_MODEL=your-code-model
 AGENT_LLM_VISION_MODEL=your-vision-model
 AGENT_LLM_QUICK_CLASSIFICATION_MODEL=your-fast-model
 AGENT_LLM_FALLBACK_MODEL=your-fallback-model
+AGENT_LLM_MAX_CONCURRENT_REQUESTS=8
+AGENT_LLM_MAX_REQUESTS_PER_MINUTE=120
+AGENT_LLM_QUEUE_TIMEOUT=2s
+AGENT_LLM_CODE_CAPABILITIES=CHAT_COMPLETIONS,STREAMING,TOOL_CALLING
+AGENT_LLM_VISION_CAPABILITIES=CHAT_COMPLETIONS,STREAMING,VISION_INPUT
+AGENT_LLM_QUICK_CLASSIFICATION_CAPABILITIES=CHAT_COMPLETIONS,STREAMING
+AGENT_LLM_FALLBACK_CAPABILITIES=CHAT_COMPLETIONS
 ```
 
 应用启动时会严格校验 endpoint、API Key、路径和四个模型名；缺少任一配置会快速失败。`.env` 已被 `.gitignore` 排除，禁止提交真实密钥。
+
+能力声明不会根据模型名称推断。模型端点在请求前按 `CHAT_COMPLETIONS`、`STREAMING`、`TOOL_CALLING` 和 `VISION_INPUT` 做强类型准入；并发、每分钟请求数和排队时限也是端点级预算。流式调用会记录 TTFT、chunk 数和消费者背压耗时。
 
 ### PostgreSQL 连接
 
@@ -189,10 +198,10 @@ channels only.
 | --- | --- | --- |
 | Database | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | Compose-local values |
 | Demo graph | `AGENT_SAMPLE_ENABLED` | `true` |
-| Model gateway | `AGENT_LLM_ENABLED`, `AGENT_LLM_BASE_URL`, `AGENT_LLM_API_KEY`, `AGENT_LLM_*_MODEL` | disabled |
+| Model gateway | `AGENT_LLM_ENABLED`, `AGENT_LLM_BASE_URL`, `AGENT_LLM_API_KEY`, `AGENT_LLM_*_MODEL`, `AGENT_LLM_*_CAPABILITIES`, `AGENT_LLM_MAX_CONCURRENT_REQUESTS`, `AGENT_LLM_MAX_REQUESTS_PER_MINUTE`, `AGENT_LLM_QUEUE_TIMEOUT` | disabled |
 | Observability | `AGENT_OBSERVABILITY_ENABLED`, `AGENT_OBSERVABILITY_OTLP_TRACES_ENDPOINT`, `AGENT_OBSERVABILITY_AUTHORIZATION` | disabled |
 
-The model layer remains framework-independent: `ModelRouter` accepts endpoint chains through constructor injection, while `agent-web` supplies an optional environment-backed adapter. This keeps `agent-core` testable and makes the Docker deployment configurable without hard-coding vendor credentials.
+The model layer remains framework-independent: `ModelRouter` accepts endpoint chains through constructor injection, while `agent-web` supplies an optional environment-backed adapter. Each endpoint exposes a portable OpenAI-compatible service contract and independent admission budget. This keeps `agent-core` testable and makes the Docker deployment configurable without hard-coding vendor credentials.
 
 ## Development
 

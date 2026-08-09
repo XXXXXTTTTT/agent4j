@@ -1,9 +1,12 @@
 package com.agent.web.config;
 
+import com.agent.core.llm.InferenceCapability;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.time.Duration;
+import java.util.Set;
 
 /** 通过环境变量注入的 OpenAI 兼容模型网关配置。 */
 @ConfigurationProperties(prefix = "agent.llm")
@@ -15,7 +18,50 @@ public record ModelGatewayProperties(
         String codeModel,
         String visionModel,
         String quickClassificationModel,
-        String fallbackModel) {
+        String fallbackModel,
+        int maxConcurrentRequests,
+        int maxRequestsPerMinute,
+        Duration queueTimeout,
+        Set<InferenceCapability> codeCapabilities,
+        Set<InferenceCapability> visionCapabilities,
+        Set<InferenceCapability> quickClassificationCapabilities,
+        Set<InferenceCapability> fallbackCapabilities) {
+
+    /** 保留已有调用方的默认推理预算与能力声明。 */
+    public ModelGatewayProperties(
+            boolean enabled,
+            String baseUrl,
+            String apiKey,
+            String chatCompletionsPath,
+            String codeModel,
+            String visionModel,
+            String quickClassificationModel,
+            String fallbackModel) {
+        this(
+                enabled,
+                baseUrl,
+                apiKey,
+                chatCompletionsPath,
+                codeModel,
+                visionModel,
+                quickClassificationModel,
+                fallbackModel,
+                8,
+                120,
+                Duration.ofSeconds(2),
+                Set.of(
+                        InferenceCapability.CHAT_COMPLETIONS,
+                        InferenceCapability.STREAMING,
+                        InferenceCapability.TOOL_CALLING),
+                Set.of(
+                        InferenceCapability.CHAT_COMPLETIONS,
+                        InferenceCapability.STREAMING,
+                        InferenceCapability.VISION_INPUT),
+                Set.of(
+                        InferenceCapability.CHAT_COMPLETIONS,
+                        InferenceCapability.STREAMING),
+                Set.of(InferenceCapability.CHAT_COMPLETIONS));
+    }
 
     /** 冻结文本配置，禁用网关时允许留空凭据。 */
     public ModelGatewayProperties {
@@ -27,6 +73,27 @@ public record ModelGatewayProperties(
         visionModel = textOrEmpty(visionModel);
         quickClassificationModel = textOrEmpty(quickClassificationModel);
         fallbackModel = textOrEmpty(fallbackModel);
+        if (maxConcurrentRequests <= 0) {
+            throw new IllegalArgumentException(
+                    "agent.llm.max-concurrent-requests 必须大于 0");
+        }
+        if (maxRequestsPerMinute <= 0) {
+            throw new IllegalArgumentException(
+                    "agent.llm.max-requests-per-minute 必须大于 0");
+        }
+        if (queueTimeout == null || queueTimeout.isNegative()) {
+            throw new IllegalArgumentException(
+                    "agent.llm.queue-timeout 不能为负数且不能为空");
+        }
+        codeCapabilities = freezeCapabilities(
+                codeCapabilities, "agent.llm.code-capabilities");
+        visionCapabilities = freezeCapabilities(
+                visionCapabilities, "agent.llm.vision-capabilities");
+        quickClassificationCapabilities = freezeCapabilities(
+                quickClassificationCapabilities,
+                "agent.llm.quick-classification-capabilities");
+        fallbackCapabilities = freezeCapabilities(
+                fallbackCapabilities, "agent.llm.fallback-capabilities");
     }
 
     /** 校验启用模型网关所需的完整配置。 */
@@ -71,5 +138,17 @@ public record ModelGatewayProperties(
         if (value.isBlank()) {
             throw new IllegalArgumentException(property + " 不能为空");
         }
+    }
+
+    private static Set<InferenceCapability> freezeCapabilities(
+            Set<InferenceCapability> capabilities,
+            String property) {
+        if (capabilities == null || capabilities.isEmpty()) {
+            throw new IllegalArgumentException(property + " 不能为空");
+        }
+        if (capabilities.stream().anyMatch(value -> value == null)) {
+            throw new IllegalArgumentException(property + " 不能包含空能力");
+        }
+        return Set.copyOf(capabilities);
     }
 }

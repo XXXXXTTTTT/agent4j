@@ -1,6 +1,10 @@
 package com.agent.web.config;
 
+import com.agent.core.llm.InferenceCapability;
 import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -38,5 +42,38 @@ class ModelGatewayPropertiesTest {
         properties.validate();
 
         assertThat(properties.baseUrl()).isEqualTo("https://api.example.com");
+        assertThat(properties.maxConcurrentRequests()).isEqualTo(8);
+        assertThat(properties.maxRequestsPerMinute()).isEqualTo(120);
+        assertThat(properties.queueTimeout()).isEqualTo(Duration.ofSeconds(2));
+        assertThat(properties.codeCapabilities())
+                .containsExactlyInAnyOrder(
+                        InferenceCapability.CHAT_COMPLETIONS,
+                        InferenceCapability.STREAMING,
+                        InferenceCapability.TOOL_CALLING);
+    }
+
+    @Test
+    void rejectsInvalidInferenceBudget() {
+        assertThatThrownBy(() -> new ModelGatewayProperties(
+                true, "https://api.example.com", "secret", "/v1/chat/completions",
+                "code", "vision", "quick", "fallback",
+                0, 120, Duration.ofSeconds(2),
+                Set.of(InferenceCapability.CHAT_COMPLETIONS),
+                Set.of(InferenceCapability.CHAT_COMPLETIONS),
+                Set.of(InferenceCapability.CHAT_COMPLETIONS),
+                Set.of(InferenceCapability.CHAT_COMPLETIONS)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("max-concurrent-requests");
+
+        assertThatThrownBy(() -> new ModelGatewayProperties(
+                true, "https://api.example.com", "secret", "/v1/chat/completions",
+                "code", "vision", "quick", "fallback",
+                8, 120, Duration.ofSeconds(2),
+                Set.of(),
+                Set.of(InferenceCapability.CHAT_COMPLETIONS),
+                Set.of(InferenceCapability.CHAT_COMPLETIONS),
+                Set.of(InferenceCapability.CHAT_COMPLETIONS)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("code-capabilities");
     }
 }

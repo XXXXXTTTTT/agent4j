@@ -150,6 +150,18 @@ public final class ModelRouter {
         throw routingException;
     }
 
+    /** 返回冻结的路由服务契约，供配置审计和运行时诊断使用。 */
+    public Map<TaskType, List<InferenceServiceContract>> serviceContracts() {
+        EnumMap<TaskType, List<InferenceServiceContract>> contracts =
+                new EnumMap<>(TaskType.class);
+        routes.forEach((taskType, endpoints) -> contracts.put(
+                taskType,
+                endpoints.stream()
+                        .map(ModelEndpoint::serviceContract)
+                        .toList()));
+        return Collections.unmodifiableMap(contracts);
+    }
+
     private EnumSet<InferenceCapability> requiredCapabilities(
             TaskType taskType,
             ModelRequest request) {
