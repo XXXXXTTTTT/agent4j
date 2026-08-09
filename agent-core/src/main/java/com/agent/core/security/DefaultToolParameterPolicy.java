@@ -89,7 +89,9 @@ public final class DefaultToolParameterPolicy implements ToolParameterPolicy {
 
     private static boolean containsControlCharacter(String value) {
         return value.codePoints().anyMatch(codePoint -> Character.isISOControl(codePoint)
-                && codePoint != '\t');
+                && codePoint != '\t'
+                && codePoint != '\n'
+                && codePoint != '\r');
     }
 
     private static String requireText(String value, String name) {

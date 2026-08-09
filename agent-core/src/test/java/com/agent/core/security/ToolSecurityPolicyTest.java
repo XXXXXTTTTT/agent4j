@@ -44,6 +44,19 @@ class ToolSecurityPolicyTest {
     }
 
     @Test
+    void allowsDiffFormattingWhitespaceButBlocksNulControlCharacter() throws Exception {
+        DefaultToolParameterPolicy policy = new DefaultToolParameterPolicy(
+                Map.of("browser.navigate", Set.of("/url")));
+
+        assertThat(policy.inspect(definition,
+                call("{\"url\":\"line\\nvalue\"}"), context).decision())
+                .isEqualTo(SecurityDecision.ALLOW);
+        assertThat(policy.inspect(definition,
+                call("{\"url\":\"bad\\u0000value\"}"), context).decision())
+                .isEqualTo(SecurityDecision.BLOCK);
+    }
+
+    @Test
     void redactsNestedSecretsWithoutChangingShape() throws Exception {
         OutputRedactor redactor = new DefaultOutputRedactor();
         JsonNode result = redactor.redact("browser.navigate", mapper.readTree(

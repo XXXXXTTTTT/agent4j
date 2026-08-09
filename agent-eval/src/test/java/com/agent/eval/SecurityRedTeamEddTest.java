@@ -149,7 +149,7 @@ class SecurityRedTeamEddTest {
                     Duration.ofSeconds(1), (call, context) -> JsonNodeFactory.instance.objectNode()
                             .put("ok", true)));
 
-            ToolResult control = registry.execute(call("edd.parameter", "bad\nvalue"), context());
+            ToolResult control = registry.execute(call("edd.parameter", "bad\u0000value"), context());
             results.add(new EddResult("tool-control", "DENIED", control.status().name(),
                     control.status() == ToolResultStatus.DENIED, "security.tool-parameter-control-character"));
             ToolResult bearer = registry.execute(call("edd.parameter", "Bearer secret"), context());
