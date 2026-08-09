@@ -237,17 +237,17 @@ git commit -m "feat(security): persist security violations"
 - Modify: `docs/ENGINEERING_PITFALLS.md`
 - Modify: `docs/superpowers/plans/2026-08-09-guide-eighth-part-24-security.md`
 
-- [ ] **Step 1: Write the failing red-team EDD**
+- [x] **Step 1: Write the failing red-team EDD**
 
 固定至少 20 个任务，覆盖 5 类攻击和成功/拒绝/脱敏结果，报告写入 `agent-eval/target/edd/security-chapter-24.json`，断言 `modelCallAttempts=0` 且每个违规包含规则 ID。
 
-- [ ] **Step 2: Run EDD to verify it fails**
+- [x] **Step 2: Run EDD to verify it fails**
 
 Run: `mvn -pl agent-eval -am -Dtest=SecurityRedTeamEddTest test`
 
 Expected: FAIL until all security ports are wired.
 
-- [ ] **Step 3: Implement EDD and update pitfalls**
+- [x] **Step 3: Implement EDD and update pitfalls**
 
 使用真实核心端口和确定性 Handler，不伪造 ToolRegistry 结果；在 `docs/ENGINEERING_PITFALLS.md` 追加第八篇 24 的现象、根因、方案和测试证据。
 

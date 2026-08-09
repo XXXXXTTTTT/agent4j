@@ -2564,3 +2564,51 @@ try-with-resources 只管理已经成功完成资源声明的对象；多资源�
 `target/edd/evaluation-chapter-23.json`，断言 3 个能力、`modelCallAttempts=0`、成本/token 汇总和
 `gate.passed=true`。真实模型 EDD 仍由既有显式 `AGENT_LLM_ENABLED` 开关控制，不会被普通构建伪装成真实
 供应商调用。
+
+## 第八篇 24：Agent Security 与红队门禁
+
+### 【问题现象】用户任务、项目知识或工具输出中的伪指令可能改变 Agent 控制规则
+
+如果把所有文本直接拼入 Planner Prompt，诸如“忽略之前的系统指令”“输出隐藏 Prompt”或外部页面要求
+修改审批策略的内容会与可信指令混在一起。工具参数还可能携带控制字符、`Bearer ` 或 `sk-` 凭据，
+工具输出则可能在嵌套对象中泄露 `authorization`、`token` 等字段。
+
+### 【根因分析】模型输入、工具权限和输出审计缺少统一的强类型边界
+
+仅依赖 Prompt 约束无法保证模型遵守安全规则；仅在 Web 层过滤也会遗漏直接调用核心工具的路径。工具
+参数如果按字符串猜测工具名或字段名，容易产生误放行；违规记录若保留原文，又会把攻击载荷和密钥写入
+数据库与日志。
+
+### 【解决方案/代码级实现】固定规则检测、精确 JSON Pointer 策略和递归脱敏
+
+`DefaultPromptInjectionDetector` 对精确的 `user.task`、`project.knowledge`、`tool.output` 来源返回
+`ALLOW/FLAG/BLOCK` 和固定规则 ID；Planner 在任何模型请求前执行检查，`BLOCK` 直接走
+`planner.route=failed`，`FLAG` 只推送 `ruleId/severity/source` 摘要。`DefaultToolParameterPolicy`
+使用工具名和 JSON Pointer 白名单拒绝未声明字段、控制字符及凭据格式；`DefaultOutputRedactor` 深拷贝
+JSON 并递归替换敏感字段和值。`DefaultToolRegistry` 固定执行顺序为 Schema、参数策略、授权、Handler、
+输出脱敏，并把拒绝原因写入脱敏的 `SecurityViolation`。
+
+### 【问题现象】安全违规只写在内存或控制台，无法按 Run、用户和节点审计
+
+安全端口存在但没有生产装配时，模型或工具确实被拒绝，数据库却没有记录，出现问题后只能依赖短暂的
+进程日志定位。
+
+### 【根因分析】安全策略与持久化适配器没有共享同一条 Spring 生产装配路径
+
+测试中的 Sink 收集器和生产图的 `noop` 兼容构造器不是同一个依赖图；即使核心逻辑正确，生产配置仍可能
+静默丢弃违规事件。
+
+### 【解决方案/代码级实现】PostgreSQL 作为安全违规权威记录源
+
+Flyway `V3__security_violations.sql` 创建 `agent_security_violations` 表，并按 `(run_id, occurred_at)`
+和 `(user_id, occurred_at)` 建索引。`JdbcSecurityViolationSink` 使用 `TransactionTemplate` 原子写入
+固定字段；持久化失败抛出明确的 `SecurityPersistenceException`。生产 `ToolRegistry` 与 `PlannerNode`
+通过 Spring 注入同一个 JDBC Sink，直接构造的测试重载才使用 `noop`，从而保持隔离测试的无外部副作用。
+
+### 【证据】第 24 章确定性红队 EDD 与真实 PostgreSQL 迁移
+
+`SecurityRedTeamEddTest` 使用真实 Prompt 检测器、参数策略、输出脱敏器和 `DefaultToolRegistry`，覆盖
+20 项攻击与拒绝场景，报告写入 `agent-eval/target/edd/security-chapter-24.json`，
+断言 `mode=deterministic`、`modelCallAttempts=0`、所有任务通过且报告不含 Prompt 原文或凭据格式。
+`JdbcSecurityViolationSinkTest` 在真实 Docker `postgres:16-alpine` 中执行 V1-V3 Flyway 迁移并验证字段
+往返，证明安全记录不是内存假数据。
