@@ -3,6 +3,7 @@ package com.agent.web.controller;
 import com.agent.core.engine.CheckpointConflictException;
 import com.agent.core.engine.GraphNotFoundException;
 import com.agent.core.engine.RunNotFoundException;
+import com.agent.core.profile.AgentProfileNotFoundException;
 import com.agent.web.persistence.JdbcConversationRepository;
 import com.agent.web.conversation.ConversationService;
 import com.agent.web.workspace.WorkspaceAccessService;
@@ -37,7 +38,11 @@ public final class RunExceptionHandler {
     }
 
     /** 映射未注册图和不存在 Run。 */
-    @ExceptionHandler({GraphNotFoundException.class, RunNotFoundException.class})
+    @ExceptionHandler({
+            GraphNotFoundException.class,
+            RunNotFoundException.class,
+            AgentProfileNotFoundException.class
+    })
     public ResponseEntity<ProblemDetail> notFound(
             RuntimeException exception,
             ServerWebExchange exchange) {
