@@ -41,6 +41,8 @@ docker compose -f docker-compose.local.yml --env-file .env up -d --build
 
 `Copy-Item` 只在 `.env` 不存在时执行，避免覆盖已有模型密钥、数据库密码和工作区配置。首次启动后，数据库凭据会保存在 PostgreSQL 数据卷中；修改 `.env` 中的 `POSTGRES_USER` 或 `POSTGRES_PASSWORD` 不会自动修改已初始化的数据卷。
 
+两套 Compose 都会强制启用完整产品工作台，因此即使宿主直跑配置中的 `AGENT_PRODUCTION_ENABLED=false`，Docker 内仍会注册工作区、会话和 Agent 执行接口。
+
 打开 <http://localhost:8080>，输入任务描述并点击 **运行 Agent**，即可观察 `Planner -> Coder -> Ops -> Reviewer` 链路。停止本地服务：
 
 ```powershell

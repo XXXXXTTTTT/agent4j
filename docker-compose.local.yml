@@ -49,7 +49,8 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-agent}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-agent}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-agent123456}
-      AGENT_PRODUCTION_ENABLED: ${AGENT_PRODUCTION_ENABLED:-true}
+      # Compose 始终启动完整产品工作台，避免前端存在但工作区与会话接口未注册。
+      AGENT_PRODUCTION_ENABLED: "true"
       AGENT_CODE_WORKSPACE: /agent-workspace
       AGENT_CODE_WORKSPACE_SOURCE_CONTAINER: agent4j-web-local
       AGENT_CODE_WORKSPACE_SOURCE_PATH: /agent-workspace
