@@ -8,7 +8,7 @@
 
 **Tech Stack:** Java 21 records、`BigDecimal`、JUnit 5、AssertJ、Jackson、现有 Maven `agent-eval` 模块。
 
-**Progress:** Task 1-4 implementation and focused tests complete; Task 5 verification complete; documentation commit and merge remain.
+**Progress:** Task 1-5 complete; Java 21 full verification, documentation commit, fast-forward merge, and post-merge Evaluation regression all passed.
 
 ---
 
@@ -211,6 +211,6 @@ git add docs/ENGINEERING_PITFALLS.md docs/superpowers/plans/2026-08-09-guide-eig
 git commit -m "docs(eval): record chapter 23 evaluation pitfalls"
 ```
 
-- [ ] **Step 4: Merge and clean up**
+- [x] **Step 4: Merge and clean up**
 
 确认 feature 工作树 clean 后，在 `D:\agent4j` 执行 `git merge --ff-only feat/guide-eighth-part-23-evaluation`，在合并后的 master 重跑 Evaluation EDD 和关键门禁；成功后删除本次专属 worktree、prune 元数据和已合并分支，最终 `git status --short --branch` 只显示 clean `master`。
