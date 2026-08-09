@@ -2,6 +2,7 @@ package com.agent.web.config;
 
 import com.agent.core.llm.InferenceCapability;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -64,6 +65,7 @@ public record ModelGatewayProperties(
     }
 
     /** 冻结文本配置，禁用网关时允许留空凭据。 */
+    @ConstructorBinding
     public ModelGatewayProperties {
         baseUrl = textOrEmpty(baseUrl);
         apiKey = textOrEmpty(apiKey);
