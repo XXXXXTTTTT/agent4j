@@ -2237,3 +2237,118 @@ Git 工作树、JGit 两次连续 Diff、`D:/Git/bin/bash.exe`、pty4j ANSI 日�
 最终 Trace 精确为 `planner/coder/ops/reviewer/coder/ops/reviewer`，报告只含
 `taskId/status/attempts/updatedFiles/commandSha256/terminalCalls/passed`，实际结果为两次终端调用、
 两次 Coder 尝试和 `passed=true`。
+
+## 第七篇 7B：GUI Agent 页面动作与证据闭环
+
+### 【问题现象】多个 Run 共享 Playwright Page，页面状态和关闭动作互相污染
+
+Reviewer 时代的单例浏览器适合顺序审查，却不能直接供 GUI Agent 并发执行。两个 Run 若共享同一个
+Page，其中一次导航、表单填充或会话关闭会改变另一次运行正在观察的页面；审计里的 `runId` 即使正确，
+DOM 和截图仍可能来自另一条执行链。
+
+### 【根因分析】Spring Bean 生命周期不等于浏览器任务生命周期
+
+Playwright 的 Browser、Context 和 Page 具有状态与线程亲和性。把单例服务当成无状态工具，会让
+Tool Registry 的 Run 隔离停留在审计字段层面，实际外部资源没有隔离。
+
+### 【解决方案/代码级实现】每个 Run 独占会话，所有动作按 Run 精确取回
+
+`BrowserSessionRegistry` 以精确 `runId` 管理 `BrowserAutomation`，重复 open 和未知 Run 均直接
+失败。`browser.navigate/click/fill/scroll/evidence` 只能从 `ToolInvocationContext.runId()` 取得
+当前会话，不能绕过注册表访问 Playwright。`GuiAgentNode` 在 `finally` 中关闭该 Run 会话；关闭失败
+不会覆盖原执行异常，而是作为 suppressed exception 保留完整因果链。
+
+### 【问题现象】Locator DOM 与截图范围不一致，模型引用的证据无法复核
+
+若 locator 模式仍返回整页 HTML，却只截取某个元素，截图哈希与 DOM 哈希描述的是不同范围。模型可以
+根据整页文字宣称元素操作成功，但审计人员无法用同一证据对象复核该结论。
+
+### 【根因分析】证据选择器只约束截图，没有同时约束结构化页面证据
+
+截图和 DOM 是同一次观察的两个视图，必须共享精确范围。只把 CSS selector 传给 screenshot，而对
+DOM 固定调用 page content，会破坏证据对象的原子语义。
+
+### 【解决方案/代码级实现】Page 与 locator 使用一致证据边界
+
+`BrowserEvidenceSelector` 精确区分 `page` 和非空 locator。`PlaywrightBrowserService.capture` 在
+page 模式返回整页 HTML 与全页 PNG，在 locator 模式返回同一 locator 的 `outerHTML` 与元素 PNG；
+`BrowserEvidence` 同时携带最终 URL、选择器、DOM、截图和两类 SHA-256，前端、模型和审计报告引用
+同一个证据 ID。
+
+### 【问题现象】Future 超时后 Playwright 动作仍继续，或 Playwright 先超时但工具线程未结束
+
+GUI 操作同时跨越工具调度线程和 Playwright 专属线程。只有 Tool Definition timeout 时，外层 Future
+虽然失败，底层定位或点击仍可能继续；只有 Playwright timeout 时，外层等待也可能因异常传递缺陷而
+长期占用虚拟线程。
+
+### 【根因分析】调度超时与浏览器操作超时属于两个不同资源边界
+
+Tool Registry 控制一次工具调用能占用多久，Playwright timeout 控制页面 API 等待元素或导航多久。
+两者不能互相替代，且失败必须保留底层 Playwright cause 才能区分元素缺失、导航失败和调度超时。
+
+### 【解决方案/代码级实现】工具硬上限与 Playwright 操作上限双层治理
+
+五个浏览器工具都声明 Definition timeout，并把同一正 `Duration` 传入导航、点击、填充、滚动和证据
+采集 API。工具执行超时取消内部 Future，Playwright API 同时设置毫秒级操作 timeout；异常通过
+`ToolResult.errorStack` 或 `gui.error` 完整保留，不把超时改写成普通空结果。
+
+### 【问题现象】模型输出 done，却没有能证明结果的页面证据
+
+视觉模型可能在动作尚未生效时直接返回成功摘要。若节点只检查 `action=done`，页面未变化也会写入
+`final_response`，形成对用户可见的虚假成功。
+
+### 【根因分析】模型结论没有与运行时已采集证据建立引用完整性约束
+
+自然语言摘要无法证明其依据了哪次 DOM 和截图。即使 Prompt 要求模型引用证据，也必须由运行时验证
+引用是否存在，不能相信模型自行遵守。
+
+### 【解决方案/代码级实现】严格动作协议与已存在证据引用门禁
+
+`BrowserActionDecision` 拒绝 Markdown fence、未知字段、错误类型和动作专属字段越权；`done` 必须
+包含非空 summary 以及至少一个已采集的 evidenceRef。`GuiAgentNode` 只在所有引用都属于当前 Run 的
+证据集合且会话清理成功后写入 `final_response`，否则写入完整 `gui.error`。
+
+### 【证据】真实 Chromium EDD 覆盖动作、DOM、PNG 和审计链
+
+`GuiAgentWorkflowEddTest` 启动真实本地 `HttpServer`，通过真实 Playwright Chromium 执行
+`navigate -> page evidence -> fill -> locator evidence -> click -> locator evidence -> done`。测试断言
+最终 DOM 为 `submitted: Agent4J`、截图具有 PNG 文件签名、六次 Tool Registry 审计顺序精确、最终
+摘要引用 `evidence-2`，并确认状态中不存在 Coder/Ops 输出。EDD 报告严格只含
+`taskId/status/steps/toolCalls/evidenceRefs/finalUrl/domSha256/screenshotSha256/passed`。
+
+### 【问题现象】契约型 EDD 通过，但供应商监控没有请求记录，无法说明真实模型质量
+
+浏览器工作流 EDD 为了稳定验证 Playwright、Tool Registry 和证据门禁，使用本地页面和确定性模型响应。
+它会产生真实 Chromium、DOM、PNG 和工具审计证据，但不会访问外部 LLM；若把这类 EDD 当成模型质量
+评测，供应商监控为空并不奇怪，也无法发现真实模型的路由格式、回答质量和延迟问题。
+
+### 【根因分析】工程契约验证与真实模型评测混成一个测试门禁
+
+外部 API 有网络、配额、模型输出漂移和成本边界，不能让普通 `mvn test` 隐式依赖它；但只保留 Mock
+又会让生产端点从未被真实调用。两类测试若没有显式名称和开关，测试报告无法区分“链路正确”和“模型
+实际可用”。
+
+### 【解决方案/代码级实现】双层 EDD：默认隔离，显式真实调用
+
+`GuiAgentWorkflowEddTest` 固定验证浏览器执行协议；`LlmEddTest` 读取精确的
+`AGENT_LLM_ENABLED`、`AGENT_LLM_BASE_URL`、`AGENT_LLM_API_KEY` 和四个模型变量，只有开启后才
+调用 OpenAI 兼容端点。真实评测报告写入 `agent-eval/target/edd/llm-edd-<timestamp>.json`，不提交
+API Key 或完整回答。2026-08-09 的真实运行命中 `https://zz.cxwms.com`，6 个场景全部通过，路由为
+`chat/chat/chat/agent/agent/agent`，测试结果为 2/2、0 失败、0 错误、0 跳过。
+
+### 【问题现象】真实模型正确返回 agent，却被 EDD 夹具的缺失状态键误报为链路失败
+
+第一次真实运行已产生 HTTP 200 和模型响应，但 `code.intent` 及两个记忆场景在 Planner 进入代码路由
+时失败，错误为 `缺少状态变量: coder.workspacePath`。如果只看测试最终断言，会误以为模型或路由器失败，
+丢失了真正的测试装配错误。
+
+### 【根因分析】测试状态没有复用生产节点的精确输入契约
+
+`PlannerNode.execute` 对 agent 路由明确读取 `planner.repositoryId`、`planner.userId` 和
+`coder.workspacePath`。`LlmEddTest` 当时只设置前两个键，导致模型调用完成后仍无法构造代码规划上下文。
+
+### 【解决方案/代码级实现】用生产常量补齐 EDD 状态，不放宽生产校验
+
+测试现在通过 `CoderNode.WORKSPACE_PATH_KEY` 写入当前 EDD 工作目录的绝对规范化路径，保留 Planner
+对缺失状态的严格拒绝语义。修复后再次真实调用端点，6 个场景和 RAG 增强测试均通过；这证明报告中的
+绿灯同时覆盖了模型请求、Planner 路由、记忆/知识上下文和协议解析，而不是仅由 Mock 响应驱动。
