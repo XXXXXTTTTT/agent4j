@@ -2644,3 +2644,50 @@ Spring Boot 默认没有暴露编排探针，Compose 也没有声明 Agent 的 C
 上真实构建成功。生产镜像还通过隔离容器与临时端口执行 readiness smoke test，HTTP 返回 200 后删除临时
 容器，未重建现有 Compose 服务。恢复流程记录在 `docs/deployment/backup-recovery.md`，包含 `pg_dump`、隔离库
 `pg_restore`、Flyway 版本和只读校验命令，避免把破坏性恢复伪装成单元测试。
+
+## 第八篇 26：第 26 章 Inference Framework 端点契约与推理准入
+
+### 【问题现象】OpenAI 兼容只解决了 URL 迁移，却无法回答端点是否支持工具、视觉或流式请求
+
+教程参考仓库 `91066e4` 的推理框架章节强调 Ollama、vLLM、SGLang 和 TGI 通过 OpenAI 协议保持
+调用方可移植；但“协议兼容”不等于“能力完全相同”。如果 Router 只按模型名和 TaskType 发送请求，
+视觉模型不支持工具调用、fallback 不支持 SSE 等配置错误会等到 HTTP 失败后才暴露，并污染熔断状态。
+
+### 【根因分析】端点元数据、请求准入和模型调用被放进同一个失败边界
+
+原有 `ModelEndpoint` 只有名称、模型、客户端和 CircuitBreaker，没有能力声明；原有 `ModelRouter`
+也没有端点级并发/速率预算。虚拟线程虽然廉价，但无界排队会把一个慢推理服务的延迟扩散到整张图；
+若把预算检查放进 CircuitBreaker，资源拒绝会被错误计为上游失败。原有同步 SSE 消费者还没有 TTFT 和
+回调耗时指标，前端只能看到“执行中”，无法区分模型首 token 慢还是消费者背压。
+
+配置扩展还暴露了 Spring Boot record 绑定陷阱：`ModelGatewayProperties` 新增完整 canonical constructor
+之外的兼容构造器后，绑定器无法自动确定构造入口，应用上下文转而尝试无参 JavaBean 实例化并抛出
+`NoSuchMethodException`。这不是端点配置值错误，而是构造器选择歧义。
+
+### 【解决方案/代码级实现】可移植契约、端点准入和同步背压观测分层
+
+`InferenceProtocol` 固定声明 `OPENAI_CHAT_COMPLETIONS`，`InferenceCapability` 精确声明
+`CHAT_COMPLETIONS`、`STREAMING`、`TOOL_CALLING` 和 `VISION_INPUT`，`InferenceServiceContract`
+不包含 API Key 且冻结能力集合。`ModelRouter` 在 CircuitBreaker 之前按请求工具、VISION 任务和流式
+模式做能力预检；不匹配端点直接进入 fallback，不发生 HTTP 调用，也不改变熔断器失败数。
+
+`InferenceBudget` 与 `InferenceAdmissionController` 为每个端点独立维护公平并发信号量、`queueTimeout`
+和最近一分钟速率窗口。并发/速率拒绝保留 `InferenceRejectionReason`，释放许可使用幂等
+`InferencePermit`，这两类拒绝只触发路由 fallback，不计入 CircuitBreaker。`ModelGatewayProperties`
+通过 `.env` 的显式能力、并发、每分钟请求和排队配置装配端点，绝不按模型名称猜测能力。
+其 canonical constructor 使用 `@ConstructorBinding` 明确告诉 Spring Boot 绑定入口，兼容构造器仅服务
+已有 Java 调用方；应用上下文集成测试负责防止再次回退到无参实例化路径。
+
+`LlmClient.stream` 继续在虚拟线程中同步调用消费者，不创建无界缓冲队列；`StreamingMetrics` 精确记录
+TTFT、总耗时、chunk 数、消费者累计背压和单次最大背压。`ModelRouter.stream` 返回实际端点与这些指标，
+并在失败时沿用既有顺序 fallback 与完整 suppressed 异常。
+
+### 【证据】第 26 章确定性 EDD 与真实 SSE/路由测试
+
+`InferenceServiceContractTest` 2 项、`InferenceAdmissionControllerTest` 3 项、`ModelRouterTest` 17 项、
+`LlmClientTest` 10 项和 Web 配置测试 5 项均在显式 JDK `21.0.2` 下通过。`LlmClientTest` 使用真实
+`MockRestServiceServer` SSE 响应与可控纳秒时钟断言 TTFT `10ms`、2 个 chunk、消费者累计背压 `12ms`
+和单次最大背压 `7ms`；路由测试断言能力/预算拒绝不增加 CircuitBreaker 失败数。`InferenceFrameworkEddTest`
+写入 `agent-eval/target/edd/inference-framework-chapter-26.json`，固定 `mode=deterministic`、
+`modelCallAttempts=0`，且核心模块未引入具体推理服务器 SDK。教程仓库当前导航把同一主题显示为第 25 章，
+本项目沿用已提交的第 26 章矩阵编号，不修改历史里程碑编号。
