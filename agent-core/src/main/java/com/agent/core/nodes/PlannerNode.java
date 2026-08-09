@@ -27,6 +27,15 @@ import com.agent.core.memory.MemoryContextProvider;
 import com.agent.core.memory.MemoryContextRequest;
 import com.agent.core.prompt.PromptCatalog;
 import com.agent.core.prompt.RenderedPrompt;
+import com.agent.core.security.DefaultPromptInjectionDetector;
+import com.agent.core.security.PromptInjectionDetector;
+import com.agent.core.security.PromptSecurityAssessment;
+import com.agent.core.security.PromptSecurityContext;
+import com.agent.core.security.SecurityDecision;
+import com.agent.core.security.SecurityFinding;
+import com.agent.core.security.SecurityViolation;
+import com.agent.core.security.SecurityViolationSink;
+import com.agent.core.security.SecurityViolationType;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -35,11 +44,14 @@ import org.slf4j.LoggerFactory;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /** 在 Prompt、上下文窗口和强类型意图决策约束下生成任务计划或最终回答。 */
@@ -98,6 +110,8 @@ public final class PlannerNode implements Node {
     private final ContextWindowManager contextWindowManager;
     private final IntentClassifier intentClassifier;
     private final int maxContextTokens;
+    private final PromptInjectionDetector promptInjectionDetector;
+    private final SecurityViolationSink securityViolationSink;
 
     /** 创建使用默认 Prompt、上下文和分类策略的 Planner。 */
     public PlannerNode(
@@ -114,7 +128,9 @@ public final class PlannerNode implements Node {
                 PlannerPromptTemplates.catalog(),
                 defaultContextWindowManager(),
                 null,
-                DEFAULT_MAX_CONTEXT_TOKENS);
+                DEFAULT_MAX_CONTEXT_TOKENS,
+                new DefaultPromptInjectionDetector(),
+                SecurityViolationSink.noop());
     }
 
     /** 返回生产装配共用的确定性上下文窗口策略。 */
@@ -142,7 +158,9 @@ public final class PlannerNode implements Node {
                 promptCatalog,
                 contextWindowManager,
                 intentClassifier,
-                maxContextTokens);
+                maxContextTokens,
+                new DefaultPromptInjectionDetector(),
+                SecurityViolationSink.noop());
     }
 
     /** 创建包含长期记忆与项目知识策略的完整 Planner。 */
@@ -157,6 +175,35 @@ public final class PlannerNode implements Node {
             ContextWindowManager contextWindowManager,
             IntentClassifier intentClassifier,
             int maxContextTokens) {
+        this(
+                modelRouter,
+                memoryContextProvider,
+                memoryLimit,
+                knowledgeContextProvider,
+                knowledgeMaxTokens,
+                objectMapper,
+                promptCatalog,
+                contextWindowManager,
+                intentClassifier,
+                maxContextTokens,
+                new DefaultPromptInjectionDetector(),
+                SecurityViolationSink.noop());
+    }
+
+    /** 创建包含 Prompt Injection 检查与违规持久化策略的 Planner。 */
+    public PlannerNode(
+            ModelRouter modelRouter,
+            MemoryContextProvider memoryContextProvider,
+            int memoryLimit,
+            KnowledgeContextProvider knowledgeContextProvider,
+            int knowledgeMaxTokens,
+            ObjectMapper objectMapper,
+            PromptCatalog promptCatalog,
+            ContextWindowManager contextWindowManager,
+            IntentClassifier intentClassifier,
+            int maxContextTokens,
+            PromptInjectionDetector promptInjectionDetector,
+            SecurityViolationSink securityViolationSink) {
         this.modelRouter = Objects.requireNonNull(modelRouter, "modelRouter 不能为空");
         this.memoryContextProvider = Objects.requireNonNull(
                 memoryContextProvider, "memoryContextProvider 不能为空");
@@ -184,6 +231,10 @@ public final class PlannerNode implements Node {
             throw new IllegalArgumentException("maxContextTokens 必须大于 0");
         }
         this.maxContextTokens = maxContextTokens;
+        this.promptInjectionDetector = Objects.requireNonNull(
+                promptInjectionDetector, "promptInjectionDetector 不能为空");
+        this.securityViolationSink = Objects.requireNonNull(
+                securityViolationSink, "securityViolationSink 不能为空");
     }
 
     /** 执行任务决策、记忆召回和最终模型调用。 */
@@ -194,6 +245,15 @@ public final class PlannerNode implements Node {
         try {
             NodeExecutionContext.progress("正在识别任务意图");
             String task = requireVariable(state, TASK_KEY);
+            if (!checkPrompt(state, "user.task", task)) {
+                return failedSecurityState(state, "user.task");
+            }
+            ChatMessage toolError = latestToolError(state);
+            if (toolError != null
+                    && toolError.content() instanceof ChatMessage.TextContent textContent
+                    && !checkPrompt(state, "tool.output", textContent.text())) {
+                return failedSecurityState(state, "tool.output");
+            }
             RenderedPrompt routePrompt = promptCatalog.render(
                     "planner.route", "1", Map.of("task", task));
             TaskDecision decision = intentClassifier.classify(state.messages(), task);
@@ -213,6 +273,9 @@ public final class PlannerNode implements Node {
             if (decision.route() == TaskRoute.KNOWLEDGE) {
                 KnowledgeContext knowledgeContext = loadKnowledge(
                         repositoryId, userId, workspace, task, decision);
+                if (!checkPrompt(output, "project.knowledge", knowledgeContext.prompt())) {
+                    return failedSecurityState(output, "project.knowledge");
+                }
                 output = withKnowledgeEvidence(output, knowledgeContext);
                 return answerKnowledge(output, task, knowledgeContext);
             }
@@ -224,6 +287,9 @@ public final class PlannerNode implements Node {
                     "记忆上下文不能为空");
             KnowledgeContext knowledgeContext = loadKnowledge(
                     repositoryId, userId, workspace, task, decision);
+            if (!checkPrompt(output, "project.knowledge", knowledgeContext.prompt())) {
+                return failedSecurityState(output, "project.knowledge");
+            }
             output = withKnowledgeEvidence(output, knowledgeContext);
             RenderedPrompt planPrompt = promptCatalog.render(
                     "planner.plan", "2", Map.of(
@@ -469,5 +535,60 @@ public final class PlannerNode implements Node {
         StringWriter writer = new StringWriter();
         exception.printStackTrace(new PrintWriter(writer));
         return writer.toString();
+    }
+
+    /** 执行单一来源的安全检查，并只发布规则摘要。 */
+    private boolean checkPrompt(AgentState state, String source, String text) {
+        UUID runId = currentRunId();
+        PromptSecurityAssessment assessment = promptInjectionDetector.inspect(
+                new PromptSecurityContext(
+                        runId,
+                        state.variables().getOrDefault(USER_ID_KEY, "unknown"),
+                        "planner",
+                        source),
+                text);
+        for (SecurityFinding finding : assessment.findings()) {
+            if (assessment.decision() == SecurityDecision.FLAG) {
+                NodeExecutionContext.progress(
+                        "security ruleId=" + finding.ruleId()
+                                + " severity=" + finding.severity().name()
+                                + " source=" + source);
+            }
+            recordSecurityViolation(state, source, finding, runId);
+        }
+        return assessment.decision() != SecurityDecision.BLOCK;
+    }
+
+    private AgentState failedSecurityState(AgentState state, String source) {
+        return state
+                .withVariable(ERROR_KEY, "Prompt 安全检查阻断: source=" + source)
+                .withVariable(ROUTE_KEY, FAILED_ROUTE)
+                .withTraceEntry("planner");
+    }
+
+    private void recordSecurityViolation(
+            AgentState state, String source, SecurityFinding finding, UUID runId) {
+        SecurityViolation violation = new SecurityViolation(
+                UUID.randomUUID(),
+                runId,
+                state.variables().getOrDefault(USER_ID_KEY, "unknown"),
+                "planner",
+                Optional.empty(),
+                SecurityViolationType.PROMPT_INJECTION,
+                finding.severity(),
+                finding.ruleId(),
+                finding.summary(),
+                Instant.now());
+        try {
+            securityViolationSink.record(violation);
+        } catch (RuntimeException exception) {
+            LOGGER.error("Planner 安全违规持久化失败 ruleId={} source={}",
+                    finding.ruleId(), source, exception);
+        }
+    }
+
+    private UUID currentRunId() {
+        return NodeExecutionContext.current().map(NodeExecutionContext::runId)
+                .orElseGet(UUID::randomUUID);
     }
 }

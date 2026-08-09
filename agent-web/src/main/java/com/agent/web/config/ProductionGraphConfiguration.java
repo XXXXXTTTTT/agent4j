@@ -22,6 +22,8 @@ import com.agent.core.nodes.OpsNode;
 import com.agent.core.nodes.PlannerNode;
 import com.agent.core.nodes.PlannerPromptTemplates;
 import com.agent.core.nodes.ReviewerNode;
+import com.agent.core.security.DefaultPromptInjectionDetector;
+import com.agent.core.security.SecurityViolationSink;
 import com.agent.core.intent.ModelIntentClassifier;
 import com.agent.core.intent.ModelRouterIntentModel;
 import com.agent.core.trace.RunLogPublisher;
@@ -424,7 +426,9 @@ public class ProductionGraphConfiguration {
                         new ModelRouterIntentModel(modelRouter),
                         objectMapper,
                         promptCatalog),
-                properties.plannerContextMaxTokens());
+                properties.plannerContextMaxTokens(),
+                new DefaultPromptInjectionDetector(),
+                SecurityViolationSink.noop());
         CoderNode coder = new CoderNode(
                 astService, modelRouter, objectMapper, snapshotService, toolRegistry);
         OpsNode ops = new OpsNode(terminalService, approvalPolicy, logPublisher);
