@@ -11,16 +11,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class AgentRunServiceBudgetTest {
 
     @Test
-    void persistsBudgetFailureWithLastCompletedStateAndTrace() {
+    void persistsBudgetFailureWithLastCompletedStateAndTrace() throws InterruptedException {
         AwaitingCheckpointer checkpointer = new AwaitingCheckpointer();
         List<TraceEvent> events = new CopyOnWriteArrayList<>();
+        CountDownLatch failedPublished = new CountDownLatch(1);
         ExecutionBudget budget = new ExecutionBudget(
                 Duration.ofSeconds(1), Duration.ofSeconds(1), 5, 5, 5);
         GraphRegistry registry = new GraphRegistry(Map.of("budget", () ->
@@ -34,7 +37,12 @@ class AgentRunServiceBudgetTest {
                         .addEdge("model", StateGraph.END)
                         .setEntryPoint("prepare")));
 
-        try (AgentRunService service = new AgentRunService(checkpointer, registry, events::add)) {
+        try (AgentRunService service = new AgentRunService(checkpointer, registry, event -> {
+            events.add(event);
+            if (event instanceof TraceEvent.Failed) {
+                failedPublished.countDown();
+            }
+        })) {
             RunCheckpoint started = service.start("budget", AgentState.empty());
             RunCheckpoint failed = checkpointer.awaitStatus(
                     started.runId(), RunStatus.FAILED, Duration.ofSeconds(5));
@@ -48,6 +56,7 @@ class AgentRunServiceBudgetTest {
             assertThat(failed.error())
                     .contains(ExecutionBudgetExceededException.class.getName())
                     .contains("TOKEN_BUDGET");
+            assertThat(failedPublished.await(5, TimeUnit.SECONDS)).isTrue();
             assertThat(events).anyMatch(event -> event instanceof TraceEvent.Failed);
         }
     }
