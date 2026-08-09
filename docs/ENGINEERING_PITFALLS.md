@@ -2641,5 +2641,6 @@ Spring Boot 默认没有暴露编排探针，Compose 也没有声明 Agent 的 C
 `DeploymentEddTest` 精确检查两套 Compose、两个 Dockerfile、应用配置和恢复文档，写入
 `agent-eval/target/edd/deployment-chapter-25.json`，报告 `modelCallAttempts=0`。两条
 `docker compose ... config` 命令均返回 0；本地 Dockerfile 和生产多阶段 Dockerfile 均在 Docker Desktop
-上真实构建成功。恢复流程记录在 `docs/deployment/backup-recovery.md`，包含 `pg_dump`、隔离库
+上真实构建成功。生产镜像还通过隔离容器与临时端口执行 readiness smoke test，HTTP 返回 200 后删除临时
+容器，未重建现有 Compose 服务。恢复流程记录在 `docs/deployment/backup-recovery.md`，包含 `pg_dump`、隔离库
 `pg_restore`、Flyway 版本和只读校验命令，避免把破坏性恢复伪装成单元测试。

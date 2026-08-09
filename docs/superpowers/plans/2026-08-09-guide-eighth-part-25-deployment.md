@@ -89,10 +89,10 @@ Write `agent-eval/target/edd/deployment-chapter-25.json` with the checked files,
 
 Record the signal-forwarding, readiness-before-traffic, resource-limit, and backup/recovery lessons with only command/test evidence.
 
-- [ ] **Step 4: Run all verification**
+- [x] **Step 4: Run all verification**
 
 Use JDK 21 and run `mvn -pl agent-core,agent-web,agent-eval -am test`, `mvn clean package -DskipTests -Dfrontend.skip=true`, both Compose config commands, and `git diff --check`.
 
-- [ ] **Step 5: Commit and merge**
+- [x] **Step 5: Commit and merge**
 
 Commit the plan/doc/EDD updates, fast-forward the feature branch into `master`, rerun the deployment-focused tests on merged `master`, remove only the chapter 25 worktree and branch, and run `git worktree prune`.
