@@ -7,6 +7,7 @@ import com.agent.core.profile.AgentProfileNotFoundException;
 import com.agent.web.persistence.JdbcConversationRepository;
 import com.agent.web.conversation.ConversationService;
 import com.agent.web.workspace.WorkspaceAccessService;
+import com.agent.web.workspace.WorkspaceImportService;
 import com.agent.web.audit.AuditTextRedactor;
 import org.springframework.core.codec.DecodingException;
 import org.springframework.http.MediaType;
@@ -59,6 +60,14 @@ public final class RunExceptionHandler {
         return problem(HttpStatus.BAD_REQUEST, detail(exception), exchange);
     }
 
+    /** 映射 ZIP 格式、条目路径和压缩内容错误。 */
+    @ExceptionHandler(WorkspaceImportService.ImportFormatException.class)
+    public ResponseEntity<ProblemDetail> invalidWorkspaceImport(
+            RuntimeException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.BAD_REQUEST, exception.getMessage(), exchange);
+    }
+
     /** 映射未注册图和不存在 Run。 */
     @ExceptionHandler({
             GraphNotFoundException.class,
@@ -103,6 +112,22 @@ public final class RunExceptionHandler {
     /** 映射会话归档和活动轮次冲突。 */
     @ExceptionHandler(JdbcConversationRepository.ConversationConflictException.class)
     public ResponseEntity<ProblemDetail> conversationConflict(
+            RuntimeException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);
+    }
+
+    /** 映射工作区导入的体积与文件数量上限。 */
+    @ExceptionHandler(WorkspaceImportService.ImportLimitExceededException.class)
+    public ResponseEntity<ProblemDetail> payloadTooLarge(
+            RuntimeException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.PAYLOAD_TOO_LARGE, exception.getMessage(), exchange);
+    }
+
+    /** 映射工作区导入目标冲突。 */
+    @ExceptionHandler(WorkspaceImportService.ImportConflictException.class)
+    public ResponseEntity<ProblemDetail> workspaceImportConflict(
             RuntimeException exception,
             ServerWebExchange exchange) {
         return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);

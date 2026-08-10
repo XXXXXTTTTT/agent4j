@@ -20,6 +20,8 @@ import com.agent.web.identity.ActorResolver;
 import com.agent.web.identity.ConfiguredActorResolver;
 import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspaceBootstrap;
+import com.agent.web.workspace.WorkspaceDirectoryBrowser;
+import com.agent.web.workspace.WorkspaceImportService;
 import com.agent.web.trace.InMemoryTraceEventBus;
 import com.agent.web.trace.RunLifecycleEventPublisher;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -45,7 +47,7 @@ import com.agent.rag.memory.RunBadCaseAttributor;
 
 /** 装配 Harness 的持久化、图注册、Trace 与运行服务。 */
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(ProductionAgentProperties.class)
+@EnableConfigurationProperties({ProductionAgentProperties.class, WorkspaceImportProperties.class})
 public class HarnessConfiguration {
 
     /** 提供持久化 Checkpoint 使用的 UTC 时钟。 */
@@ -125,6 +127,24 @@ public class HarnessConfiguration {
                 actorResolver,
                 properties.workspace(),
                 properties.repositoryId());
+    }
+
+    /** 创建当前挂载根内的目录浏览器。 */
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    WorkspaceDirectoryBrowser workspaceDirectoryBrowser(ProductionAgentProperties properties) {
+        return new WorkspaceDirectoryBrowser(properties.workspace());
+    }
+
+    /** 创建受资源上限保护的外部项目 ZIP 导入服务。 */
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    WorkspaceImportService workspaceImportService(
+            WorkspaceAccessService workspaceAccessService,
+            ProductionAgentProperties productionProperties,
+            WorkspaceImportProperties importProperties) {
+        return new WorkspaceImportService(
+                workspaceAccessService, productionProperties.workspace(), importProperties);
     }
 
     /** 绑定当前会话的 Run 启动服务。 */
