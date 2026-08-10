@@ -14,6 +14,8 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.ArrayList;
+import java.util.function.Consumer;
 
 /** 使用 Java 21 HttpClient 调用 Agent4J REST 与 SSE API。 */
 public final class Agent4jHttpClient implements Agent4jClient {
@@ -85,15 +87,36 @@ public final class Agent4jHttpClient implements Agent4jClient {
 
     @Override
     public List<SseEventReader.SseEvent> readTrace(UUID runId) {
-        return readSse("/api/runs/" + runId + "/events");
+        List<SseEventReader.SseEvent> events = new ArrayList<>();
+        followTrace(runId, events::add);
+        return List.copyOf(events);
     }
 
     @Override
     public List<SseEventReader.SseEvent> readLogs(UUID runId) {
-        return readSse("/api/runs/" + runId + "/logs");
+        List<SseEventReader.SseEvent> events = new ArrayList<>();
+        followLogs(runId, events::add);
+        return List.copyOf(events);
     }
 
-    private List<SseEventReader.SseEvent> readSse(String path) {
+    @Override
+    public void followTrace(
+            UUID runId,
+            Consumer<SseEventReader.SseEvent> eventConsumer) {
+        followSse("/api/runs/" + runId + "/events", eventConsumer);
+    }
+
+    @Override
+    public void followLogs(
+            UUID runId,
+            Consumer<SseEventReader.SseEvent> eventConsumer) {
+        followSse("/api/runs/" + runId + "/logs", eventConsumer);
+    }
+
+    private void followSse(
+            String path,
+            Consumer<SseEventReader.SseEvent> eventConsumer) {
+        Objects.requireNonNull(eventConsumer, "eventConsumer 不能为空");
         HttpRequest request = HttpRequest.newBuilder(endpoint(path))
                 .timeout(SSE_TIMEOUT)
                 .header("Accept", "text/event-stream")
@@ -106,7 +129,7 @@ public final class Agent4jHttpClient implements Agent4jClient {
                 throw new Agent4jHttpException(
                         response.statusCode(), String.join("\n", response.body().toList()));
             }
-            return SseEventReader.read(response.body());
+            SseEventReader.follow(response.body(), eventConsumer);
         } catch (IOException exception) {
             throw new IllegalStateException("Agent4J SSE 请求失败: " + path, exception);
         } catch (InterruptedException exception) {

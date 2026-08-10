@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /** Agent4J 服务端 REST/SSE 客户端端口。 */
 public interface Agent4jClient {
@@ -27,6 +28,20 @@ public interface Agent4jClient {
     List<SseEventReader.SseEvent> readTrace(UUID runId);
 
     List<SseEventReader.SseEvent> readLogs(UUID runId);
+
+    /** 实时跟随 Trace SSE，每个完整帧立即交付。 */
+    default void followTrace(
+            UUID runId,
+            Consumer<SseEventReader.SseEvent> eventConsumer) {
+        readTrace(runId).forEach(eventConsumer);
+    }
+
+    /** 实时跟随终端 SSE，每个完整帧立即交付。 */
+    default void followLogs(
+            UUID runId,
+            Consumer<SseEventReader.SseEvent> eventConsumer) {
+        readLogs(runId).forEach(eventConsumer);
+    }
 
     record Actor(String userId, String displayName) {
     }

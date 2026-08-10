@@ -3,6 +3,7 @@ package com.agent.cli;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 /** 解析标准 Server-Sent Events 文本帧。 */
@@ -13,8 +14,15 @@ public final class SseEventReader {
 
     /** 读取完整 SSE 文本流；EOF 前未换行的帧也会提交。 */
     public static List<SseEvent> read(Stream<String> lines) {
-        Objects.requireNonNull(lines, "lines 不能为空");
         List<SseEvent> events = new ArrayList<>();
+        follow(lines, events::add);
+        return List.copyOf(events);
+    }
+
+    /** 读取 SSE 文本流，并在每个完整帧结束时立即交付。 */
+    public static void follow(Stream<String> lines, Consumer<SseEvent> consumer) {
+        Objects.requireNonNull(lines, "lines 不能为空");
+        Objects.requireNonNull(consumer, "consumer 不能为空");
         StringBuilder data = new StringBuilder();
         String id = "";
         String event = "message";
@@ -23,7 +31,7 @@ public final class SseEventReader {
             while (iterator.hasNext()) {
                 String line = iterator.next();
                 if (line.isEmpty()) {
-                    appendEvent(events, id, event, data);
+                    appendEvent(consumer, id, event, data);
                     id = "";
                     event = "message";
                     data.setLength(0);
@@ -53,17 +61,16 @@ public final class SseEventReader {
                 }
             }
         }
-        appendEvent(events, id, event, data);
-        return List.copyOf(events);
+        appendEvent(consumer, id, event, data);
     }
 
     private static void appendEvent(
-            List<SseEvent> events,
+            Consumer<SseEvent> consumer,
             String id,
             String event,
             StringBuilder data) {
         if (data.length() > 0 || !id.isEmpty() || !"message".equals(event)) {
-            events.add(new SseEvent(id, event, data.toString()));
+            consumer.accept(new SseEvent(id, event, data.toString()));
         }
     }
 
