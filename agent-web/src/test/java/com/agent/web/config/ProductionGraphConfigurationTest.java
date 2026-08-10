@@ -6,6 +6,8 @@ import com.agent.core.engine.StateGraph;
 import com.agent.core.llm.ModelRouter;
 import com.agent.core.memory.MemoryContextProvider;
 import com.agent.core.nodes.PlannerNode;
+import com.agent.core.nodes.CoderNode;
+import com.agent.core.nodes.ReviewerNode;
 import com.agent.core.trace.RunLogPublisher;
 import com.agent.core.cli.WorkspaceTerminalTargetResolver;
 import com.agent.sandbox.ast.AstService;
@@ -74,6 +76,10 @@ class ProductionGraphConfigurationTest {
 
         try (StateGraph graph = factory.create()) {
             assertThat(graph.entryPoint()).isEqualTo("planner");
+            assertThat(graph.inspectTopology().nodeNames())
+                    .contains("reviewer-failure");
+            assertThat(graph.inspectTopology().outgoingTargets().get("reviewer"))
+                    .contains("reviewer-failure");
         }
 
         TerminalTarget terminalTarget =
@@ -106,6 +112,27 @@ class ProductionGraphConfigurationTest {
                 .withVariable(PlannerNode.ROUTE_KEY, "unexpected")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("unexpected");
+    }
+
+    @Test
+    void routesRejectedReviewToFailureAfterRepairBudgetIsExhausted() {
+        ProductionGraphConfiguration configuration = new ProductionGraphConfiguration();
+        AgentState approved = AgentState.empty()
+                .withVariable(ReviewerNode.APPROVED_KEY, "true")
+                .withVariable(CoderNode.ATTEMPT_KEY, "1");
+        AgentState repairable = AgentState.empty()
+                .withVariable(ReviewerNode.APPROVED_KEY, "false")
+                .withVariable(CoderNode.ATTEMPT_KEY, "1");
+        AgentState rejected = AgentState.empty()
+                .withVariable(ReviewerNode.APPROVED_KEY, "false")
+                .withVariable(CoderNode.ATTEMPT_KEY, "2");
+
+        assertThat(configuration.reviewerRoute(approved, 2))
+                .isEqualTo("finish");
+        assertThat(configuration.reviewerRoute(repairable, 2))
+                .isEqualTo("repair");
+        assertThat(configuration.reviewerRoute(rejected, 2))
+                .isEqualTo("failure");
     }
 
     @Test

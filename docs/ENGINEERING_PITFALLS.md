@@ -2798,3 +2798,35 @@ REST/SSE 请求；`userId` 与 `displayName` 均非空才算有效身份，全�
 `CodePatchToolTest` 验证工具输出不再包含 `*** Begin Patch`；`CoderNodeTest` 验证状态最终保存
 `diff --git` 文本。聚焦测试共 23 项通过，Java 核心/Web/评测完整门禁退出码为 `0`，前端 55 项测试、
 Vite 生产构建、`ProductWorkbenchBrowserTest` 和 Spring Boot JAR 打包均通过。
+
+## 本轮补充：审查拒绝耗尽修复次数却被投影为成功
+
+### 【问题现象】Ops 退出码为 1、Reviewer 明确拒绝，Web 会话仍显示“已完成”
+
+真实 Run `42524dba-4369-4c5f-b7b9-ed475b4a75f4` 的持久化证据显示：`ops.exitCode=1`，两次
+`reviewer.approved=false`，第二次审查后 `nextNode=__END__`，随后 Run 和会话轮次都被写成
+`COMPLETED`。最终回答虽然写出“审查未通过”，但状态语义仍是成功，前端无法用状态筛选失败任务，
+也会让后续对话上下文误把失败结果当作可复用答案。
+
+### 【根因分析】生产图只把 END 当作成功，没有把“预算耗尽的拒绝”转换成失败状态
+
+`ProductionGraphConfiguration` 原先的 Reviewer 条件边只有 `repair -> coder` 与 `finish -> END`。
+当 `coder.attempt` 达到 `agent.code.max-repair-attempts` 且 Reviewer 仍拒绝时，条件边直接返回
+`END`。`AgentRunService` 的通用终态判断本身只依据 `nextNode == END`，只有最终状态包含键名以
+`.error` 结尾的变量时才会写 `RunStatus.FAILED`；因此该业务图没有提供失败信号，投影层只能按
+`TraceEvent.Completed` 标记会话成功。
+
+### 【解决方案/代码级实现】增加显式 Reviewer 失败节点并保持通用引擎无业务耦合
+
+Reviewer 路由现在精确分为 `finish`、`repair`、`failure`：批准进入 `END`，预算内拒绝回到
+Coder，预算耗尽拒绝进入 `reviewer-failure` 节点。该节点把审查反馈写入 `reviewer.error`，
+再进入 `END`；现有 `AgentRunService.stateError` 因此生成完整失败 Checkpoint、`TraceEvent.Failed`
+和 `CONVERSATION_TURN_FAILED`。聊天/知识/GUI 路由不受影响，通用 `StateGraph` 不需要认识 Reviewer
+或 Ops 字段。
+
+### 【证据】红绿测试与真实日志回放
+
+`ProductionGraphConfigurationTest.routesRejectedReviewToFailureAfterRepairBudgetIsExhausted` 先因
+缺少 `reviewerRoute` 编译失败，加入显式失败路由和拓扑节点后 7 项生产图测试全部通过；测试同时断言
+批准、预算内修复、预算耗尽失败三条路径及 `reviewer-failure` 节点存在。历史日志中的同一 Run 保留
+了真实模型响应、`ops.exitCode=1`、两次 Reviewer 拒绝和错误终态，未使用模拟模型替代证据。

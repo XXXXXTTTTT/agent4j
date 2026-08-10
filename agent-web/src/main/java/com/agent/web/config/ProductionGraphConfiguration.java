@@ -79,6 +79,10 @@ public class ProductionGraphConfiguration {
             ProductionGraphConfiguration.class);
     private static final String GUI_ROUTE = "gui";
     private static final String CODER_ROUTE = "coder";
+    private static final String REPAIR_ROUTE = "repair";
+    private static final String FINISH_ROUTE = "finish";
+    private static final String FAILURE_ROUTE = "failure";
+    private static final String REVIEWER_FAILURE_NODE = "reviewer-failure";
 
     /** 创建 JavaParser/JGit 服务。 */
     @Bean
@@ -501,6 +505,8 @@ public class ProductionGraphConfiguration {
                 .addNode("coder", coder)
                 .addNode("ops", ops)
                 .addNode("reviewer", reviewer)
+                .addNode(REVIEWER_FAILURE_NODE, state -> state.withVariable(
+                        ReviewerNode.ERROR_KEY, reviewerFailure(state)))
                 .addNode("gui", gui)
                 .setEntryPoint("planner")
                 .addConditionalEdges(
@@ -521,10 +527,12 @@ public class ProductionGraphConfiguration {
                 .addEdge("ops", "reviewer")
                 .addConditionalEdges(
                         "reviewer",
-                        state -> shouldRepair(state, properties.maxRepairAttempts())
-                                ? "repair"
-                                : "finish",
-                        Map.of("repair", "coder", "finish", StateGraph.END));
+                        state -> reviewerRoute(state, properties.maxRepairAttempts()),
+                        Map.of(
+                                REPAIR_ROUTE, "coder",
+                                FINISH_ROUTE, StateGraph.END,
+                                FAILURE_ROUTE, REVIEWER_FAILURE_NODE))
+                .addEdge(REVIEWER_FAILURE_NODE, StateGraph.END);
     }
 
     private ToolRegistry standaloneToolRegistry(
@@ -584,17 +592,32 @@ public class ProductionGraphConfiguration {
         return taskKind == TaskKind.BROWSER_OPERATION ? GUI_ROUTE : CODER_ROUTE;
     }
 
-    private boolean shouldRepair(
+    String reviewerRoute(
             com.agent.core.engine.AgentState state,
             int maxRepairAttempts) {
-        if (!"false".equals(state.variables().get(ReviewerNode.APPROVED_KEY))) {
-            return false;
+        String approved = state.variables().get(ReviewerNode.APPROVED_KEY);
+        if ("true".equals(approved)) {
+            return FINISH_ROUTE;
+        }
+        if (!"false".equals(approved)) {
+            return FINISH_ROUTE;
         }
         String attempts = state.variables().get(CoderNode.ATTEMPT_KEY);
         if (attempts == null) {
-            return false;
+            throw new IllegalStateException("审查拒绝时缺少状态变量: " + CoderNode.ATTEMPT_KEY);
         }
-        return Integer.parseInt(attempts) < maxRepairAttempts;
+        return Integer.parseInt(attempts) < maxRepairAttempts
+                ? REPAIR_ROUTE
+                : FAILURE_ROUTE;
+    }
+
+    private String reviewerFailure(com.agent.core.engine.AgentState state) {
+        String feedback = state.variables().get(ReviewerNode.FEEDBACK_KEY);
+        String summary = state.variables().get(ReviewerNode.SUMMARY_KEY);
+        String detail = feedback == null || feedback.isBlank() ? summary : feedback;
+        return detail == null || detail.isBlank()
+                ? "最终审查未通过且代码修复次数已耗尽"
+                : "最终审查未通过且代码修复次数已耗尽: " + detail;
     }
 
     TerminalTarget terminalTarget(ProductionAgentProperties properties) {
