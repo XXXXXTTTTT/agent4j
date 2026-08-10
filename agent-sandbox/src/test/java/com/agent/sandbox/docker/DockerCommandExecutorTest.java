@@ -163,6 +163,25 @@ class DockerCommandExecutorTest {
                 .hasMessageContaining("bind");
     }
 
+    @Test
+    void acceptsOnlyNormalizedRelativeWorkspacePaths() {
+        assertThat(new DockerTarget.ContainerWorkspaceSource(
+                "web", "/agent-workspace", "modules/app").relativePath())
+                .isEqualTo("modules/app");
+        assertThat(new DockerTarget.ContainerWorkspaceSource(
+                "web", "/agent-workspace").relativePath())
+                .isEmpty();
+        assertThatThrownBy(() -> new DockerTarget.ContainerWorkspaceSource(
+                "web", "/agent-workspace", "../app"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new DockerTarget.ContainerWorkspaceSource(
+                "web", "/agent-workspace", "/tmp/app"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new DockerTarget.ContainerWorkspaceSource(
+                "web", "/agent-workspace", "modules/../app"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private InspectContainerResponse.Mount mount(
             String destination,
             String source,

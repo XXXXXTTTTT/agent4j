@@ -56,15 +56,44 @@ public record DockerTarget(
     /** 从指定容器的精确工作区路径解析 Docker Engine bind source。 */
     public record ContainerWorkspaceSource(
             String containerName,
-            String containerPath) implements WorkspaceSource {
+            String containerPath,
+            String relativePath) implements WorkspaceSource {
 
-        /** 校验源容器名与容器内绝对路径。 */
+        /** 创建指向容器工作区根目录的来源。 */
+        public ContainerWorkspaceSource(String containerName, String containerPath) {
+            this(containerName, containerPath, "");
+        }
+
+        /** 校验源容器名、容器内绝对路径与安全的相对工作区路径。 */
         public ContainerWorkspaceSource {
             containerName = requireText(containerName, "containerName 不能为空");
             containerPath = requireText(containerPath, "containerPath 不能为空");
             if (!containerPath.startsWith("/")) {
                 throw new IllegalArgumentException("containerPath 必须是绝对路径");
             }
+            relativePath = normalizeRelativePath(relativePath);
+        }
+
+        private static String normalizeRelativePath(String value) {
+            if (value == null) {
+                throw new IllegalArgumentException("relativePath 不能为空");
+            }
+            String normalized = value.replace('\\', '/');
+            if (normalized.isEmpty()) {
+                return normalized;
+            }
+            if (normalized.startsWith("/")) {
+                throw new IllegalArgumentException("relativePath 必须是相对路径");
+            }
+            for (String segment : normalized.split("/", -1)) {
+                if (segment.isEmpty() || segment.equals("..")) {
+                    if (segment.equals("..")) {
+                        throw new IllegalArgumentException("relativePath 不允许越界");
+                    }
+                    throw new IllegalArgumentException("relativePath 包含空路径段");
+                }
+            }
+            return normalized;
         }
     }
 }

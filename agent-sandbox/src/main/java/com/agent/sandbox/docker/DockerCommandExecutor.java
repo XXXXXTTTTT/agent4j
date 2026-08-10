@@ -24,6 +24,8 @@ import com.github.dockerjava.transport.DockerHttpClient;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
 import java.util.List;
@@ -106,13 +108,32 @@ public final class DockerCommandExecutor implements AutoCloseable {
         return switch (target.workspaceSource()) {
             case DockerTarget.HostWorkspaceSource ignored ->
                     target.hostWorkspace().toString();
-            case DockerTarget.ContainerWorkspaceSource source ->
-                    resolveContainerBindSource(
-                            source,
-                            dockerClient.inspectContainerCmd(source.containerName())
-                                    .exec()
-                                    .getMounts());
+            case DockerTarget.ContainerWorkspaceSource source -> {
+                String bindRoot = resolveContainerBindSource(
+                        source,
+                        dockerClient.inspectContainerCmd(source.containerName())
+                                .exec()
+                                .getMounts());
+                yield resolveWorkspaceBindSource(bindRoot, source.relativePath());
+            }
         };
+    }
+
+    private static String resolveWorkspaceBindSource(String bindRoot, String relativePath) {
+        Path root = Path.of(bindRoot).toAbsolutePath().normalize();
+        if (!Files.isDirectory(root)) {
+            throw new IllegalArgumentException("Docker bind root 必须是现有目录: " + root);
+        }
+        Path workspace = relativePath.isEmpty()
+                ? root
+                : root.resolve(relativePath).normalize();
+        if (!workspace.startsWith(root)) {
+            throw new IllegalArgumentException("Docker 工作区路径越界: " + relativePath);
+        }
+        if (!Files.isDirectory(workspace)) {
+            throw new IllegalArgumentException("Docker 工作区目录不存在: " + workspace);
+        }
+        return workspace.toString();
     }
 
     static String resolveContainerBindSource(
