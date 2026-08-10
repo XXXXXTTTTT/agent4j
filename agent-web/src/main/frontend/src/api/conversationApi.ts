@@ -113,12 +113,22 @@ export function decodeConversationTurn(value: unknown, path = 'turn'): Conversat
 async function requestJson(url: string, init: RequestInit, fetcher: typeof fetch): Promise<unknown> {
   const response = await fetcher(url, init)
   const text = await response.text()
-  if (!response.ok) throw new ConversationApiError(`Conversation API 请求失败: HTTP ${response.status}`, response.status, text)
+  if (!response.ok) throw new ConversationApiError(problemDetailMessage(text, response.status), response.status, text)
   try {
     return JSON.parse(text) as unknown
   } catch (error) {
     throw new TypeError(`Conversation API 返回了非法 JSON: ${(error as Error).message}`)
   }
+}
+
+function problemDetailMessage(text: string, status: number): string {
+  try {
+    const problem = objectAt(JSON.parse(text) as unknown, 'problemDetail')
+    if (typeof problem.detail === 'string' && problem.detail.trim().length > 0) return problem.detail
+  } catch {
+    // 非 ProblemDetail 响应保留稳定的 HTTP 状态错误。
+  }
+  return `Conversation API 请求失败: HTTP ${status}`
 }
 
 function decodeArray<T>(value: unknown, decoder: (item: unknown, path: string) => T, path: string): T[] {

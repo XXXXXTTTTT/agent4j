@@ -104,4 +104,21 @@ describe('Conversation API HTTP 请求', () => {
       body: JSON.stringify({ content: '继续说明', reviewerUrl: 'https://test' }),
     })
   })
+
+  it('工作区创建失败时保留 ProblemDetail 的 detail', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({
+      type: 'about:blank',
+      title: 'Bad Request',
+      status: 400,
+      detail: 'workspacePath 必须位于配置工作区内',
+      instance: '/api/workspaces',
+    }, 400))
+
+    await expect(createWorkspace({
+      displayName: 'Outside', workspacePath: '/outside', repositoryId: 'outside',
+    }, fetcher)).rejects.toMatchObject({
+      message: 'workspacePath 必须位于配置工作区内',
+      status: 400,
+    })
+  })
 })

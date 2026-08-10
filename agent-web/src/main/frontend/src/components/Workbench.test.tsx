@@ -71,7 +71,7 @@ function conversationController(
     activeConversation: { conversationId: 'conv-1', workspaceId: 'ws-1', createdBy: 'user-1', title: '模型咨询', status: 'ACTIVE', createdAt: '2026-08-07T01:00:00Z', updatedAt: '2026-08-07T01:00:00Z' } satisfies Conversation,
     turns: [{ turnId: 'turn-1', conversationId: 'conv-1', turnIndex: 0, userContent: '你是什么模型', assistantContent: '我是 AI。', runId: 'run-1', status: 'COMPLETED', error: null, createdAt: '2026-08-07T01:00:00Z', completedAt: '2026-08-07T01:00:05Z' } satisfies ConversationTurn],
     searchQuery: '', loading: false, submitting: false, error: null,
-    selectWorkspace: vi.fn(async () => undefined), selectConversation: vi.fn(async () => undefined), search: vi.fn(async () => undefined), createConversation: vi.fn(async () => undefined), submit: vi.fn(async (): Promise<ConversationTurn> => ({ turnId: 'turn-2', conversationId: 'conv-1', turnIndex: 1, userContent: '继续', assistantContent: null, runId: 'run-2', status: 'PENDING', error: null, createdAt: '2026-08-07T01:00:06Z', completedAt: null })), archive: vi.fn(async () => undefined), reload: vi.fn(async () => undefined),
+    selectWorkspace: vi.fn(async () => undefined), selectConversation: vi.fn(async () => undefined), search: vi.fn(async () => undefined), createWorkspace: vi.fn(async () => undefined), createConversation: vi.fn(async () => undefined), submit: vi.fn(async (): Promise<ConversationTurn> => ({ turnId: 'turn-2', conversationId: 'conv-1', turnIndex: 1, userContent: '继续', assistantContent: null, runId: 'run-2', status: 'PENDING', error: null, createdAt: '2026-08-07T01:00:06Z', completedAt: null })), archive: vi.fn(async () => undefined), reload: vi.fn(async () => undefined),
     ...overrides,
   }
 }
@@ -119,6 +119,29 @@ describe('Workbench', () => {
     await user.click(screen.getByRole('button', { name: '发送消息' }))
     expect(conversations.submit).toHaveBeenCalledWith('继续说明')
     expect(runs.followRun).toHaveBeenCalledWith('run-2')
+  })
+
+  it('从工作区侧栏创建并切换工作区', async () => {
+    const user = userEvent.setup()
+    const createWorkspace = vi.fn(async () => undefined)
+    render(
+      <Workbench
+        controller={controller()}
+        conversation={conversationController({ createWorkspace })}
+        onTerminalReady={() => undefined}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: '新建工作区' }))
+    await user.type(screen.getByLabelText('工作区名称'), 'Sandbox')
+    await user.type(screen.getByLabelText('工作区路径'), '/agent-workspace/sandbox')
+    await user.type(screen.getByLabelText('仓库标识'), 'sandbox')
+    await user.click(screen.getByRole('button', { name: '创建工作区' }))
+
+    expect(createWorkspace).toHaveBeenCalledWith({
+      displayName: 'Sandbox', workspacePath: '/agent-workspace/sandbox', repositoryId: 'sandbox',
+    })
+    expect(screen.queryByRole('dialog', { name: '新建工作区' })).not.toBeInTheDocument()
   })
 
   it('当前 Run 轮次只渲染一次用户消息并使用实时执行视图', () => {

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   archiveConversation,
   createConversation,
+  createWorkspace,
   getIdentity,
   listConversationTurns,
   listConversations,
@@ -16,12 +17,14 @@ import type {
   ConversationTurn,
   Workspace,
 } from '../api/contracts'
+import type { CreateWorkspaceCommand } from '../api/conversationApi'
 
 export interface ConversationWorkspaceApi {
   getIdentity(): Promise<Actor>
   listWorkspaces(): Promise<Workspace[]>
   listConversations(workspaceId: string): Promise<Conversation[]>
   searchConversations(workspaceId: string, query: string): Promise<Conversation[]>
+  createWorkspace(command: CreateWorkspaceCommand): Promise<Workspace>
   createConversation(workspaceId: string): Promise<Conversation>
   submitConversationTurn(conversationId: string, command: { content: string; reviewerUrl?: string }): Promise<ConversationTurn>
   listConversationTurns(conversationId: string): Promise<ConversationTurn[]>
@@ -33,6 +36,7 @@ const DEFAULT_API: ConversationWorkspaceApi = {
   listWorkspaces: () => listWorkspaces(),
   listConversations: (workspaceId) => listConversations(workspaceId),
   searchConversations: (workspaceId, query) => searchConversations(workspaceId, query),
+  createWorkspace: (command) => createWorkspace(command),
   createConversation: (workspaceId) => createConversation(workspaceId),
   submitConversationTurn: (conversationId, command) => submitConversationTurn(conversationId, command),
   listConversationTurns: (conversationId) => listConversationTurns(conversationId),
@@ -55,6 +59,7 @@ export interface UseConversationWorkspaceResult {
   submitting: boolean
   error: Error | null
   selectWorkspace(workspaceId: string): Promise<void>
+  createWorkspace(command: CreateWorkspaceCommand): Promise<void>
   selectConversation(conversationId: string): Promise<void>
   search(query: string): Promise<void>
   createConversation(): Promise<void>
@@ -72,8 +77,15 @@ function readConversationId(): string | null {
   return value !== null && value.trim().length > 0 ? value : null
 }
 
-function writeConversationId(conversationId: string | null): void {
+function readWorkspaceId(): string | null {
+  const value = new URLSearchParams(window.location.search).get('workspaceId')
+  return value !== null && value.trim().length > 0 ? value : null
+}
+
+function writeSelection(workspaceId: string | null, conversationId: string | null): void {
   const url = new URL(window.location.href)
+  if (workspaceId === null) url.searchParams.delete('workspaceId')
+  else url.searchParams.set('workspaceId', workspaceId)
   if (conversationId === null) url.searchParams.delete('conversationId')
   else url.searchParams.set('conversationId', conversationId)
   window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
@@ -130,9 +142,9 @@ export function useConversationWorkspace(
     const exactId = conversationId.trim()
     if (exactId.length === 0) throw new Error('conversationId 不能为空')
     setActiveConversationId(exactId)
-    writeConversationId(exactId)
+    writeSelection(activeWorkspaceId, exactId)
     await loadTurns(exactId)
-  }, [loadTurns])
+  }, [activeWorkspaceId, loadTurns])
 
   const selectWorkspace = useCallback(async (workspaceId: string): Promise<void> => {
     const exactId = workspaceId.trim()
@@ -145,7 +157,7 @@ export function useConversationWorkspace(
       setActiveWorkspaceId(exactId)
       const selected = loaded.find((item) => item.conversationId === activeConversationId) ?? loaded[0] ?? null
       setActiveConversationId(selected?.conversationId ?? null)
-      writeConversationId(selected?.conversationId ?? null)
+      writeSelection(exactId, selected?.conversationId ?? null)
       if (selected === null) setTurns([])
       else await loadTurns(selected.conversationId)
     } catch (failure) {
@@ -165,7 +177,7 @@ export function useConversationWorkspace(
       if (loaded === null) return
       const selected = loaded.find((item) => item.conversationId === activeConversationId) ?? loaded[0] ?? null
       setActiveConversationId(selected?.conversationId ?? null)
-      writeConversationId(selected?.conversationId ?? null)
+      writeSelection(activeWorkspaceId, selected?.conversationId ?? null)
       if (selected === null) setTurns([])
       else await loadTurns(selected.conversationId)
     } catch (failure) {
@@ -195,12 +207,24 @@ export function useConversationWorkspace(
       setConversations((items) => [created, ...items.filter((item) => item.conversationId !== created.conversationId)])
       setActiveConversationId(created.conversationId)
       setTurns([])
-      writeConversationId(created.conversationId)
+      writeSelection(activeWorkspaceId, created.conversationId)
     } catch (failure) {
       setError(asError(failure))
       throw failure
     }
   }, [activeWorkspaceId])
+
+  const createWorkspaceEntry = useCallback(async (command: CreateWorkspaceCommand): Promise<void> => {
+    setError(null)
+    try {
+      const created = await apiRef.current.createWorkspace(command)
+      setWorkspaces((items) => [created, ...items.filter((item) => item.workspaceId !== created.workspaceId)])
+      await selectWorkspace(created.workspaceId)
+    } catch (failure) {
+      setError(asError(failure))
+      throw failure
+    }
+  }, [selectWorkspace])
 
   const submit = useCallback(async (content: string, reviewerUrl?: string): Promise<ConversationTurn> => {
     if (activeConversationId === null) throw new Error('当前没有会话')
@@ -227,12 +251,12 @@ export function useConversationWorkspace(
       setConversations((items) => items.map((item) => item.conversationId === archived.conversationId ? archived : item))
       setActiveConversationId(null)
       setTurns([])
-      writeConversationId(null)
+      writeSelection(activeWorkspaceId, null)
     } catch (failure) {
       setError(asError(failure))
       throw failure
     }
-  }, [activeConversationId])
+  }, [activeConversationId, activeWorkspaceId])
 
   useEffect(() => {
     let disposed = false
@@ -245,19 +269,24 @@ export function useConversationWorkspace(
         if (disposed) return
         setIdentity(loadedIdentity)
         setWorkspaces(loadedWorkspaces)
+        const requestedWorkspaceId = readWorkspaceId()
         const requestedConversationId = readConversationId()
-        const grouped = await Promise.all(loadedWorkspaces.map(async (item) => ({ item, conversations: await apiRef.current.listConversations(item.workspaceId) })))
+        const selectedWorkspace = loadedWorkspaces.find((item) => item.workspaceId === requestedWorkspaceId)
+          ?? loadedWorkspaces[0]
+          ?? null
         if (disposed) return
-        const requested = requestedConversationId === null ? null : grouped.find((group) => group.conversations.some((item) => item.conversationId === requestedConversationId))
-        const selectedGroup = requested ?? grouped[0] ?? null
-        if (selectedGroup === null) {
-          setActiveWorkspaceId(null); setConversations([]); setActiveConversationId(null); setTurns([]); writeConversationId(null); return
+        if (selectedWorkspace === null) {
+          setActiveWorkspaceId(null); setConversations([]); setActiveConversationId(null); setTurns([]); writeSelection(null, null); return
         }
-        setActiveWorkspaceId(selectedGroup.item.workspaceId)
-        setConversations(selectedGroup.conversations)
-        const selectedConversation = requested?.conversations.find((item) => item.conversationId === requestedConversationId) ?? selectedGroup.conversations[0] ?? null
+        const loadedConversations = await apiRef.current.listConversations(selectedWorkspace.workspaceId)
+        if (disposed) return
+        setActiveWorkspaceId(selectedWorkspace.workspaceId)
+        setConversations(loadedConversations)
+        const selectedConversation = loadedConversations.find((item) => item.conversationId === requestedConversationId)
+          ?? loadedConversations[0]
+          ?? null
         setActiveConversationId(selectedConversation?.conversationId ?? null)
-        writeConversationId(selectedConversation?.conversationId ?? null)
+        writeSelection(selectedWorkspace.workspaceId, selectedConversation?.conversationId ?? null)
         if (selectedConversation === null) setTurns([])
         else setTurns(await apiRef.current.listConversationTurns(selectedConversation.conversationId))
       } catch (failure) {
@@ -273,6 +302,6 @@ export function useConversationWorkspace(
   return {
     identity, workspaces, activeWorkspace, conversations, activeConversation, turns, searchQuery,
     loading, submitting, error, selectWorkspace, selectConversation, search,
-    createConversation: create, submit, archive, reload,
+    createConversation: create, createWorkspace: createWorkspaceEntry, submit, archive, reload,
   }
 }

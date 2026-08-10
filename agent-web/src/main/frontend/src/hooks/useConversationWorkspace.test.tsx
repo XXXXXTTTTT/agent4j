@@ -9,6 +9,12 @@ const workspace: Workspace = {
   workspaceId: 'ws-1', ownerUserId: 'user-1', displayName: 'Agent4J', workspacePath: 'D:/agent4j',
   repositoryId: 'agent4j', permission: 'OWNER', createdAt: '2026-08-07T01:00:00Z', updatedAt: '2026-08-07T01:00:00Z',
 }
+const secondWorkspace: Workspace = {
+  ...workspace,
+  workspaceId: 'ws-2',
+  displayName: 'Sandbox',
+  workspacePath: '/agent-workspace/sandbox',
+}
 const conversation: Conversation = {
   conversationId: 'conv-1', workspaceId: 'ws-1', createdBy: 'user-1', title: '模型咨询', status: 'ACTIVE',
   createdAt: '2026-08-07T01:00:00Z', updatedAt: '2026-08-07T01:00:00Z',
@@ -28,10 +34,11 @@ describe('useConversationWorkspace', () => {
       listConversationTurns: vi.fn(async () => [turn]),
       searchConversations: vi.fn(async () => [conversation]),
       createConversation: vi.fn(async () => conversation),
+      createWorkspace: vi.fn(),
       submitConversationTurn: vi.fn(),
       archiveConversation: vi.fn(),
     }
-    window.history.replaceState({}, '', '/?conversationId=conv-1')
+    window.history.replaceState({}, '', '/?workspaceId=ws-1&conversationId=conv-1')
     const { result } = renderHook(() => useConversationWorkspace({ api }))
 
     await waitFor(() => expect(result.current.loading).toBe(false))
@@ -40,6 +47,7 @@ describe('useConversationWorkspace', () => {
     expect(result.current.activeConversation?.conversationId).toBe('conv-1')
     expect(result.current.turns).toEqual([turn])
     expect(api.listConversationTurns).toHaveBeenCalledWith('conv-1')
+    expect(window.location.search).toBe('?workspaceId=ws-1&conversationId=conv-1')
   })
 
   it('创建会话、提交轮次并把服务端返回的 turn 设为权威状态', async () => {
@@ -48,6 +56,7 @@ describe('useConversationWorkspace', () => {
       getIdentity: vi.fn(async () => actor), listWorkspaces: vi.fn(async () => [workspace]),
       listConversations: vi.fn(async () => []), listConversationTurns: vi.fn(async () => []),
       searchConversations: vi.fn(async () => []), createConversation: vi.fn(async () => conversation),
+      createWorkspace: vi.fn(),
       submitConversationTurn: vi.fn(async () => pending), archiveConversation: vi.fn(),
     }
     const { result } = renderHook(() => useConversationWorkspace({ api }))
@@ -72,7 +81,7 @@ describe('useConversationWorkspace', () => {
         if (query === 'first') resolveFirst = resolve
         else resolveSecond = resolve
       })),
-      createConversation: vi.fn(async () => conversation), submitConversationTurn: vi.fn(), archiveConversation: vi.fn(),
+      createConversation: vi.fn(async () => conversation), createWorkspace: vi.fn(), submitConversationTurn: vi.fn(), archiveConversation: vi.fn(),
     }
     const { result } = renderHook(() => useConversationWorkspace({ api }))
     await waitFor(() => expect(result.current.loading).toBe(false))
@@ -88,5 +97,58 @@ describe('useConversationWorkspace', () => {
 
     expect(result.current.searchQuery).toBe('second')
     expect(result.current.conversations).toEqual(secondResult)
+  })
+
+  it('创建工作区后切换到该工作区并持久化 workspaceId', async () => {
+    const api = {
+      getIdentity: vi.fn(async () => actor),
+      listWorkspaces: vi.fn(async () => [workspace]),
+      listConversations: vi.fn(async (workspaceId: string) => workspaceId === 'ws-2' ? [] : [conversation]),
+      searchConversations: vi.fn(async () => []),
+      createConversation: vi.fn(async () => conversation),
+      createWorkspace: vi.fn(async () => secondWorkspace),
+      listConversationTurns: vi.fn(async () => []),
+      submitConversationTurn: vi.fn(),
+      archiveConversation: vi.fn(),
+    }
+    window.history.replaceState({}, '', '/')
+    const { result } = renderHook(() => useConversationWorkspace({ api }))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    await act(() => result.current.createWorkspace({
+      displayName: 'Sandbox', workspacePath: '/agent-workspace/sandbox', repositoryId: 'sandbox',
+    }))
+
+    expect(api.createWorkspace).toHaveBeenCalledWith({
+      displayName: 'Sandbox', workspacePath: '/agent-workspace/sandbox', repositoryId: 'sandbox',
+    })
+    expect(result.current.activeWorkspace?.workspaceId).toBe('ws-2')
+    expect(result.current.activeConversation).toBeNull()
+    expect(window.location.search).toBe('?workspaceId=ws-2')
+    expect(api.listConversations).toHaveBeenLastCalledWith('ws-2')
+  })
+
+  it('URL 中的会话必须属于 URL 指定工作区', async () => {
+    const otherConversation = { ...conversation, workspaceId: 'ws-2', conversationId: 'conv-other' }
+    const api = {
+      getIdentity: vi.fn(async () => actor),
+      listWorkspaces: vi.fn(async () => [workspace, secondWorkspace]),
+      listConversations: vi.fn(async (workspaceId: string) => workspaceId === 'ws-1' ? [conversation] : [otherConversation]),
+      searchConversations: vi.fn(async () => []),
+      createConversation: vi.fn(async () => conversation),
+      createWorkspace: vi.fn(),
+      listConversationTurns: vi.fn(async () => [turn]),
+      submitConversationTurn: vi.fn(),
+      archiveConversation: vi.fn(),
+    }
+    window.history.replaceState({}, '', '/?workspaceId=ws-2&conversationId=conv-1')
+    const { result } = renderHook(() => useConversationWorkspace({ api }))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    expect(result.current.activeWorkspace?.workspaceId).toBe('ws-2')
+    expect(result.current.activeConversation?.conversationId).toBe('conv-other')
+    expect(window.location.search).toBe('?workspaceId=ws-2&conversationId=conv-other')
+    expect(api.listConversations).toHaveBeenCalledTimes(1)
+    expect(api.listConversations).toHaveBeenCalledWith('ws-2')
   })
 })

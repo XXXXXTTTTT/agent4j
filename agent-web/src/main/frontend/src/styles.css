@@ -106,8 +106,13 @@ code, pre { font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
 .sidebar-identity strong { color: #2b3730; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-identity code { color: #89918c; font-size: 9px; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-label { color: #707b75; font-size: 10px; font-weight: 750; margin: 16px 5px 6px; }
-.sidebar-select-wrap { align-items: center; background: #fff; border: 1px solid #cbd4ce; border-radius: 5px; color: #40735d; display: flex; gap: 7px; padding: 0 8px; }
+.sidebar-workspace-row { align-items: center; display: flex; gap: 6px; }
+.sidebar-select-wrap { align-items: center; background: #fff; border: 1px solid #cbd4ce; border-radius: 5px; color: #40735d; display: flex; flex: 1; gap: 7px; min-width: 0; padding: 0 8px; }
 .sidebar-select-wrap select { background: transparent; border: 0; color: #35443b; font-size: 11px; min-width: 0; outline: 0; padding: 8px 0; width: 100%; }
+.sidebar-workspace-add { flex: 0 0 auto; }
+.sidebar-workspace-meta { align-items: center; color: #7d8982; display: flex; font-size: 9px; gap: 7px; justify-content: space-between; margin: 5px 3px 0; min-width: 0; }
+.sidebar-workspace-meta code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-workspace-meta span { background: #e3eee7; border-radius: 3px; color: #356b51; font: 700 8px "Cascadia Mono", Consolas, monospace; padding: 3px 5px; }
 .sidebar-section-heading { align-items: center; color: #39463f; display: flex; font-size: 11px; font-weight: 750; justify-content: space-between; margin: 19px 5px 8px; }
 .sidebar-icon-button { align-items: center; background: #1f6f52; border: 0; border-radius: 4px; color: #fff; display: inline-flex; height: 25px; justify-content: center; width: 25px; }
 .sidebar-search { align-items: center; background: #fff; border: 1px solid #d3dad5; border-radius: 5px; color: #85908a; display: flex; gap: 6px; padding: 0 8px; }
@@ -121,6 +126,17 @@ code, pre { font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
 .sidebar-empty { color: #89928d; font-size: 10px; line-height: 1.5; padding: 4px 6px; }
 .sidebar-archive { align-items: center; background: transparent; border: 1px solid #d2dad5; border-radius: 5px; color: #69756e; display: inline-flex; font-size: 10px; gap: 6px; justify-content: center; margin-top: auto; padding: 8px; }
 .sidebar-error { background: #fff0f1; border: 1px solid #e8bcc1; border-radius: 4px; color: #a43843; font-size: 10px; margin: 8px 0 0; padding: 7px; overflow-wrap: anywhere; }
+.workspace-dialog-backdrop { align-items: center; background: rgba(25, 35, 29, .36); display: flex; inset: 0; justify-content: center; padding: 18px; position: fixed; z-index: 20; }
+.workspace-dialog { background: #fff; border: 1px solid #cbd7cf; border-radius: 8px; box-shadow: 0 22px 70px rgba(26, 41, 33, .24); max-width: 430px; padding: 20px; width: 100%; }
+.workspace-dialog-heading { align-items: flex-start; display: flex; justify-content: space-between; margin-bottom: 4px; }
+.workspace-dialog-heading h2 { align-items: center; color: #26342c; display: flex; font-size: 17px; gap: 7px; margin: 0; }
+.workspace-dialog-hint { color: #7a857e; font-size: 10px; line-height: 1.5; margin: 5px 0 0; }
+.workspace-dialog input { background: #fff; border: 1px solid #cbd2ce; border-radius: 5px; color: #252c28; font-size: 12px; padding: 9px 10px; width: 100%; }
+.workspace-dialog input:focus { border-color: #4d8e6c; box-shadow: 0 0 0 3px rgba(77, 142, 108, .14); outline: 0; }
+.workspace-dialog-error { background: #fff0f1; border: 1px solid #e8bcc1; border-radius: 5px; color: #a43843; font-size: 11px; line-height: 1.45; margin: 12px 0 0; padding: 8px 9px; overflow-wrap: anywhere; }
+.workspace-dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+.secondary-command { background: #fff; border: 1px solid #cbd2ce; border-radius: 5px; color: #5d6962; min-height: 34px; padding: 7px 12px; }
+.workspace-dialog-submit { gap: 6px; min-width: 125px; padding: 7px 12px; width: auto; }
 .conversation-column {
   background: #fff;
   border-right: 1px solid #dfe2de;
