@@ -49,4 +49,21 @@ class ProjectFileKnowledgeContextProviderTest {
         assertThat(context.evidence()).noneMatch(
                 evidence -> evidence.kind() == KnowledgeEvidenceKind.RAG_STAGE);
     }
+
+    @Test
+    void returnsEmptyKnowledgeContextWhenProjectHasNoRuleFiles() {
+        ProjectKnowledgeCompiler compiler = new ProjectKnowledgeCompiler(new Utf8TokenEstimator());
+
+        KnowledgeContext context = new ProjectFileKnowledgeContextProvider(
+                compiler, new Utf8TokenEstimator()).load(new KnowledgeContextRequest(
+                        "repo-empty", "user-a", workspace, workspace,
+                        "explain this project", TaskComplexity.SIMPLE, 1_000));
+
+        assertThat(context.prompt()).isEmpty();
+        assertThat(context.sourceCount()).isZero();
+        assertThat(context.fingerprint()).isEmpty();
+        assertThat(context.estimatedTokens()).isZero();
+        assertThat(context.degraded()).isFalse();
+        assertThat(context.evidence()).isEmpty();
+    }
 }

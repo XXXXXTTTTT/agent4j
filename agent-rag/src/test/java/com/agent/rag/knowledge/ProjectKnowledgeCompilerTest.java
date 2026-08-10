@@ -72,13 +72,12 @@ class ProjectKnowledgeCompilerTest {
     }
 
     @Test
-    void requiresRootAgentsAsTheMandatoryProjectRule() throws IOException {
+    void returnsEmptyContextWhenProjectHasNoKnowledgeFiles() throws IOException {
         Path root = Files.createDirectory(tempDir.resolve("missing-root-agents"));
-        Files.writeString(root.resolve("SOUL.md"), "optional", StandardCharsets.UTF_8);
 
-        assertThatThrownBy(() -> compiler().compile(root, root, 1_000))
-                .isInstanceOf(ProjectKnowledgeException.class)
-                .hasMessageContaining("AGENTS.md");
+        ProjectKnowledgeContext context = compiler().compile(root, root, 1_000);
+
+        assertThat(context).isSameAs(ProjectKnowledgeContext.empty());
     }
 
     @Test

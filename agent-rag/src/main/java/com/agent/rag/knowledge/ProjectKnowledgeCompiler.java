@@ -61,12 +61,6 @@ public final class ProjectKnowledgeCompiler {
             }
             List<Path> directories = hierarchy(realRoot, activeDirectory);
             List<LoadedSource> loaded = loadSources(realRoot, directories);
-            boolean hasRootAgents = loaded.stream()
-                    .anyMatch(source -> source.metadata().fileType() == KnowledgeFileType.AGENTS
-                            && source.metadata().depth() == 0);
-            if (!hasRootAgents) {
-                throw new ProjectKnowledgeException("缺少根 AGENTS.md 项目规则文件");
-            }
             List<KnowledgeSource> discoveredSources = loaded.stream()
                     .map(LoadedSource::metadata)
                     .toList();
