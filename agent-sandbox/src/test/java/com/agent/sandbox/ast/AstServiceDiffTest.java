@@ -85,6 +85,23 @@ class AstServiceDiffTest {
     }
 
     @Test
+    void returnsNormalizedUnifiedDiffForModelApplyPatchFormat() throws Exception {
+        Path repositoryRoot = initializeRepository("normalized-apply-patch-format");
+        writeSource(repositoryRoot);
+
+        AstService.AppliedDiff applied = new AstService()
+                .applyDiffWithEvidence(repositoryRoot, APPLY_PATCH_FORMAT);
+
+        assertThat(applied.updatedFiles())
+                .containsExactly(repositoryRoot.resolve("src/main/java/example/Sample.java").toRealPath());
+        assertThat(applied.unifiedDiff())
+                .startsWith("diff --git a/src/main/java/example/Sample.java b/src/main/java/example/Sample.java\n")
+                .contains("-        return 1;")
+                .contains("+        return 2;")
+                .doesNotContain("*** Begin Patch");
+    }
+
+    @Test
     void repairsModelUnifiedDiffHunkLineCounts() throws Exception {
         Path repositoryRoot = initializeRepository("malformed-hunk-counts");
         Path sourceFile = writeSource(repositoryRoot);

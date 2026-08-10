@@ -48,6 +48,33 @@ class CodePatchToolTest {
     }
 
     @Test
+    void returnsRenderableUnifiedDiffWhenModelUsesApplyPatchFormat() throws Exception {
+        initializeRepository("before\n");
+        ObjectMapper mapper = new ObjectMapper();
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            registry.register(CodePatchTool.definition(new AstService(), mapper));
+            ToolResult result = registry.execute(
+                    new ToolCall(
+                            "call-apply-patch",
+                            CodePatchTool.NAME,
+                            mapper.createObjectNode().put("unifiedDiff", """
+                                    *** Begin Patch
+                                    *** Update File: value.txt
+                                    @@
+                                    -before
+                                    +after
+                                    *** End Patch
+                                    """)),
+                    context());
+
+            assertThat(result.status()).isEqualTo(ToolResultStatus.SUCCEEDED);
+            assertThat(result.output().path("unifiedDiff").asText())
+                    .startsWith("diff --git a/value.txt b/value.txt\n")
+                    .doesNotContain("*** Begin Patch");
+        }
+    }
+
+    @Test
     void preservesConflictStackAndRejectsWorkspaceArguments() throws Exception {
         initializeRepository("before\n");
         ObjectMapper mapper = new ObjectMapper();

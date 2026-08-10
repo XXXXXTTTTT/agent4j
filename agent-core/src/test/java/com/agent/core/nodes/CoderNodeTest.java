@@ -190,6 +190,9 @@ class CoderNodeTest {
                     .containsKey(CoderNode.REQUEST_KEY)
                     .containsKey(CoderNode.RESPONSE_KEY)
                     .doesNotContainKey(CoderNode.ERROR_KEY);
+            assertThat(result.variables().get(CoderNode.UNIFIED_DIFF_KEY))
+                    .startsWith("diff --git a/value.txt b/value.txt\n")
+                    .doesNotContain("*** Begin Patch");
             assertThat(result.trace()).containsExactly("coder");
             }
         }
@@ -208,7 +211,7 @@ class CoderNodeTest {
         message.put("role", "assistant");
         message.put("content", objectMapper.writeValueAsString(java.util.Map.of(
                 "summary", "修改值文件",
-                "unifiedDiff", validDiff(),
+                "unifiedDiff", applyPatchFormat(),
                 "commandName", "test.cat",
                 "commandArguments", java.util.List.of("value.txt"))));
         choice.put("finish_reason", "stop");
@@ -283,6 +286,17 @@ class CoderNodeTest {
                 @@ -1 +1 @@
                 -before
                 +after
+                """;
+    }
+
+    private String applyPatchFormat() {
+        return """
+                *** Begin Patch
+                *** Update File: value.txt
+                @@
+                -before
+                +after
+                *** End Patch
                 """;
     }
 

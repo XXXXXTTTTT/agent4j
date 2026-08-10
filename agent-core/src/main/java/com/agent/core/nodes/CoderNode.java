@@ -19,6 +19,7 @@ import com.agent.core.tool.ToolResult;
 import com.agent.core.tool.ToolResultStatus;
 import com.agent.core.tool.builtin.CodePatchTool;
 import com.agent.sandbox.ast.AstService;
+import com.agent.sandbox.ast.AstService.AppliedDiff;
 import com.agent.sandbox.ast.WorkspaceFile;
 import com.agent.sandbox.ast.WorkspaceSnapshot;
 import com.agent.sandbox.ast.WorkspaceSnapshotService;
@@ -220,8 +221,13 @@ public final class CoderNode implements Node {
                         .withVariable(ERROR_KEY, patchResult.errorStack())
                         .withTraceEntry("coder");
             }
+            String normalizedDiff = patchResult.output().path("unifiedDiff").textValue();
+            if (normalizedDiff == null || normalizedDiff.isBlank()) {
+                throw new IllegalStateException("code.apply-diff 返回 unifiedDiff 必须是非空字符串");
+            }
             String updatedFiles = updatedFiles(patchResult.output());
             return output
+                    .withVariable(UNIFIED_DIFF_KEY, normalizedDiff)
                     .withVariable(UPDATED_FILES_KEY, updatedFiles)
                     .withTraceEntry("coder");
         } catch (Exception exception) {
@@ -285,13 +291,14 @@ public final class CoderNode implements Node {
             AgentState state,
             Path workspace,
             String unifiedDiff) {
-        List<Path> updatedFiles = astService.applyDiff(workspace, unifiedDiff);
-        String relativeFiles = updatedFiles.stream()
+        AppliedDiff applied = astService.applyDiffWithEvidence(workspace, unifiedDiff);
+        String relativeFiles = applied.updatedFiles().stream()
                 .map(workspace::relativize)
                 .map(Path::toString)
                 .map(path -> path.replace('\\', '/'))
                 .collect(Collectors.joining("\n"));
         return state
+                .withVariable(UNIFIED_DIFF_KEY, applied.unifiedDiff())
                 .withVariable(UPDATED_FILES_KEY, relativeFiles)
                 .withTraceEntry("coder");
     }

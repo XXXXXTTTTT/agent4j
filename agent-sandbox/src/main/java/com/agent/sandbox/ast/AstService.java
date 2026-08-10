@@ -88,6 +88,17 @@ public final class AstService {
      * @return 实际更新文件的绝对规范路径
      */
     public List<Path> applyDiff(Path repositoryRoot, String unifiedDiff) {
+        return applyDiffWithEvidence(repositoryRoot, unifiedDiff).updatedFiles();
+    }
+
+    /**
+     * 在应用补丁的同时返回实际执行的规范化 Unified Diff，供审计和前端渲染使用。
+     *
+     * @param repositoryRoot Git 工作树根目录
+     * @param unifiedDiff    模型返回的 Unified Diff 或 Apply Patch 文本
+     * @return 实际更新文件和规范化后的 Unified Diff
+     */
+    public AppliedDiff applyDiffWithEvidence(Path repositoryRoot, String unifiedDiff) {
         Objects.requireNonNull(repositoryRoot, "repositoryRoot 不能为空");
         if (unifiedDiff == null || unifiedDiff.isBlank()) {
             throw new AstServiceException("补丁内容不能为空");
@@ -126,12 +137,23 @@ public final class AstService {
                     ensureInsideWorkTree(root, updatedPath, updatedFile.getPath());
                     updatedFiles.add(updatedPath);
                 }
-                return List.copyOf(updatedFiles);
+                return new AppliedDiff(updatedFiles, normalizedDiff);
             }
         } catch (AstServiceException exception) {
             throw exception;
         } catch (Exception exception) {
             throw new AstServiceException("应用 Unified Diff 失败: " + repositoryRoot, exception);
+        }
+    }
+
+    /** 应用成功后的不可变 Diff 证据。 */
+    public record AppliedDiff(List<Path> updatedFiles, String unifiedDiff) {
+
+        public AppliedDiff {
+            updatedFiles = List.copyOf(Objects.requireNonNull(updatedFiles, "updatedFiles 不能为空"));
+            if (unifiedDiff == null || unifiedDiff.isBlank()) {
+                throw new IllegalArgumentException("unifiedDiff 不能为空");
+            }
         }
     }
 

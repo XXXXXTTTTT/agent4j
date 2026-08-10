@@ -7,6 +7,7 @@ import com.agent.core.tool.ToolRiskLevel;
 import com.agent.core.tool.ToolCall;
 import com.agent.core.tool.ToolInvocationContext;
 import com.agent.sandbox.ast.AstService;
+import com.agent.sandbox.ast.AstService.AppliedDiff;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -14,7 +15,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
@@ -62,9 +62,10 @@ public final class CodePatchTool {
         if (unifiedDiff == null || unifiedDiff.isBlank()) {
             throw new IllegalArgumentException("unifiedDiff 不能为空");
         }
-        List<Path> updatedFiles = astService.applyDiff(context.workspaceRoot(), unifiedDiff);
+        AppliedDiff applied = astService.applyDiffWithEvidence(
+                context.workspaceRoot(), unifiedDiff);
         ArrayNode files = objectMapper.createArrayNode();
-        for (Path updatedFile : updatedFiles) {
+        for (Path updatedFile : applied.updatedFiles()) {
             Path absolute = updatedFile.toAbsolutePath().normalize();
             if (!absolute.startsWith(context.workspaceRoot())) {
                 throw new IllegalStateException("工具更新文件超出 workspaceRoot");
@@ -72,6 +73,9 @@ public final class CodePatchTool {
             files.add(context.workspaceRoot().relativize(absolute)
                     .toString().replace('\\', '/'));
         }
-        return objectMapper.createObjectNode().set("updatedFiles", files);
+        ObjectNode output = objectMapper.createObjectNode();
+        output.set("updatedFiles", files);
+        output.put("unifiedDiff", applied.unifiedDiff());
+        return output;
     }
 }

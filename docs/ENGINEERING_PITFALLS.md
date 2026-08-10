@@ -2768,3 +2768,33 @@ REST/SSE 请求；`userId` 与 `displayName` 均非空才算有效身份，全�
 随后重试得到 `COMPLETED`。CLI 在首次轮次中保留了 `ModelRoutingException`、两个端点和 Run 状态，
 没有把上游暂态错误伪装成成功。`README.md` 与本节同步记录该地址边界，后续改动必须保留这组真实
 回归契约。
+
+## 本轮补充：模型补丁成功执行但 Web Diff 证据为空
+
+### 【问题现象】代码和测试均成功，执行详情却提示 Unified Diff 未包含文件
+
+真实外部项目 EDD 中，Coder 已修改 `NumberLabel.java`，Ops 的 Maven 测试退出码为 `0`，Reviewer
+也完成批准；但重新打开 Web 会话后，代码变更面板显示“Unified Diff 未包含文件”。Run 状态中的
+`coder.unifiedDiff` 实际保存的是模型返回的 `*** Begin Patch` 文本，而前端 `parse-diff` 只接受
+标准 Unified Diff。该问题不会让节点执行失败，却会切断用户最需要的变更审计证据。
+
+### 【根因分析】执行格式已在沙箱内转换，状态仍保留转换前协议
+
+`AstService` 为兼容真实模型输出，会在应用前把 Apply Patch 转换为 JGit 可执行的 Unified Diff；
+转换结果原本只存在于方法局部变量中。`CodePatchTool` 只返回 `updatedFiles`，`CoderNode` 则在调用工具
+前就把原始模型字段写入 `coder.unifiedDiff`。因此文件系统、Run 状态和 Web 渲染使用了三个不同层次
+的证据，后端成功不能保证前端可解释。
+
+### 【解决方案/代码级实现】将实际执行的规范化 Diff 作为权威证据回写
+
+`AstService.applyDiffWithEvidence` 返回不可变 `AppliedDiff(updatedFiles, unifiedDiff)`，旧
+`applyDiff` 继续委托该接口以保持兼容。`CodePatchTool` 同时返回更新文件和规范化 Unified Diff；
+`CoderNode` 只在工具成功后使用该结果覆盖 `coder.unifiedDiff`。这样 JGit 实际执行文本、Checkpoint
+审计字段和 Monaco Diff 面板共享同一份证据，前端不需要猜测模型补丁格式。
+
+### 【证据】真实格式红绿回归与完整门禁
+
+`AstServiceDiffTest` 使用真实 Git 工作树验证 Apply Patch 被转换为包含文件头和变更行的 Unified Diff；
+`CodePatchToolTest` 验证工具输出不再包含 `*** Begin Patch`；`CoderNodeTest` 验证状态最终保存
+`diff --git` 文本。聚焦测试共 23 项通过，Java 核心/Web/评测完整门禁退出码为 `0`，前端 55 项测试、
+Vite 生产构建、`ProductWorkbenchBrowserTest` 和 Spring Boot JAR 打包均通过。
