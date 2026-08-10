@@ -121,6 +121,7 @@ Compose 默认使用 `pgvector/pgvector:pg16`，并由 `POSTGRES_DB`、`POSTGRES
 ```mermaid
 flowchart LR
     UI[React Web Workbench] --> API[agent-web REST / SSE / WebSocket]
+    CLI[Java 21 CLI] --> API
     API --> CORE[agent-core Graph State Engine]
     CORE --> CODE[CoderNode + JavaParser + JGit]
     CORE --> OPS[OpsNode + Docker / PTY]
@@ -140,6 +141,7 @@ flowchart LR
 | [`agent-rag`](agent-rag) | Parent/Child code chunking, pgvector + BM25 hybrid retrieval and `MemoryManager` |
 | [`agent-web`](agent-web) | Spring WebFlux REST gateway, SSE/WebSocket streams, PostgreSQL Harness and React workbench |
 | [`agent-eval`](agent-eval) | 58-task JSONL benchmark, bounded virtual-thread runner, `pass^k` and TTFT reports |
+| [`agent-cli`](agent-cli) | Java 21 interactive client, persisted sessions, live SSE Trace/logs and Compose workspace launcher |
 
 ## What you can build
 
@@ -210,6 +212,42 @@ POST /api/conversations/{conversationId}/archive
 The service rejects cross-workspace access, disabled users, archived conversation writes and
 concurrent active turns. PostgreSQL is the source of truth; WebSocket and SSE streams are delivery
 channels only.
+
+### CLI and mounted workspaces
+
+The CLI and Web workbench use the same REST/SSE protocol and PostgreSQL conversations. Build the
+application and CLI with Java 21, then bind the repository you want Agent4J to edit:
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Java\jdk-21'
+$env:Path="$env:JAVA_HOME\bin;$env:Path"
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+mvn -pl agent-web -am package -DskipTests
+mvn -pl agent-cli package -DskipTests
+.\agent4j.ps1 serve --workspace D:\projects\my-service --compose-file .\docker-compose.local.yml
+```
+
+`serve` validates the real host directory, passes it as `AGENT_CODE_HOST_WORKSPACE`, starts the
+existing local Compose stack and waits for readiness. Compose exposes that one host directory to
+the application as `/agent-workspace`; neither the CLI nor Web invents a second workspace mapping.
+
+Start an interactive session or list persisted conversations:
+
+```powershell
+.\agent4j.ps1 chat --workspace D:\projects\my-service --server http://localhost:8080
+.\agent4j.ps1 conversations --server http://localhost:8080
+```
+
+The interactive client supports `/new`, `/sessions`, `/use <conversationId>`, `/status` and
+`/exit`. Normal messages create persisted Turns, while Trace summaries and PTY output arrive over
+two live SSE streams. The CLI does not print `.env`, model keys, passwords, Authorization values
+or process environment data.
+
+In the Web sidebar, the folder-plus button creates a workspace with the exact server-visible path,
+for example `/agent-workspace/service-a`. The path must already exist under the mounted root. A
+browser cannot bind an arbitrary host directory; use `agent4j serve --workspace <host-path>` to
+change the host mount. The active `workspaceId` and `conversationId` remain in the URL, so refreshes
+restore the same project and conversation.
 
 ## Configuration
 
