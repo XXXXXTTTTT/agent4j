@@ -2,7 +2,6 @@ package com.agent.web.controller;
 
 import com.agent.web.workspace.WorkspaceRecord;
 
-import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
@@ -12,7 +11,7 @@ public record WorkspaceView(
         UUID workspaceId,
         String ownerUserId,
         String displayName,
-        Path workspacePath,
+        String workspacePath,
         String repositoryId,
         String permission,
         Instant createdAt,
@@ -22,7 +21,13 @@ public record WorkspaceView(
         Objects.requireNonNull(workspace, "workspace 不能为空");
         return new WorkspaceView(
                 workspace.workspaceId(), workspace.ownerUserId(), workspace.displayName(),
-                workspace.workspacePath(), workspace.repositoryId(), workspace.permission().name(),
+                serverPath(workspace), workspace.repositoryId(), workspace.permission().name(),
                 workspace.createdAt(), workspace.updatedAt());
+    }
+
+    private static String serverPath(WorkspaceRecord workspace) {
+        String path = workspace.workspacePath().toString();
+        String separator = workspace.workspacePath().getFileSystem().getSeparator();
+        return path.replace(separator, "/");
     }
 }
