@@ -92,6 +92,10 @@ agent4j conversations --server <uri>
 - `--server` 默认 `http://localhost:8080`。
 - `serve --compose-file` 默认仓库根目录的 `docker-compose.local.yml`。
 
+在 Windows 本机存在多个 8080 监听者时，CLI 对精确的 `localhost` 默认值按
+`[::1] -> 127.0.0.1` 顺序探测，并在身份请求成功后固定实际端点；readiness
+必须返回 JSON `status=UP`，不能仅凭 HTTP 200 判定服务可用。
+
 `serve` 校验工作区是真实目录，然后以进程环境变量
 `AGENT_CODE_HOST_WORKSPACE=<绝对路径>` 调用现有 Compose 命令。它不修改 `.env`，也不输出
 任何环境变量值。服务 healthy 后输出 Web URL。

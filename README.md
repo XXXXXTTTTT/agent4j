@@ -255,6 +255,9 @@ mvn -pl agent-cli package -DskipTests
 `serve` validates the real host directory, passes it as `AGENT_CODE_HOST_WORKSPACE`, starts the
 existing local Compose stack and waits for readiness. Compose exposes that one host directory to
 the application as `/agent-workspace`; neither the CLI nor Web invents a second workspace mapping.
+Readiness requires an Agent4J JSON response whose `status` field is exactly `UP`. On Windows, the CLI probes
+`http://[::1]:8080`, then `http://127.0.0.1:8080`, so another local service bound to IPv4 port 8080
+cannot make the Agent appear ready or add a 30-second DNS stall.
 
 Start an interactive session or list persisted conversations:
 
@@ -263,7 +266,9 @@ Start an interactive session or list persisted conversations:
 .\agent4j.ps1 conversations --server http://localhost:8080
 ```
 
-The interactive client supports `/new`, `/sessions`, `/use <conversationId>`, `/status` and
+The `--server` option defaults to `http://localhost:8080`; the CLI transparently pins the first
+working loopback endpoint after the identity request. The interactive client supports `/new`,
+`/sessions`, `/use <conversationId>`, `/status` and
 `/exit`. Normal messages create persisted Turns, while Trace summaries and PTY output arrive over
 two live SSE streams. The CLI does not print `.env`, model keys, passwords, Authorization values
 or process environment data.

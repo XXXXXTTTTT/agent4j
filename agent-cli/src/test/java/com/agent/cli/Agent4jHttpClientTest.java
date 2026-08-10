@@ -114,6 +114,86 @@ class Agent4jHttpClientTest {
     }
 
     @Test
+    void fallsBackToNextEndpointAndPinsSuccessfulEndpoint() throws Exception {
+        HttpServer wrongServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        HttpServer workingServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        try {
+            wrongServer.createContext("/api/identity", exchange -> respond(
+                    exchange, 404, "{\"error\":\"frontend\"}"));
+            workingServer.createContext("/api/identity", exchange -> respond(
+                    exchange, 200, "{\"userId\":\"local\",\"displayName\":\"Local User\"}"));
+            workingServer.createContext("/api/workspaces", exchange -> respond(
+                    exchange, 200, "[]"));
+            wrongServer.start();
+            workingServer.start();
+
+            Agent4jHttpClient client = new Agent4jHttpClient(
+                    HttpClient.newHttpClient(),
+                    List.of(
+                            URI.create("http://127.0.0.1:" + wrongServer.getAddress().getPort()),
+                            URI.create("http://127.0.0.1:" + workingServer.getAddress().getPort())),
+                    objectMapper);
+
+            assertThat(client.identity().userId()).isEqualTo("local");
+            assertThat(client.listWorkspaces()).isEmpty();
+        } finally {
+            wrongServer.stop(0);
+            workingServer.stop(0);
+        }
+    }
+
+    @Test
+    void preservesFirstHttpErrorWhenAllLoopbackEndpointsFail() throws Exception {
+        HttpServer conflictServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        try {
+            conflictServer.createContext("/api/identity", exchange -> respond(
+                    exchange, 409, "{\"title\":\"Conflict\",\"detail\":\"已有活动轮次\"}"));
+            conflictServer.start();
+            URI unavailable = URI.create("http://127.0.0.1:1");
+            assertThatThrownBy(() -> new Agent4jHttpClient(
+                    HttpClient.newHttpClient(),
+                    List.of(
+                            URI.create("http://127.0.0.1:" + conflictServer.getAddress().getPort()),
+                            unavailable),
+                    objectMapper).identity())
+                    .isInstanceOf(Agent4jHttpException.class)
+                    .satisfies(exception -> {
+                        Agent4jHttpException failure = (Agent4jHttpException) exception;
+                        assertThat(failure.statusCode()).isEqualTo(409);
+                        assertThat(failure.responseBody()).contains("已有活动轮次");
+                    });
+        } finally {
+            conflictServer.stop(0);
+        }
+    }
+
+    @Test
+    void rejectsHttp200WithoutCompleteIdentityFieldsAndUsesNextEndpoint() throws Exception {
+        HttpServer wrongServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        HttpServer workingServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        try {
+            wrongServer.createContext("/api/identity", exchange -> respond(
+                    exchange, 200, "{}"));
+            workingServer.createContext("/api/identity", exchange -> respond(
+                    exchange, 200, "{\"userId\":\"local\",\"displayName\":\"Local User\"}"));
+            wrongServer.start();
+            workingServer.start();
+
+            Agent4jHttpClient client = new Agent4jHttpClient(
+                    HttpClient.newHttpClient(),
+                    List.of(
+                            URI.create("http://127.0.0.1:" + wrongServer.getAddress().getPort()),
+                            URI.create("http://127.0.0.1:" + workingServer.getAddress().getPort())),
+                    objectMapper);
+
+            assertThat(client.identity().displayName()).isEqualTo("Local User");
+        } finally {
+            wrongServer.stop(0);
+            workingServer.stop(0);
+        }
+    }
+
+    @Test
     void readsTraceAndTerminalSseFromExactRunPaths() {
         UUID runId = UUID.fromString("cdf4b51e-46fc-4dbd-aa82-06bd555e4226");
         server.createContext("/api/runs/" + runId + "/events", exchange -> respondSse(

@@ -2729,3 +2729,42 @@ SSE 是持续连接，验收客户端使用有界读取并校验已收到的事�
 `ProductionCodeAgentIntegrationTest.executesPlannerCoderOpsReviewerWithCompleteModelEvidence` 已与
 纯代码 Reviewer 的 `code-model` 契约一致；全量 `mvn clean verify` 汇总 759 项测试，失败和错误均为 `0`。
 真实证据保存在 `.agent4j/acceptance/evidence/`（该目录按 `.gitignore` 排除），不提交 API Key、日志或导入项目。
+
+## 本轮补充：Windows CLI localhost 解析与 readiness 误判
+
+### 【问题现象】CLI 默认地址看似正确，却可能命中错误服务、等待 30 秒，或把前端 200 响应当成 Agent 已启动
+
+用户按文档执行 `conversations` 或 `serve` 时没有显式传 `--server`，CLI 使用默认
+`http://localhost:8080`。本机同时存在 Docker Agent、WSL relay 和一个 Node/Vite 服务：
+`curl http://127.0.0.1:8080/api/identity` 返回 Express 404，而
+`curl http://[::1]:8080/api/identity` 返回 Agent4J 200。Java 21 `HttpClient` 首次请求
+`localhost` 在该环境中进入无响应的监听端点，直到 30 秒请求超时才继续；另一个错误服务对
+`/actuator/health/readiness` 返回 HTTP 200 HTML，旧探针只看状态码会错误报 ready。
+
+### 【根因分析】主机名解析、端口绑定和健康语义被当成同一个“localhost 可用”假设
+
+`localhost` 不是一个固定 socket：Windows 上 Java、curl、Docker 端口代理和 WSL relay 的
+地址选择可能不同。仅保留一个 URI 会把 DNS 选择交给运行时；仅检查 HTTP 200 又无法证明响应
+来自 Spring Agent4J。CLI 端点失败后也没有保留成功端点，后续请求可能再次命中错误服务。
+
+### 【解决方案/代码级实现】显式回环探测、成功端点锁定和 JSON readiness 契约
+
+新增 `LoopbackServerEndpoints`，仅当输入主机严格等于 `localhost` 时生成
+`[::1]`、`127.0.0.1` 两个精确 URI，远程网关和其他主机完全不改写。
+`Agent4jHttpClient.identity()` 依次尝试这些端点；身份 JSON 解析成功后将该 URI 固定给所有
+REST/SSE 请求；`userId` 与 `displayName` 均非空才算有效身份，全部失败时优先重抛首个
+`Agent4jHttpException`，从而保留 HTTP 状态码和 ProblemDetail。`ComposeLauncher` 使用同一顺序
+探测，并要求 readiness 响应 JSON 的 `status` 精确为 `UP`，拒绝 Vite 等服务的 HTML 200。
+
+### 【证据】红绿测试与真实 Docker/网关进程验收
+
+新增 `LoopbackServerEndpointsTest` 2 项、HTTP 客户端回退与错误契约测试 3 项、
+`ComposeLauncherTest` 2 项；完整 CLI 模块测试为 22 项，失败和错误均为 `0`。在当前 Docker Agent 与 127.0.0.1 Node 服务
+并存的 Windows 环境中，默认 `conversations` 从实测约 31.6 秒降至约 1.6 秒并正常退出；
+默认 `chat` 创建新会话并真实调用网关，收到 Planner 快速问答 Trace 和最终回答；最终复验
+`runId=e053b0d7-5846-4938-aa4c-8466c2d29cec`，进程在约 4.3 秒内
+返回退出码 `0`。同一环境的一次首次真实轮次收到上游两个端点 HTTP 500；对规范化后的
+`https://zz.cxwms.com/v1/chat/completions` 做不输出正文的直接探测确认 fallback 模型返回 200，
+随后重试得到 `COMPLETED`。CLI 在首次轮次中保留了 `ModelRoutingException`、两个端点和 Run 状态，
+没有把上游暂态错误伪装成成功。`README.md` 与本节同步记录该地址边界，后续改动必须保留这组真实
+回归契约。

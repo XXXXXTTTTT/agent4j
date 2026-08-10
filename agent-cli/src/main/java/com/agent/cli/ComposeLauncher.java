@@ -1,5 +1,9 @@
 package com.agent.cli;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -68,8 +72,10 @@ public final class ComposeLauncher {
     private void awaitHealthy(Duration timeout) {
         long deadline = System.nanoTime() + timeout.toNanos();
         while (System.nanoTime() < deadline) {
-            if (healthProbe.isHealthy(DEFAULT_SERVER)) {
-                return;
+            for (URI server : LoopbackServerEndpoints.forServer(DEFAULT_SERVER)) {
+                if (healthProbe.isHealthy(server)) {
+                    return;
+                }
             }
             try {
                 Thread.sleep(Duration.ofMillis(250));
@@ -124,10 +130,11 @@ public final class ComposeLauncher {
         }
     }
 
-    private static HealthProbe defaultHealthProbe() {
+    static HealthProbe defaultHealthProbe() {
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(3))
                 .build();
+        ObjectMapper objectMapper = new ObjectMapper();
         return server -> {
             HttpRequest request = HttpRequest.newBuilder(URI.create(
                             server.toString() + "/actuator/health/readiness"))
@@ -135,8 +142,15 @@ public final class ComposeLauncher {
                     .GET()
                     .build();
             try {
-                return client.send(request, HttpResponse.BodyHandlers.discarding())
-                        .statusCode() == 200;
+                HttpResponse<String> response = client.send(
+                        request, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() != 200) {
+                    return false;
+                }
+                JsonNode body = objectMapper.readTree(response.body());
+                return body != null && "UP".equals(body.path("status").asText());
+            } catch (JsonProcessingException exception) {
+                return false;
             } catch (IOException exception) {
                 return false;
             } catch (InterruptedException exception) {
