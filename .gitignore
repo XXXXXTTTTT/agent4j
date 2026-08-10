@@ -27,6 +27,13 @@ coverage/
 .frontend/
 .worktrees/
 .agent4j/
+!.agent4j/
+!.agent4j/acceptance/
+.agent4j/acceptance/*
+!.agent4j/acceptance/run-real-agent.ps1
+.agent4j/imports/
+.agent4j/.staging/
+.agent4j/.uploads/
 
 # 敏感信息
 .env
