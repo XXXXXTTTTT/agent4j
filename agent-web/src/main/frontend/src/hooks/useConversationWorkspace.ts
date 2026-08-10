@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   archiveConversation,
+  browseWorkspaceDirectories,
   createConversation,
   createWorkspace,
   getIdentity,
   listConversationTurns,
   listConversations,
   listWorkspaces,
+  importWorkspace,
   searchConversations,
   submitConversationTurn,
 } from '../api/conversationApi'
@@ -16,8 +18,9 @@ import type {
   Conversation,
   ConversationTurn,
   Workspace,
+  WorkspaceDirectoryListing,
 } from '../api/contracts'
-import type { CreateWorkspaceCommand } from '../api/conversationApi'
+import type { CreateWorkspaceCommand, ImportWorkspaceCommand } from '../api/conversationApi'
 
 export interface ConversationWorkspaceApi {
   getIdentity(): Promise<Actor>
@@ -25,6 +28,8 @@ export interface ConversationWorkspaceApi {
   listConversations(workspaceId: string): Promise<Conversation[]>
   searchConversations(workspaceId: string, query: string): Promise<Conversation[]>
   createWorkspace(command: CreateWorkspaceCommand): Promise<Workspace>
+  browseWorkspaceDirectories?(path: string): Promise<WorkspaceDirectoryListing>
+  importWorkspace?(command: ImportWorkspaceCommand): Promise<Workspace>
   createConversation(workspaceId: string): Promise<Conversation>
   submitConversationTurn(conversationId: string, command: { content: string; reviewerUrl?: string }): Promise<ConversationTurn>
   listConversationTurns(conversationId: string): Promise<ConversationTurn[]>
@@ -37,6 +42,8 @@ const DEFAULT_API: ConversationWorkspaceApi = {
   listConversations: (workspaceId) => listConversations(workspaceId),
   searchConversations: (workspaceId, query) => searchConversations(workspaceId, query),
   createWorkspace: (command) => createWorkspace(command),
+  browseWorkspaceDirectories: (path) => browseWorkspaceDirectories(path),
+  importWorkspace: (command) => importWorkspace(command),
   createConversation: (workspaceId) => createConversation(workspaceId),
   submitConversationTurn: (conversationId, command) => submitConversationTurn(conversationId, command),
   listConversationTurns: (conversationId) => listConversationTurns(conversationId),
@@ -60,6 +67,8 @@ export interface UseConversationWorkspaceResult {
   error: Error | null
   selectWorkspace(workspaceId: string): Promise<void>
   createWorkspace(command: CreateWorkspaceCommand): Promise<void>
+  browseWorkspaceDirectories(path: string): Promise<WorkspaceDirectoryListing>
+  importWorkspace(command: ImportWorkspaceCommand): Promise<void>
   selectConversation(conversationId: string): Promise<void>
   search(query: string): Promise<void>
   createConversation(): Promise<void>
@@ -226,6 +235,26 @@ export function useConversationWorkspace(
     }
   }, [selectWorkspace])
 
+  const browseWorkspaceDirectoryEntries = useCallback(async (path: string): Promise<WorkspaceDirectoryListing> => {
+    const browse = apiRef.current.browseWorkspaceDirectories
+    if (browse === undefined) throw new Error('工作区目录浏览接口未配置')
+    return browse(path)
+  }, [])
+
+  const importWorkspaceEntry = useCallback(async (command: ImportWorkspaceCommand): Promise<void> => {
+    const importProject = apiRef.current.importWorkspace
+    if (importProject === undefined) throw new Error('工作区导入接口未配置')
+    setError(null)
+    try {
+      const created = await importProject(command)
+      setWorkspaces((items) => [created, ...items.filter((item) => item.workspaceId !== created.workspaceId)])
+      await selectWorkspace(created.workspaceId)
+    } catch (failure) {
+      setError(asError(failure))
+      throw failure
+    }
+  }, [selectWorkspace])
+
   const submit = useCallback(async (content: string, reviewerUrl?: string): Promise<ConversationTurn> => {
     if (activeConversationId === null) throw new Error('当前没有会话')
     const exactContent = content.trim()
@@ -302,6 +331,9 @@ export function useConversationWorkspace(
   return {
     identity, workspaces, activeWorkspace, conversations, activeConversation, turns, searchQuery,
     loading, submitting, error, selectWorkspace, selectConversation, search,
-    createConversation: create, createWorkspace: createWorkspaceEntry, submit, archive, reload,
+    createConversation: create, createWorkspace: createWorkspaceEntry,
+    browseWorkspaceDirectories: browseWorkspaceDirectoryEntries,
+    importWorkspace: importWorkspaceEntry,
+    submit, archive, reload,
   }
 }

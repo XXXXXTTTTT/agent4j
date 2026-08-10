@@ -76,7 +76,14 @@ export function ConversationSidebar({ controller }: ConversationSidebarProps) {
         </button>
       ) : null}
       {controller.error === null ? null : <p className="sidebar-error" role="alert">{controller.error.message}</p>}
-      {dialogOpen ? <WorkspaceDialog createWorkspace={controller.createWorkspace} onClose={() => setDialogOpen(false)} /> : null}
+      {dialogOpen ? (
+        <WorkspaceDialog
+          createWorkspace={controller.createWorkspace}
+          browseWorkspaceDirectories={controller.browseWorkspaceDirectories}
+          importWorkspace={controller.importWorkspace}
+          onClose={() => setDialogOpen(false)}
+        />
+      ) : null}
     </aside>
   )
 }

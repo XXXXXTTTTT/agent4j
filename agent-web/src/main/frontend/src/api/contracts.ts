@@ -140,6 +140,17 @@ export interface Workspace {
   updatedAt: string
 }
 
+export interface WorkspaceDirectoryEntry {
+  name: string
+  path: string
+}
+
+export interface WorkspaceDirectoryListing {
+  currentPath: string
+  parentPath: string | null
+  entries: WorkspaceDirectoryEntry[]
+}
+
 export type ConversationStatus = 'ACTIVE' | 'ARCHIVED'
 
 export interface Conversation {

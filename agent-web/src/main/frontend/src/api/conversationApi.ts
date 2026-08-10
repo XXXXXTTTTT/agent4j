@@ -5,6 +5,8 @@ import type {
   ConversationTurn,
   ConversationTurnStatus,
   Workspace,
+  WorkspaceDirectoryEntry,
+  WorkspaceDirectoryListing,
   WorkspacePermission,
 } from './contracts'
 
@@ -76,6 +78,25 @@ export function decodeWorkspace(value: unknown, path = 'workspace'): Workspace {
     permission: enumAt(object.permission, WORKSPACE_PERMISSIONS, `${path}.permission`),
     createdAt: stringAt(object.createdAt, `${path}.createdAt`),
     updatedAt: stringAt(object.updatedAt, `${path}.updatedAt`),
+  }
+}
+
+export function decodeWorkspaceDirectoryEntry(value: unknown, path = 'entry'): WorkspaceDirectoryEntry {
+  const object = objectAt(value, path)
+  exactKeys(object, ['name', 'path'], path)
+  return {
+    name: nonBlankStringAt(object.name, `${path}.name`),
+    path: nonBlankStringAt(object.path, `${path}.path`),
+  }
+}
+
+export function decodeWorkspaceDirectoryListing(value: unknown, path = 'workspaceDirectories'): WorkspaceDirectoryListing {
+  const object = objectAt(value, path)
+  exactKeys(object, ['currentPath', 'parentPath', 'entries'], path)
+  return {
+    currentPath: nonBlankStringAt(object.currentPath, `${path}.currentPath`),
+    parentPath: nullableStringAt(object.parentPath, `${path}.parentPath`),
+    entries: decodeArray(object.entries, decodeWorkspaceDirectoryEntry, `${path}.entries`),
   }
 }
 
@@ -153,6 +174,36 @@ export async function createWorkspace(command: CreateWorkspaceCommand, fetcher: 
     repositoryId: nonBlankStringAt(command.repositoryId, 'repositoryId'),
   }
   return decodeWorkspace(await requestJson('/api/workspaces', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, fetcher))
+}
+
+export async function browseWorkspaceDirectories(path = '/agent-workspace', fetcher: typeof fetch = globalThis.fetch): Promise<WorkspaceDirectoryListing> {
+  const exactPath = nonBlankStringAt(path, 'path')
+  return decodeWorkspaceDirectoryListing(await requestJson(`/api/workspace-directories?path=${encodeURIComponent(exactPath)}`, { method: 'GET' }, fetcher))
+}
+
+export interface ImportWorkspaceCommand {
+  displayName: string
+  repositoryId: string
+  files: File[]
+}
+
+export async function importWorkspace(command: ImportWorkspaceCommand, fetcher: typeof fetch = globalThis.fetch): Promise<Workspace> {
+  const displayName = nonBlankStringAt(command.displayName, 'displayName')
+  const repositoryId = nonBlankStringAt(command.repositoryId, 'repositoryId')
+  if (!Array.isArray(command.files) || command.files.length === 0) throw new TypeError('files 必须至少包含一个文件')
+  const { zipSync } = await import('fflate')
+  const files: Record<string, Uint8Array> = {}
+  for (const file of command.files) {
+    const relativePath = file.webkitRelativePath.trim()
+    if (relativePath.length === 0) throw new TypeError('files 中的文件必须包含 webkitRelativePath')
+    files[relativePath] = new Uint8Array(await file.arrayBuffer())
+  }
+  const archive = zipSync(files)
+  const form = new FormData()
+  form.append('displayName', displayName)
+  form.append('repositoryId', repositoryId)
+  form.append('archive', new Blob([archive], { type: 'application/zip' }), 'project.zip')
+  return decodeWorkspace(await requestJson('/api/workspace-imports', { method: 'POST', body: form }, fetcher))
 }
 
 export async function listConversations(workspaceId: string, fetcher: typeof fetch = globalThis.fetch): Promise<Conversation[]> {

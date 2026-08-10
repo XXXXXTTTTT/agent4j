@@ -3,11 +3,13 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   createConversation,
   createWorkspace,
+  browseWorkspaceDirectories,
   decodeActor,
   decodeConversation,
   decodeConversationTurn,
   decodeWorkspace,
   getIdentity,
+  importWorkspace,
   listConversations,
   listConversationTurns,
   listWorkspaces,
@@ -120,5 +122,35 @@ describe('Conversation API HTTP 请求', () => {
       message: 'workspacePath 必须位于配置工作区内',
       status: 400,
     })
+  })
+
+  it('按精确路径浏览挂载目录', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({
+      currentPath: '/agent-workspace',
+      parentPath: null,
+      entries: [{ name: 'demo', path: '/agent-workspace/demo' }],
+    }))
+
+    await expect(browseWorkspaceDirectories('/agent-workspace', fetcher)).resolves.toEqual({
+      currentPath: '/agent-workspace',
+      parentPath: null,
+      entries: [{ name: 'demo', path: '/agent-workspace/demo' }],
+    })
+    expect(fetcher).toHaveBeenCalledWith('/api/workspace-directories?path=%2Fagent-workspace', { method: 'GET' })
+  })
+
+  it('将本地文件夹打包为精确 multipart 字段', async () => {
+    const file = new File(['class App {}'], 'App.java', { type: 'text/plain' })
+    Object.defineProperty(file, 'webkitRelativePath', { value: 'demo/src/App.java' })
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const form = init?.body as FormData
+      expect(form.get('displayName')).toBe('Demo')
+      expect(form.get('repositoryId')).toBe('demo')
+      expect(form.get('archive')).toBeInstanceOf(Blob)
+      return response(WORKSPACE, 201)
+    })
+
+    await expect(importWorkspace({ displayName: 'Demo', repositoryId: 'demo', files: [file] }, fetcher)).resolves.toEqual(WORKSPACE)
+    expect(fetcher).toHaveBeenCalledWith('/api/workspace-imports', expect.objectContaining({ method: 'POST' }))
   })
 })
