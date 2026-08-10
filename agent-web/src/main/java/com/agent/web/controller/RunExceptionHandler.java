@@ -7,6 +7,7 @@ import com.agent.core.profile.AgentProfileNotFoundException;
 import com.agent.web.persistence.JdbcConversationRepository;
 import com.agent.web.conversation.ConversationService;
 import com.agent.web.workspace.WorkspaceAccessService;
+import com.agent.web.audit.AuditTextRedactor;
 import org.springframework.core.codec.DecodingException;
 import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
@@ -17,12 +18,33 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.ServerWebInputException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.net.URI;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.util.List;
 
 /** 将 Run API 异常映射为稳定的 ProblemDetail。 */
 @RestControllerAdvice
 public final class RunExceptionHandler {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(RunExceptionHandler.class);
+    private final AuditTextRedactor redactor;
+
+    /** 使用运行配置中的精确敏感值创建异常处理器，测试切片使用空配置脱敏器。 */
+    @Autowired
+    public RunExceptionHandler(ObjectProvider<AuditTextRedactor> redactorProvider) {
+        this(redactorProvider.getIfAvailable(() -> new AuditTextRedactor(List.of())));
+    }
+
+    /** 供直接单元测试注入脱敏器。 */
+    public RunExceptionHandler(AuditTextRedactor redactor) {
+        this.redactor = java.util.Objects.requireNonNull(redactor, "redactor 不能为空");
+    }
 
     /** 映射请求解码、类型转换与 Bean Validation 错误。 */
     @ExceptionHandler({
@@ -91,6 +113,12 @@ public final class RunExceptionHandler {
     public ResponseEntity<ProblemDetail> internalServerError(
             Exception exception,
             ServerWebExchange exchange) {
+        LOGGER.error(
+                "Unhandled request failure method={} path={} exceptionType={} stackTrace={}",
+                exchange.getRequest().getMethod(),
+                exchange.getRequest().getPath().value(),
+                exception.getClass().getName(),
+                redactor.redact(stackTrace(exception)));
         return problem(HttpStatus.INTERNAL_SERVER_ERROR, "内部服务器错误", exchange);
     }
 
@@ -108,5 +136,11 @@ public final class RunExceptionHandler {
     private static String detail(Exception exception) {
         String message = exception.getMessage();
         return message == null || message.isBlank() ? "请求格式错误" : message;
+    }
+
+    private static String stackTrace(Throwable throwable) {
+        StringWriter writer = new StringWriter();
+        throwable.printStackTrace(new PrintWriter(writer));
+        return writer.toString();
     }
 }

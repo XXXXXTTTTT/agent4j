@@ -4,6 +4,9 @@ import com.agent.core.conversation.ConversationContext;
 import com.agent.core.conversation.ConversationContextProvider;
 import com.agent.core.engine.AgentState;
 import com.agent.core.engine.RunCheckpoint;
+import com.agent.web.audit.ConversationAuditEvent;
+import com.agent.web.audit.ConversationAuditEventType;
+import com.agent.web.audit.ConversationAuditSink;
 import com.agent.web.identity.Actor;
 import com.agent.web.identity.ActorResolver;
 import com.agent.web.workspace.WorkspaceAccessService;
@@ -19,9 +22,13 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** 绑定用户和工作区的会话应用服务。 */
 public final class ConversationService {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(ConversationService.class);
 
     private static final int CONTEXT_MAX_TURNS = 20;
     private static final int CONTEXT_MAX_CHARACTERS = 32_000;
@@ -33,6 +40,7 @@ public final class ConversationService {
     private final ActorResolver actorResolver;
     private final ConversationRunStarter runStarter;
     private final ConversationRunProjector conversationProjector;
+    private final ConversationAuditSink auditSink;
     private final Clock clock;
 
     /** 创建会话应用服务。 */
@@ -43,7 +51,8 @@ public final class ConversationService {
             ActorResolver actorResolver,
             ConversationRunStarter runStarter,
             Clock clock) {
-        this(repository, workspaceAccess, contextProvider, actorResolver, runStarter, null, clock);
+        this(repository, workspaceAccess, contextProvider, actorResolver, runStarter,
+                null, ConversationAuditSink.noop(), clock);
     }
 
     /** 创建带终态对账能力的会话应用服务。 */
@@ -55,12 +64,27 @@ public final class ConversationService {
             ConversationRunStarter runStarter,
             ConversationRunProjector conversationProjector,
             Clock clock) {
+        this(repository, workspaceAccess, contextProvider, actorResolver, runStarter,
+                conversationProjector, ConversationAuditSink.noop(), clock);
+    }
+
+    /** 创建带终态对账和业务审计能力的会话应用服务。 */
+    public ConversationService(
+            ConversationRepository repository,
+            WorkspaceAccessService workspaceAccess,
+            ConversationContextProvider contextProvider,
+            ActorResolver actorResolver,
+            ConversationRunStarter runStarter,
+            ConversationRunProjector conversationProjector,
+            ConversationAuditSink auditSink,
+            Clock clock) {
         this.repository = Objects.requireNonNull(repository, "repository 不能为空");
         this.workspaceAccess = Objects.requireNonNull(workspaceAccess, "workspaceAccess 不能为空");
         this.contextProvider = Objects.requireNonNull(contextProvider, "contextProvider 不能为空");
         this.actorResolver = Objects.requireNonNull(actorResolver, "actorResolver 不能为空");
         this.runStarter = Objects.requireNonNull(runStarter, "runStarter 不能为空");
         this.conversationProjector = conversationProjector;
+        this.auditSink = Objects.requireNonNull(auditSink, "auditSink 不能为空");
         this.clock = Objects.requireNonNull(clock, "clock 不能为空");
     }
 
@@ -71,8 +95,14 @@ public final class ConversationService {
                 Objects.requireNonNull(workspaceId, "workspaceId 不能为空"),
                 actor.userId(),
                 WorkspacePermission.OPERATOR);
-        return repository.createConversation(
+        ConversationRecord created = repository.createConversation(
                 UUID.randomUUID(), workspace.workspaceId(), actor, "新建会话", clock.instant());
+        audit(new ConversationAuditEvent(
+                ConversationAuditEventType.CONVERSATION_CREATED,
+                clock.instant(), actor.userId(), workspace.workspaceId(),
+                created.conversationId(), null, null, null,
+                created.status().name(), null, null, null, null));
+        return created;
     }
 
     /** 查询当前用户可见的工作区会话。 */
@@ -130,6 +160,9 @@ public final class ConversationService {
                 CONTEXT_MAX_TURNS, CONTEXT_MAX_CHARACTERS);
         ConversationTurnRecord pending = repository.createPendingTurn(
                 conversation.conversationId(), actor.userId(), content, clock.instant());
+        audit(turnEvent(
+                ConversationAuditEventType.CONVERSATION_TURN_SUBMITTED,
+                actor.userId(), workspace.workspaceId(), pending, null, null));
         try {
             if (pending.turnIndex() == 1) {
                 repository.renameConversation(
@@ -144,19 +177,30 @@ public final class ConversationService {
                             "planner.userId", actor.userId(),
                             "coder.workspacePath", workspace.workspacePath().toString(),
                             "conversation.id", conversation.conversationId().toString(),
+                            "conversation.workspaceId", workspace.workspaceId().toString(),
                             "conversation.turnId", pending.turnId().toString()),
                     List.of());
             if (!exactReviewerUrl.isBlank()) {
                 state = state.withVariable("reviewer.url", exactReviewerUrl);
             }
             AtomicReference<ConversationTurnRecord> running = new AtomicReference<>();
-            runStarter.start(GRAPH_ID, state, checkpoint -> running.set(
-                    repository.markTurnRunning(
-                            pending.turnId(), checkpoint.runId(), clock.instant())));
+            runStarter.start(GRAPH_ID, state, checkpoint -> {
+                ConversationTurnRecord started = repository.markTurnRunning(
+                        pending.turnId(), checkpoint.runId(), clock.instant());
+                running.set(started);
+                audit(turnEvent(
+                        ConversationAuditEventType.CONVERSATION_TURN_STARTED,
+                        actor.userId(), workspace.workspaceId(), started, null, null));
+            });
             return Objects.requireNonNull(running.get(), "Run 启动前未绑定会话轮次");
         } catch (RuntimeException exception) {
+            String error = stackTrace(exception);
             try {
-                repository.markTurnFailed(pending.turnId(), stackTrace(exception), clock.instant());
+                ConversationTurnRecord failed = repository.markTurnFailed(
+                        pending.turnId(), error, clock.instant());
+                audit(turnEvent(
+                        ConversationAuditEventType.CONVERSATION_TURN_FAILED,
+                        actor.userId(), workspace.workspaceId(), failed, null, error));
             } catch (RuntimeException persistenceFailure) {
                 exception.addSuppressed(persistenceFailure);
             }
@@ -170,7 +214,52 @@ public final class ConversationService {
         ConversationRecord conversation = getConversation(conversationId);
         workspaceAccess.requireWorkspace(
                 conversation.workspaceId(), actor.userId(), WorkspacePermission.OPERATOR);
-        return repository.archiveConversation(conversationId, actor.userId(), clock.instant());
+        ConversationRecord archived = repository.archiveConversation(
+                conversationId, actor.userId(), clock.instant());
+        audit(new ConversationAuditEvent(
+                ConversationAuditEventType.CONVERSATION_ARCHIVED,
+                clock.instant(), actor.userId(), archived.workspaceId(),
+                archived.conversationId(), null, null, null,
+                archived.status().name(), null, null, null, null));
+        return archived;
+    }
+
+    private ConversationAuditEvent turnEvent(
+            ConversationAuditEventType eventType,
+            String userId,
+            UUID workspaceId,
+            ConversationTurnRecord turn,
+            String assistantContent,
+            String error) {
+        return new ConversationAuditEvent(
+                eventType,
+                clock.instant(),
+                userId,
+                workspaceId,
+                turn.conversationId(),
+                turn.turnId(),
+                turn.runId(),
+                turn.turnIndex(),
+                turn.status().name(),
+                turn.userContent(),
+                assistantContent,
+                error,
+                durationMillis(turn));
+    }
+
+    private long durationMillis(ConversationTurnRecord turn) {
+        return Math.max(0L, java.time.Duration.between(
+                turn.createdAt(), clock.instant()).toMillis());
+    }
+
+    private void audit(ConversationAuditEvent event) {
+        try {
+            auditSink.record(event);
+        } catch (RuntimeException exception) {
+            LOGGER.error(
+                    "Conversation audit write failed eventType={} conversationId={} turnId={} runId={}",
+                    event.eventType(), event.conversationId(), event.turnId(), event.runId(), exception);
+        }
     }
 
     private static String stackTrace(Throwable throwable) {

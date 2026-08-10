@@ -49,6 +49,15 @@ docker compose -f docker-compose.local.yml --env-file .env up -d --build
 docker compose -f docker-compose.local.yml --env-file .env down
 ```
 
+### 日志与会话审计
+
+Compose 将日志挂载到宿主机 `${AGENT_LOG_HOST_DIR:-./logs}`，所有显示时间固定为北京时间（`Asia/Shanghai`）：
+
+- `logs/agent4j-current.log`：应用、模型、节点、工具与异常运行日志，按天归档并保留 30 天。
+- `logs/audit/agent4j-audit-current.log`：JSON Lines 会话审计，记录会话创建/归档、轮次提交/启动/完成/失败，以及用户输入、Agent 最终回答、Run 标识和耗时；按天归档并保留 30 天。
+
+审计链路不读取 HTTP 请求头，并会对当前模型 API Key、数据库密码、OTLP Authorization，以及正文中的 `Bearer`、`sk-` 和敏感键值格式替换为 `[REDACTED]`。生产环境仍应限制 `logs/audit/` 的读取权限，并根据数据合规要求调整留存策略。
+
 ### 上线构建（严谨启动）
 
 上线模式使用根目录 `Dockerfile`，在构建容器中完成完整 Maven/前端打包，再启动最小运行镜像：

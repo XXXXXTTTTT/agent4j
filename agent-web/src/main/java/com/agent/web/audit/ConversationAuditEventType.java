@@ -1,0 +1,11 @@
+package com.agent.web.audit;
+
+/** 会话业务审计事件类型。 */
+public enum ConversationAuditEventType {
+    CONVERSATION_CREATED,
+    CONVERSATION_ARCHIVED,
+    CONVERSATION_TURN_SUBMITTED,
+    CONVERSATION_TURN_STARTED,
+    CONVERSATION_TURN_COMPLETED,
+    CONVERSATION_TURN_FAILED
+}

@@ -13,6 +13,9 @@ import com.agent.web.persistence.JdbcConversationRepository;
 import com.agent.web.conversation.ConversationRunProjector;
 import com.agent.web.conversation.ConversationService;
 import com.agent.web.conversation.JdbcConversationContextProvider;
+import com.agent.web.audit.ConversationAuditSink;
+import com.agent.web.audit.AuditTextRedactor;
+import com.agent.web.audit.Slf4jConversationAuditSink;
 import com.agent.web.identity.ActorResolver;
 import com.agent.web.identity.ConfiguredActorResolver;
 import com.agent.web.workspace.WorkspaceAccessService;
@@ -30,6 +33,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.core.env.Environment;
 
 import java.time.Clock;
 import java.util.ArrayList;
@@ -133,6 +137,7 @@ public class HarnessConfiguration {
             ActorResolver actorResolver,
             AgentRunService agentRunService,
             ConversationRunProjector conversationRunProjector,
+            ConversationAuditSink conversationAuditSink,
             Clock harnessClock) {
         return new ConversationService(
                 repository,
@@ -141,7 +146,25 @@ public class HarnessConfiguration {
                 actorResolver,
                 agentRunService::start,
                 conversationRunProjector,
+                conversationAuditSink,
                 harnessClock);
+    }
+
+    /** 创建覆盖运行配置和常见令牌格式的审计文本脱敏器。 */
+    @Bean
+    AuditTextRedactor auditTextRedactor(Environment environment) {
+        return new AuditTextRedactor(List.of(
+                environment.getProperty("agent.llm.api-key", ""),
+                environment.getProperty("spring.datasource.password", ""),
+                environment.getProperty("agent.observability.authorization", "")));
+    }
+
+    /** 创建写入 Logback JSON Lines 文件的会话业务审计端口。 */
+    @Bean
+    ConversationAuditSink conversationAuditSink(
+            ObjectMapper objectMapper,
+            AuditTextRedactor redactor) {
+        return new Slf4jConversationAuditSink(objectMapper, redactor);
     }
 
     /** 将 Run 终态投影回会话轮次。 */
@@ -150,8 +173,10 @@ public class HarnessConfiguration {
     ConversationRunProjector conversationRunProjector(
             JdbcConversationRepository repository,
             Checkpointer checkpointer,
+            ConversationAuditSink conversationAuditSink,
             Clock harnessClock) {
-        return new ConversationRunProjector(repository, checkpointer, harnessClock);
+        return new ConversationRunProjector(
+                repository, checkpointer, conversationAuditSink, harnessClock);
     }
 
     /** 使用精确 Bean 名到 GraphFactory 的映射创建图注册表。 */

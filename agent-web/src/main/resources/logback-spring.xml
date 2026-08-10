@@ -3,9 +3,9 @@
     <springProperty scope="context" name="agentLogDir"
                     source="agent.logging.directory" defaultValue="logs"/>
     <property name="CONSOLE_PATTERN"
-              value="%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] [runId=%X{runId:-} traceId=%X{traceId:-} nodeName=%X{nodeName:-} modelName=%X{modelName:-}] %logger{36} - %msg%n"/>
+              value="%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX, Asia/Shanghai} %-5level [%thread] [runId=%X{runId:-} traceId=%X{traceId:-} nodeName=%X{nodeName:-} modelName=%X{modelName:-}] %logger{36} - %msg%n"/>
     <property name="FILE_PATTERN"
-              value="%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] [runId=%X{runId:-} traceId=%X{traceId:-} nodeName=%X{nodeName:-} modelName=%X{modelName:-}] %logger{48} - %msg%n"/>
+              value="%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX, Asia/Shanghai} %-5level [%thread] [runId=%X{runId:-} traceId=%X{traceId:-} nodeName=%X{nodeName:-} modelName=%X{modelName:-}] %logger{48} - %msg%n"/>
 
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
@@ -17,7 +17,7 @@
     <appender name="ROLLING_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${agentLogDir}/agent4j-current.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>${agentLogDir}/agent4j-%d{yyyy-MM-dd}.log</fileNamePattern>
+            <fileNamePattern>${agentLogDir}/agent4j-%d{yyyy-MM-dd, Asia/Shanghai}.log</fileNamePattern>
             <maxHistory>30</maxHistory>
             <totalSizeCap>2GB</totalSizeCap>
         </rollingPolicy>
@@ -26,6 +26,25 @@
             <charset>UTF-8</charset>
         </encoder>
     </appender>
+
+    <appender name="AUDIT_ROLLING_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${agentLogDir}/audit/agent4j-audit-current.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${agentLogDir}/audit/agent4j-audit-%d{yyyy-MM-dd, Asia/Shanghai}.log</fileNamePattern>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>2GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <logger name="com.agent.audit.conversation" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ROLLING_FILE"/>
+        <appender-ref ref="AUDIT_ROLLING_FILE"/>
+    </logger>
 
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>

@@ -8,6 +8,7 @@ services:
     env_file:
       - .env
     environment:
+      TZ: Asia/Shanghai
       POSTGRES_DB: ${POSTGRES_DB:-agent}
       POSTGRES_USER: ${POSTGRES_USER:-agent}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent123456}
@@ -46,6 +47,7 @@ services:
     env_file:
       - .env
     environment:
+      TZ: Asia/Shanghai
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-agent}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-agent}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-agent123456}
