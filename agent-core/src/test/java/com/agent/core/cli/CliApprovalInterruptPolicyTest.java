@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.ArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -96,6 +97,28 @@ class CliApprovalInterruptPolicyTest {
                 .isInstanceOf(CliWorkspaceViolationException.class);
     }
 
+    @Test
+    void resolvesTerminalTargetFromTheExactWorkspaceStateKey() throws Exception {
+        Path workspaceA = Files.createDirectory(workspace.resolve("project-a"));
+        List<Path> resolved = new ArrayList<>();
+        WorkspaceTerminalTargetResolver resolver = path -> {
+            resolved.add(path);
+            return new PtyTarget(workspace.resolve("bash.exe"), path);
+        };
+        CliApprovalInterruptPolicy policy = new CliApprovalInterruptPolicy(
+                catalog("test.read", CliRiskLevel.READ_ONLY),
+                resolver,
+                Duration.ofSeconds(30),
+                objectMapper);
+
+        CliAuthorization authorization = policy.authorizeForExecution(
+                stateAt(workspaceA, "test.read", List.of("value.txt")), true);
+
+        assertThat(resolved).containsExactly(workspaceA.toRealPath());
+        assertThat(authorization.plan().request().target())
+                .isEqualTo(new PtyTarget(workspace.resolve("bash.exe"), workspaceA.toRealPath()));
+    }
+
     private CliApprovalInterruptPolicy policy(CliRiskLevel riskLevel) {
         String name = riskLevel == CliRiskLevel.MUTATING ? "test.write" : "test.read";
         return new CliApprovalInterruptPolicy(
@@ -112,9 +135,13 @@ class CliApprovalInterruptPolicyTest {
     }
 
     private AgentState state(String name, List<String> arguments) {
+        return stateAt(workspace, name, arguments);
+    }
+
+    private AgentState stateAt(Path workspacePath, String name, List<String> arguments) {
         try {
             return AgentState.empty()
-                    .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString())
+                    .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspacePath.toString())
                     .withVariable(OpsNode.COMMAND_NAME_KEY, name)
                     .withVariable(OpsNode.COMMAND_ARGUMENTS_KEY,
                             objectMapper.writeValueAsString(arguments))

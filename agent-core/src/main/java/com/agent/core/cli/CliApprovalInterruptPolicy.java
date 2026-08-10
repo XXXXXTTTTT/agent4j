@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.nio.charset.StandardCharsets;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -30,7 +31,7 @@ public final class CliApprovalInterruptPolicy implements InterruptPolicy {
     private static final String OPS_NODE = "ops";
 
     private final CliCommandCatalog catalog;
-    private final TerminalTarget target;
+    private final WorkspaceTerminalTargetResolver targetResolver;
     private final Duration timeout;
     private final ObjectMapper objectMapper;
 
@@ -40,8 +41,19 @@ public final class CliApprovalInterruptPolicy implements InterruptPolicy {
             TerminalTarget target,
             Duration timeout,
             ObjectMapper objectMapper) {
+        this(catalog, ignored -> Objects.requireNonNull(target, "target 不能为空"),
+                timeout, objectMapper);
+    }
+
+    /** 创建按每轮真实工作区解析终端目标的审批策略。 */
+    public CliApprovalInterruptPolicy(
+            CliCommandCatalog catalog,
+            WorkspaceTerminalTargetResolver targetResolver,
+            Duration timeout,
+            ObjectMapper objectMapper) {
         this.catalog = Objects.requireNonNull(catalog, "catalog 不能为空");
-        this.target = Objects.requireNonNull(target, "target 不能为空");
+        this.targetResolver = Objects.requireNonNull(
+                targetResolver, "targetResolver 不能为空");
         this.timeout = Objects.requireNonNull(timeout, "timeout 不能为空");
         if (timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("timeout 必须大于 0");
@@ -87,13 +99,30 @@ public final class CliApprovalInterruptPolicy implements InterruptPolicy {
         String name = requireVariable(state, OpsNode.COMMAND_NAME_KEY);
         List<String> arguments = parseArguments(
                 name, requireVariable(state, OpsNode.COMMAND_ARGUMENTS_KEY));
-        Path workspace = Path.of(requireVariable(state, CoderNode.WORKSPACE_PATH_KEY));
+        Path workspace = realWorkspace(
+                Path.of(requireVariable(state, CoderNode.WORKSPACE_PATH_KEY)));
         Set<RequiredCapability> capabilities = parseCapabilities(
                 state.variables().get(PlannerNode.REQUIRED_CAPABILITIES_KEY));
         return new ParsedIntent(
-                new CliCommandIntent(name, arguments, workspace, target, timeout),
+                new CliCommandIntent(
+                        name,
+                        arguments,
+                        workspace,
+                        Objects.requireNonNull(
+                                targetResolver.resolve(workspace),
+                                "targetResolver 返回值不能为空"),
+                        timeout),
                 capabilities,
                 objectMapper.valueToTree(arguments).toString());
+    }
+
+    private Path realWorkspace(Path workspace) {
+        try {
+            return workspace.toRealPath();
+        } catch (IOException exception) {
+            throw new CliWorkspaceViolationException(
+                    workspace, null, "workspaceRoot 必须是现有目录", exception);
+        }
     }
 
     private List<String> parseArguments(String commandName, String json) {
