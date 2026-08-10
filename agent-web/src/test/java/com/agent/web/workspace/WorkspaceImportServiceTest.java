@@ -2,9 +2,13 @@ package com.agent.web.workspace;
 
 import com.agent.web.config.WorkspaceImportProperties;
 import com.agent.web.identity.Actor;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
+import org.slf4j.LoggerFactory;
 
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -122,6 +126,31 @@ class WorkspaceImportServiceTest {
                 () -> service(access).importArchive(ACTOR, "demo", "repo", archive));
         Path imports = root.resolve(".agent4j/imports");
         assertTrue(Files.notExists(imports) || Files.list(imports).findAny().isEmpty());
+    }
+
+    @Test
+    void writesWorkspaceAuditTimeUsingChinaStandardTime() throws Exception {
+        Path archive = archive("file.txt", "x");
+        WorkspaceRepository repository = Mockito.mock(WorkspaceRepository.class);
+        WorkspaceAccessService access = access(repository);
+        when(repository.createWorkspace(any(), eq(ACTOR), eq("demo"), any(), eq("repo"), any()))
+                .thenAnswer(invocation -> record(invocation.getArgument(0), invocation.getArgument(3)));
+        Logger logger = (Logger) LoggerFactory.getLogger("com.agent.audit.workspace");
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            new WorkspaceImportService(access, root,
+                    new WorkspaceImportProperties(1024, 1024, 10),
+                    Clock.fixed(NOW, ZoneOffset.UTC))
+                    .importArchive(ACTOR, "demo", "repo", archive);
+
+            assertTrue(appender.list.getLast().getFormattedMessage()
+                    .contains("time=2026-08-10T08:00+08:00"));
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     private WorkspaceImportService service(WorkspaceAccessService access) {

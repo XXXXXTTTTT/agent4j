@@ -142,9 +142,10 @@ public class HarnessConfiguration {
     WorkspaceImportService workspaceImportService(
             WorkspaceAccessService workspaceAccessService,
             ProductionAgentProperties productionProperties,
-            WorkspaceImportProperties importProperties) {
+            WorkspaceImportProperties importProperties,
+            Clock harnessClock) {
         return new WorkspaceImportService(
-                workspaceAccessService, productionProperties.workspace(), importProperties);
+                workspaceAccessService, productionProperties.workspace(), importProperties, harnessClock);
     }
 
     /** 绑定当前会话的 Run 启动服务。 */

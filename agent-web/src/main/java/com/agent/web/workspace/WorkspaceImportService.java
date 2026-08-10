@@ -16,6 +16,9 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Instant;
+import java.time.Clock;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
@@ -29,18 +32,29 @@ public final class WorkspaceImportService {
 
     private static final Logger AUDIT = LoggerFactory.getLogger("com.agent.audit.workspace");
     private static final int BUFFER_SIZE = 8192;
+    private static final ZoneId BEIJING_ZONE = ZoneId.of("Asia/Shanghai");
 
     private final WorkspaceAccessService workspaceAccess;
     private final Path configuredRoot;
     private final WorkspaceImportProperties properties;
+    private final Clock clock;
 
     public WorkspaceImportService(
             WorkspaceAccessService workspaceAccess,
             Path configuredRoot,
             WorkspaceImportProperties properties) {
+        this(workspaceAccess, configuredRoot, properties, Clock.systemUTC());
+    }
+
+    public WorkspaceImportService(
+            WorkspaceAccessService workspaceAccess,
+            Path configuredRoot,
+            WorkspaceImportProperties properties,
+            Clock clock) {
         this.workspaceAccess = Objects.requireNonNull(workspaceAccess, "workspaceAccess 不能为空");
         this.configuredRoot = realDirectory(configuredRoot);
         this.properties = Objects.requireNonNull(properties, "properties 不能为空");
+        this.clock = Objects.requireNonNull(clock, "clock 不能为空");
     }
 
     /** 在受控目录创建单次上传暂存文件。 */
@@ -152,7 +166,7 @@ public final class WorkspaceImportService {
             WorkspaceRecord result = workspaceAccess.create(
                     actor, workspaceId, displayName, finalDirectory.toString(), repositoryId);
             AUDIT.info("WORKSPACE_IMPORT_COMPLETED user={} workspace={} files={} archiveBytes={} extractedBytes={} status=COMPLETED time={}",
-                    actor.userId(), workspaceId, files, archiveBytes, extractedBytes, Instant.now());
+                    actor.userId(), workspaceId, files, archiveBytes, extractedBytes, beijingNow());
             return result;
         } catch (RuntimeException | IOException exception) {
             deleteTree(stagingDirectory);
@@ -160,12 +174,16 @@ public final class WorkspaceImportService {
                 deleteTree(finalDirectory);
             }
             AUDIT.warn("WORKSPACE_IMPORT_FAILED user={} workspace={} files={} extractedBytes={} status={} errorType={} time={}",
-                    actor.userId(), workspaceId, files, extractedBytes, exception.getClass().getSimpleName(), exception.getClass().getName(), Instant.now());
+                    actor.userId(), workspaceId, files, extractedBytes, exception.getClass().getSimpleName(), exception.getClass().getName(), beijingNow());
             if (exception instanceof RuntimeException runtime) {
                 throw runtime;
             }
             throw new ImportFormatException("读取 ZIP 文件失败", exception);
         }
+    }
+
+    private OffsetDateTime beijingNow() {
+        return OffsetDateTime.ofInstant(clock.instant(), BEIJING_ZONE);
     }
 
     private static Path normalizeEntry(String entryName) {
