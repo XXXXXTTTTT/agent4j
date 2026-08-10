@@ -25,6 +25,7 @@
         <module>agent-sandbox</module>
         <module>agent-web</module>
         <module>agent-eval</module>
+        <module>agent-cli</module>
     </modules>
 
     <properties>
