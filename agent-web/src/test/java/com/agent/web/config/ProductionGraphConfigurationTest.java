@@ -7,10 +7,12 @@ import com.agent.core.llm.ModelRouter;
 import com.agent.core.memory.MemoryContextProvider;
 import com.agent.core.nodes.PlannerNode;
 import com.agent.core.trace.RunLogPublisher;
+import com.agent.core.cli.WorkspaceTerminalTargetResolver;
 import com.agent.sandbox.ast.AstService;
 import com.agent.sandbox.ast.WorkspaceSnapshotService;
 import com.agent.sandbox.browser.BrowserAutomation;
 import com.agent.sandbox.pty.DockerTarget;
+import com.agent.sandbox.pty.PtyTarget;
 import com.agent.sandbox.pty.SandboxTerminalService;
 import com.agent.sandbox.pty.TerminalTarget;
 import org.eclipse.jgit.api.Git;
@@ -104,5 +106,103 @@ class ProductionGraphConfigurationTest {
                 .withVariable(PlannerNode.ROUTE_KEY, "unexpected")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("unexpected");
+    }
+
+    @Test
+    void resolvesPtyTargetFromEachRealWorkspaceDirectory() throws Exception {
+        Path bash = Files.createFile(workspace.resolve("bash.exe"));
+        Path first = Files.createDirectories(workspace.resolve("first"));
+        Path second = Files.createDirectories(workspace.resolve("second"));
+        ProductionAgentProperties properties = new ProductionAgentProperties(
+                true,
+                workspace,
+                "repo",
+                "user",
+                "",
+                "PTY",
+                bash.toString(),
+                "python:3.12-slim",
+                "/workspace",
+                "",
+                "",
+                Duration.ofSeconds(30),
+                Duration.ofSeconds(15),
+                50,
+                32_000,
+                2,
+                12,
+                1_800_000,
+                120_000,
+                200_000,
+                3,
+                12_000);
+
+        WorkspaceTerminalTargetResolver resolver =
+                new ProductionGraphConfiguration().workspaceTargetResolver(properties);
+
+        assertThat(resolver.resolve(first))
+                .isEqualTo(new PtyTarget(bash, first.toRealPath()));
+        assertThat(resolver.resolve(second))
+                .isEqualTo(new PtyTarget(bash, second.toRealPath()));
+    }
+
+    @Test
+    void resolvesDockerHostTargetFromChildWorkspaceAndRejectsEscape() throws Exception {
+        Path child = Files.createDirectories(workspace.resolve("modules").resolve("app"));
+        ProductionAgentProperties properties = properties("DOCKER", "", "");
+        WorkspaceTerminalTargetResolver resolver =
+                new ProductionGraphConfiguration().workspaceTargetResolver(properties);
+
+        assertThat(resolver.resolve(child)).isEqualTo(new DockerTarget(
+                properties.dockerImage(),
+                child.toRealPath(),
+                properties.containerWorkspace()));
+        Path outside = Files.createDirectories(workspace.getParent().resolve("outside-agent4j"));
+        assertThatThrownBy(() -> resolver.resolve(outside))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void resolvesDockerContainerTargetWithExactRelativeWorkspacePath() throws Exception {
+        Path child = Files.createDirectories(workspace.resolve("modules").resolve("app"));
+        ProductionAgentProperties properties = properties(
+                "DOCKER", "agent4j-web-local", "/agent-workspace");
+        WorkspaceTerminalTargetResolver resolver =
+                new ProductionGraphConfiguration().workspaceTargetResolver(properties);
+
+        DockerTarget target = (DockerTarget) resolver.resolve(child);
+        assertThat(target.hostWorkspace()).isEqualTo(workspace.toRealPath());
+        assertThat(target.workspaceSource()).isEqualTo(
+                new DockerTarget.ContainerWorkspaceSource(
+                        "agent4j-web-local", "/agent-workspace", "modules/app"));
+    }
+
+    private ProductionAgentProperties properties(
+            String mode,
+            String sourceContainer,
+            String sourcePath) {
+        return new ProductionAgentProperties(
+                true,
+                workspace,
+                "repo",
+                "user",
+                "",
+                mode,
+                workspace.resolve("bash.exe").toString(),
+                "python:3.12-slim",
+                "/workspace",
+                sourceContainer,
+                sourcePath,
+                Duration.ofSeconds(30),
+                Duration.ofSeconds(15),
+                50,
+                32_000,
+                2,
+                12,
+                1_800_000,
+                120_000,
+                200_000,
+                3,
+                12_000);
     }
 }

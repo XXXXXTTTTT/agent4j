@@ -8,6 +8,7 @@ import com.agent.core.cli.CliApprovalInterruptPolicy;
 import com.agent.core.cli.CliCommandCatalog;
 import com.agent.core.cli.CliCommandDefinition;
 import com.agent.core.cli.CliRiskLevel;
+import com.agent.core.cli.WorkspaceTerminalTargetResolver;
 import com.agent.core.intent.RequiredCapability;
 import com.agent.core.intent.TaskKind;
 import com.agent.core.llm.ModelRouter;
@@ -59,6 +60,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
@@ -199,7 +201,7 @@ public class ProductionGraphConfiguration {
             ObjectMapper objectMapper) {
         return new CliApprovalInterruptPolicy(
                 catalog,
-                terminalTarget(properties),
+                workspaceTargetResolver(properties),
                 properties.commandTimeout(),
                 objectMapper);
     }
@@ -292,7 +294,6 @@ public class ProductionGraphConfiguration {
         Objects.requireNonNull(toolRegistry, "toolRegistry 不能为空");
         Objects.requireNonNull(approvalPolicy, "approvalPolicy 不能为空");
         Objects.requireNonNull(browserSessions, "browserSessions 不能为空");
-        TerminalTarget target = terminalTarget(properties);
         return () -> createGraph(
                 properties,
                 modelRouter,
@@ -306,7 +307,6 @@ public class ProductionGraphConfiguration {
                 objectMapper,
                 harness,
                 securityViolationSink,
-                target,
                 knowledgeProperties.maxTokens(),
                 toolRegistry,
                 approvalPolicy,
@@ -449,7 +449,6 @@ public class ProductionGraphConfiguration {
             ObjectMapper objectMapper,
             HarnessHookChain harness,
             SecurityViolationSink securityViolationSink,
-            TerminalTarget target,
             int knowledgeMaxTokens,
             ToolRegistry toolRegistry,
             CliApprovalInterruptPolicy approvalPolicy,
@@ -532,7 +531,7 @@ public class ProductionGraphConfiguration {
             ObjectMapper objectMapper) {
         return new CliApprovalInterruptPolicy(
                 productionCliCommandCatalog(),
-                terminalTarget(properties),
+                workspaceTargetResolver(properties),
                 properties.commandTimeout(),
                 objectMapper);
     }
@@ -604,5 +603,59 @@ public class ProductionGraphConfiguration {
             default -> throw new IllegalArgumentException(
                     "executionMode 必须精确为 DOCKER 或 PTY");
         };
+    }
+
+    /** 按当前轮次的真实工作区目录解析 PTY 或 Docker 执行目标。 */
+    WorkspaceTerminalTargetResolver workspaceTargetResolver(
+            ProductionAgentProperties properties) {
+        Objects.requireNonNull(properties, "properties 不能为空");
+        return workspacePath -> {
+            Path root = realPath(properties.workspace(), "配置工作区");
+            Path workspace = realPath(workspacePath, "当前工作区");
+            if (!workspace.startsWith(root)) {
+                throw new IllegalArgumentException(
+                        "当前工作区必须位于配置工作区内: " + workspace);
+            }
+            return switch (properties.executionMode()) {
+                case "PTY" -> new PtyTarget(
+                        Path.of(properties.bashExecutable()), workspace);
+                case "DOCKER" -> dockerWorkspaceTarget(
+                        properties, root, workspace);
+                default -> throw new IllegalArgumentException(
+                        "executionMode 必须精确为 DOCKER 或 PTY");
+            };
+        };
+    }
+
+    private DockerTarget dockerWorkspaceTarget(
+            ProductionAgentProperties properties,
+            Path root,
+            Path workspace) {
+        if (properties.workspaceSourceContainer().isBlank()) {
+            return new DockerTarget(
+                    properties.dockerImage(),
+                    workspace,
+                    properties.containerWorkspace());
+        }
+        String relativePath = root.relativize(workspace)
+                .toString()
+                .replace('\\', '/');
+        return new DockerTarget(
+                properties.dockerImage(),
+                root,
+                properties.containerWorkspace(),
+                new DockerTarget.ContainerWorkspaceSource(
+                        properties.workspaceSourceContainer(),
+                        properties.workspaceSourcePath(),
+                        relativePath));
+    }
+
+    private Path realPath(Path path, String label) {
+        Objects.requireNonNull(path, label + " 不能为空");
+        try {
+            return path.toRealPath();
+        } catch (IOException exception) {
+            throw new IllegalArgumentException(label + " 必须是现有目录: " + path, exception);
+        }
     }
 }
