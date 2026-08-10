@@ -1,6 +1,9 @@
 $ErrorActionPreference = "Stop"
 
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..\")).Path
+$repoRoot = (& git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
+if ([string]::IsNullOrWhiteSpace($repoRoot)) {
+    throw "无法定位 Git 仓库根目录"
+}
 $envFile = Join-Path $repoRoot ".env"
 $fixture = Join-Path $PSScriptRoot "square-root-fix"
 $evidence = Join-Path $PSScriptRoot "evidence"
