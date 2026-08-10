@@ -153,19 +153,22 @@ public final class ReviewerNode implements Node {
                     List.of(),
                     null,
                     null);
-            RoutedCompletion completion = modelRouter.complete(TaskType.VISION, request);
+            TaskType reviewTaskType = imageUrl == null ? TaskType.CODE : TaskType.VISION;
+            RoutedCompletion completion = modelRouter.complete(reviewTaskType, request);
             NodeExecutionContext.progress("审查模型已返回质量判断");
             ReviewerDecision decision = parseDecision(completion);
             ChatMessage message = completion.response().choices().getFirst().message();
             if (!(message.content() instanceof ChatMessage.TextContent textContent)) {
                 throw new IllegalStateException("审查模型响应 content 必须是 TextContent");
             }
+            String finalResponse = buildFinalResponse(evidenceState.variables(), decision);
             return evidenceState
                     .withVariable(RESPONSE_KEY, textContent.text())
                     .withVariable(APPROVED_KEY, Boolean.toString(decision.approved()))
                     .withVariable(SUMMARY_KEY, decision.summary())
                     .withVariable(FEEDBACK_KEY, decision.feedback())
                     .withVariable(MODEL_KEY, completion.model())
+                    .withVariable(PlannerNode.FINAL_RESPONSE_KEY, finalResponse)
                     .withTraceEntry("reviewer");
         } catch (HarnessHookException exception) {
             throw exception;
@@ -252,6 +255,33 @@ public final class ReviewerNode implements Node {
         appendIfPresent(evidence, variables, OpsNode.ERROR_KEY);
         appendIfPresent(evidence, variables, CoderNode.ERROR_KEY);
         return evidence.toString();
+    }
+
+    private String buildFinalResponse(
+            Map<String, String> variables,
+            ReviewerDecision decision) {
+        StringBuilder response = new StringBuilder(decision.approved()
+                ? "代码任务已完成并通过审查。"
+                : "代码任务已执行，但审查未通过。");
+        appendFinalSection(response, "修改文件", variables.get(CoderNode.UPDATED_FILES_KEY));
+        appendFinalSection(response, "修改内容", variables.get(CoderNode.SUMMARY_KEY));
+        appendFinalSection(response, "验证命令", variables.get(OpsNode.COMMAND_KEY));
+        String exitCode = variables.get(OpsNode.EXIT_CODE_KEY);
+        if (exitCode != null && !exitCode.isBlank()) {
+            response.append("\n\n退出码：").append(exitCode);
+        }
+        appendFinalSection(response, "审查结论", decision.summary());
+        appendFinalSection(response, "审查反馈", decision.feedback());
+        return response.toString();
+    }
+
+    private void appendFinalSection(
+            StringBuilder response,
+            String title,
+            String value) {
+        if (value != null && !value.isBlank()) {
+            response.append("\n\n").append(title).append("：\n").append(value);
+        }
     }
 
     private void appendIfPresent(

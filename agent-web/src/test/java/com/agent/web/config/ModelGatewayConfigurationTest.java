@@ -16,6 +16,30 @@ import static org.mockito.Mockito.mock;
 class ModelGatewayConfigurationTest {
 
     @Test
+    void resolvesConfiguredV1PathOnlyOnceWhenBaseUrlAlreadyContainsV1() {
+        ModelGatewayConfiguration.ResolvedEndpoint endpoint =
+                ModelGatewayConfiguration.resolveEndpoint(
+                        "https://zz.cxwms.com/v1", "/v1/chat/completions");
+
+        assertThat(endpoint.transportBaseUrl()).isEqualTo("https://zz.cxwms.com");
+        assertThat(endpoint.requestPath()).isEqualTo("/v1/chat/completions");
+        assertThat(endpoint.requestUrl()).isEqualTo(
+                "https://zz.cxwms.com/v1/chat/completions");
+    }
+
+    @Test
+    void preservesConfiguredPathWhenBaseUrlHasNoPath() {
+        ModelGatewayConfiguration.ResolvedEndpoint endpoint =
+                ModelGatewayConfiguration.resolveEndpoint(
+                        "https://api.example.com", "/v1/chat/completions");
+
+        assertThat(endpoint.transportBaseUrl()).isEqualTo("https://api.example.com");
+        assertThat(endpoint.requestPath()).isEqualTo("/v1/chat/completions");
+        assertThat(endpoint.requestUrl()).isEqualTo(
+                "https://api.example.com/v1/chat/completions");
+    }
+
+    @Test
     void createsExplicitContractsForEachTaskRoute() {
         ModelGatewayProperties properties = new ModelGatewayProperties(
                 true,

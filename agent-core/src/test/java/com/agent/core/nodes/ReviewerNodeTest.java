@@ -179,6 +179,8 @@ class ReviewerNodeTest {
                 .withVariable(OpsNode.STDOUT_KEY, "after")
                 .withVariable(OpsNode.STDERR_KEY, "")
                 .withVariable(OpsNode.TIMED_OUT_KEY, "false")
+                .withVariable(CoderNode.SUMMARY_KEY, "将标签改为平方根并保留两位小数")
+                .withVariable(CoderNode.UPDATED_FILES_KEY, "src/main/java/demo/NumberLabel.java")
                 .withVariable(CoderNode.UNIFIED_DIFF_KEY, "diff --git a/value.txt b/value.txt")
                 .withVariable(OpsNode.COMMAND_KEY, "cat value.txt"));
 
@@ -190,7 +192,57 @@ class ReviewerNodeTest {
                         "{\"approved\":true,\"summary\":\"代码测试通过\",\"feedback\":\"无需修改\"}")
                 .containsKey(ReviewerNode.REQUEST_KEY)
                 .doesNotContainKey(ReviewerNode.ERROR_KEY);
+        assertThat(result.variables().get(PlannerNode.FINAL_RESPONSE_KEY))
+                .contains(
+                        "src/main/java/demo/NumberLabel.java",
+                        "将标签改为平方根并保留两位小数",
+                        "cat value.txt",
+                        "退出码：0",
+                        "代码测试通过",
+                        "无需修改");
         assertThat(result.trace()).containsExactly("reviewer");
+    }
+
+    @Test
+    void routesCodeOnlyEvidenceToCodeModel() throws Exception {
+        RestClient.Builder builder = RestClient.builder().baseUrl(BASE_URL);
+        server = MockRestServiceServer.bindTo(builder).build();
+        client = new LlmClient(builder.build(), objectMapper, CHAT_COMPLETIONS_PATH);
+        ModelEndpoint codeEndpoint = new ModelEndpoint(
+                "code-review-endpoint",
+                "code-review-model",
+                client,
+                CircuitBreaker.ofDefaults("reviewer-code-route"));
+        ModelEndpoint visionEndpoint = new ModelEndpoint(
+                "vision-review-endpoint",
+                "vision-model",
+                client,
+                CircuitBreaker.ofDefaults("reviewer-vision-route"));
+        ModelRouter router = new ModelRouter(Map.of(
+                TaskType.CODE, List.of(codeEndpoint),
+                TaskType.VISION, List.of(visionEndpoint),
+                TaskType.QUICK_CLASSIFICATION, List.of(codeEndpoint)));
+        ReviewerNode node = new ReviewerNode(
+                browser, router, objectMapper, BROWSER_TIMEOUT);
+        server.expect(once(), requestTo(BASE_URL + CHAT_COMPLETIONS_PATH))
+                .andExpect(content().string(containsString(
+                        "\"model\":\"code-review-model\"")))
+                .andRespond(withSuccess(
+                        responseJson(textContent(
+                                "{\"approved\":true,\"summary\":\"代码测试通过\",\"feedback\":\"无需修改\"}")),
+                        MediaType.APPLICATION_JSON));
+
+        AgentState result = node.execute(AgentState.empty()
+                .withVariable(OpsNode.EXIT_CODE_KEY, "0")
+                .withVariable(OpsNode.STDOUT_KEY, "tests passed")
+                .withVariable(OpsNode.STDERR_KEY, "")
+                .withVariable(OpsNode.TIMED_OUT_KEY, "false")
+                .withVariable(CoderNode.UNIFIED_DIFF_KEY, "diff --git a/value.txt b/value.txt"));
+
+        assertThat(result.variables())
+                .containsEntry(ReviewerNode.MODEL_KEY, "code-review-model")
+                .containsEntry(ReviewerNode.APPROVED_KEY, "true")
+                .doesNotContainKey(ReviewerNode.ERROR_KEY);
     }
 
     @Test

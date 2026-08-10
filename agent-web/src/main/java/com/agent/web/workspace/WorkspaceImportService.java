@@ -2,6 +2,9 @@ package com.agent.web.workspace;
 
 import com.agent.web.config.WorkspaceImportProperties;
 import com.agent.web.identity.Actor;
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.errors.RepositoryNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -163,6 +166,7 @@ public final class WorkspaceImportService {
             Files.createDirectories(importRoot);
             moveAtomically(stagingDirectory, finalDirectory);
             published = true;
+            ensureGitWorkTree(finalDirectory);
             WorkspaceRecord result = workspaceAccess.create(
                     actor, workspaceId, displayName, finalDirectory.toString(), repositoryId);
             AUDIT.info("WORKSPACE_IMPORT_COMPLETED user={} workspace={} files={} archiveBytes={} extractedBytes={} status=COMPLETED time={}",
@@ -184,6 +188,18 @@ public final class WorkspaceImportService {
 
     private OffsetDateTime beijingNow() {
         return OffsetDateTime.ofInstant(clock.instant(), BEIJING_ZONE);
+    }
+
+    private static void ensureGitWorkTree(Path directory) throws IOException {
+        try (Git ignored = Git.open(directory.toFile())) {
+            return;
+        } catch (RepositoryNotFoundException exception) {
+            try (Git ignored = Git.init().setDirectory(directory.toFile()).call()) {
+                // 导入项目没有版本库时建立工作区基线，供快照和增量补丁使用。
+            } catch (GitAPIException gitException) {
+                throw new IOException("初始化导入工作区 Git 仓库失败", gitException);
+            }
+        }
     }
 
     private static Path normalizeEntry(String entryName) {

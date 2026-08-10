@@ -22,9 +22,14 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** 使用 JavaParser 提取 Java 21 源码结构。 */
 public final class AstService {
+
+    private static final Pattern HUNK_HEADER = Pattern.compile(
+            "^@@ -(\\d+)(?:,(\\d+))? \\+(\\d+)(?:,(\\d+))? @@(.*)$");
 
     private final JavaParser parser;
 
@@ -100,7 +105,8 @@ public final class AstService {
                     throw new AstServiceException("路径不是 Git 工作树根目录: " + root);
                 }
 
-                byte[] patchBytes = unifiedDiff.getBytes(StandardCharsets.UTF_8);
+                String normalizedDiff = normalizePatchFormat(unifiedDiff, root);
+                byte[] patchBytes = normalizedDiff.getBytes(StandardCharsets.UTF_8);
                 validatePatch(root, patchBytes);
                 Path indexPath = git.getRepository().getIndexFile().toPath();
                 byte[] originalIndex = Files.exists(indexPath)
@@ -139,6 +145,212 @@ public final class AstService {
         } catch (IOException exception) {
             throw new AstServiceException("恢复 Git index 失败: " + indexPath, exception);
         }
+    }
+
+    private String normalizePatchFormat(String patch, Path root) {
+        if (!patch.stripLeading().startsWith("*** Begin Patch")) {
+            return normalizeUnifiedDiffHunkCounts(patch);
+        }
+        String[] lines = patch.replace("\r\n", "\n").split("\n", -1);
+        StringBuilder result = new StringBuilder();
+        int index = 0;
+        while (index < lines.length) {
+            String line = lines[index];
+            validateApplyPatchDirective(line);
+            if (!line.startsWith("*** Update File: ")) {
+                index++;
+                continue;
+            }
+            String rawPath = line.substring("*** Update File: ".length()).trim();
+            Path file = resolvePatchFile(root, rawPath);
+            try {
+                String original = Files.readString(file, StandardCharsets.UTF_8);
+                int contentStart = index + 1;
+                int contentEnd = contentStart;
+                while (contentEnd < lines.length
+                        && !lines[contentEnd].startsWith("*** ")) {
+                    contentEnd++;
+                }
+                String updated = applyPatchHunks(original,
+                        java.util.Arrays.copyOfRange(lines, contentStart, contentEnd));
+                appendFullFileDiff(result, rawPath, original, updated);
+                index = contentEnd;
+            } catch (IOException exception) {
+                throw new AstServiceException("读取补丁目标文件失败: " + rawPath, exception);
+            }
+        }
+        if (result.isEmpty()) {
+            throw new AstServiceException("Apply Patch 未包含可应用的 Update File");
+        }
+        return result.toString();
+    }
+
+    private void validateApplyPatchDirective(String line) {
+        if (!line.startsWith("*** ")) {
+            return;
+        }
+        if (line.equals("*** Begin Patch")
+                || line.equals("*** End Patch")
+                || line.startsWith("*** Update File: ")) {
+            return;
+        }
+        throw new AstServiceException("Apply Patch 指令不支持: " + line);
+    }
+
+    private String normalizeUnifiedDiffHunkCounts(String patch) {
+        String[] lines = patch.replace("\r\n", "\n").split("\n", -1);
+        for (int index = 0; index < lines.length; index++) {
+            Matcher header = HUNK_HEADER.matcher(lines[index]);
+            if (!header.matches()) {
+                continue;
+            }
+            int oldLines = 0;
+            int newLines = 0;
+            boolean validBody = true;
+            for (int bodyIndex = index + 1; bodyIndex < lines.length; bodyIndex++) {
+                String bodyLine = lines[bodyIndex];
+                if (HUNK_HEADER.matcher(bodyLine).matches()
+                        || bodyLine.startsWith("diff --git ")) {
+                    break;
+                }
+                if (bodyIndex == lines.length - 1 && bodyLine.isEmpty()) {
+                    break;
+                }
+                if (bodyLine.equals("\\ No newline at end of file")) {
+                    continue;
+                }
+                if (bodyLine.startsWith(" ")) {
+                    oldLines++;
+                    newLines++;
+                } else if (bodyLine.startsWith("-")) {
+                    oldLines++;
+                } else if (bodyLine.startsWith("+")) {
+                    newLines++;
+                } else {
+                    validBody = false;
+                    break;
+                }
+            }
+            if (!validBody) {
+                continue;
+            }
+            int declaredOldLines = header.group(2) == null
+                    ? 1 : Integer.parseInt(header.group(2));
+            int declaredNewLines = header.group(4) == null
+                    ? 1 : Integer.parseInt(header.group(4));
+            if (declaredOldLines != oldLines || declaredNewLines != newLines) {
+                lines[index] = "@@ -" + header.group(1) + "," + oldLines
+                        + " +" + header.group(3) + "," + newLines
+                        + " @@" + header.group(5);
+            }
+        }
+        return String.join("\n", lines);
+    }
+
+    private Path resolvePatchFile(Path root, String rawPath) {
+        try {
+            Path relative = Path.of(rawPath);
+            if (relative.isAbsolute()) {
+                throw new AstServiceException("补丁路径越过 Git 工作树: " + rawPath);
+            }
+            Path resolved = root.resolve(relative).normalize();
+            ensureInsideWorkTree(root, resolved, rawPath);
+            if (!Files.isRegularFile(resolved)) {
+                throw new AstServiceException("补丁目标文件不存在: " + rawPath);
+            }
+            return resolved;
+        } catch (InvalidPathException exception) {
+            throw new AstServiceException("补丁路径无效: " + rawPath, exception);
+        }
+    }
+
+    private String applyPatchHunks(String original, String[] lines) {
+        String current = original;
+        List<String> oldLines = new ArrayList<>();
+        List<String> newLines = new ArrayList<>();
+        boolean inHunk = false;
+        for (String line : lines) {
+            if (line.startsWith("@@")) {
+                if (inHunk) {
+                    current = replaceHunk(current, oldLines, newLines);
+                    oldLines.clear();
+                    newLines.clear();
+                }
+                inHunk = true;
+                continue;
+            }
+            if (!inHunk || line.equals("\\ No newline at end of file")) {
+                continue;
+            }
+            if (line.startsWith(" ")) {
+                String content = line.substring(1);
+                oldLines.add(content);
+                newLines.add(content);
+            } else if (line.startsWith("-")) {
+                oldLines.add(line.substring(1));
+            } else if (line.startsWith("+")) {
+                newLines.add(line.substring(1));
+            } else {
+                throw new AstServiceException("Apply Patch 行格式无效: " + line);
+            }
+        }
+        if (inHunk) {
+            current = replaceHunk(current, oldLines, newLines);
+        }
+        return current;
+    }
+
+    private String replaceHunk(
+            String source,
+            List<String> oldLines,
+            List<String> newLines) {
+        if (oldLines.isEmpty()) {
+            throw new AstServiceException("Apply Patch 不支持无上下文的新文件补丁");
+        }
+        boolean crlf = source.contains("\r\n");
+        String normalizedSource = source.replace("\r\n", "\n");
+        String oldText = String.join("\n", oldLines);
+        String newText = String.join("\n", newLines);
+        int offset = normalizedSource.indexOf(oldText);
+        if (offset < 0) {
+            throw new AstServiceException("Apply Patch 上下文与工作区文件不匹配");
+        }
+        if (normalizedSource.indexOf(oldText, offset + oldText.length()) >= 0) {
+            throw new AstServiceException("Apply Patch 上下文不唯一");
+        }
+        String replaced = normalizedSource.substring(0, offset)
+                + newText
+                + normalizedSource.substring(offset + oldText.length());
+        return crlf ? replaced.replace("\n", "\r\n") : replaced;
+    }
+
+    private void appendFullFileDiff(
+            StringBuilder result,
+            String rawPath,
+            String original,
+            String updated) {
+        if (original.equals(updated)) {
+            throw new AstServiceException("Apply Patch 未产生文件变更: " + rawPath);
+        }
+        List<String> oldLines = diffLines(original);
+        List<String> newLines = diffLines(updated);
+        result.append("diff --git a/").append(rawPath).append(" b/").append(rawPath).append('\n')
+                .append("--- a/").append(rawPath).append('\n')
+                .append("+++ b/").append(rawPath).append('\n')
+                .append("@@ -1,").append(oldLines.size())
+                .append(" +1,").append(newLines.size()).append(" @@\n");
+        oldLines.forEach(line -> result.append('-').append(line).append('\n'));
+        newLines.forEach(line -> result.append('+').append(line).append('\n'));
+    }
+
+    private List<String> diffLines(String content) {
+        if (content.isEmpty()) {
+            return List.of();
+        }
+        String withoutTrailingLineFeed = content.endsWith("\n")
+                ? content.substring(0, content.length() - 1)
+                : content;
+        return List.of(withoutTrailingLineFeed.split("\n", -1));
     }
 
     private void validatePatch(Path root, byte[] patchBytes) throws IOException {

@@ -5,6 +5,7 @@ import com.agent.web.identity.Actor;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
@@ -44,7 +45,11 @@ class WorkspaceImportServiceTest {
         WorkspaceRecord imported = service(access).importArchive(ACTOR, "demo", "repo", archive);
 
         assertEquals("demo", imported.displayName());
-        assertTrue(Files.exists(root.resolve(".agent4j/imports").resolve(imported.workspaceId().toString()).resolve("src/Main.java")));
+        Path importedRoot = root.resolve(".agent4j/imports").resolve(imported.workspaceId().toString());
+        assertTrue(Files.exists(importedRoot.resolve("src/Main.java")));
+        try (Git ignored = Git.open(importedRoot.toFile())) {
+            assertEquals(importedRoot.toRealPath(), ignored.getRepository().getWorkTree().toPath().toRealPath());
+        }
     }
 
     @Test

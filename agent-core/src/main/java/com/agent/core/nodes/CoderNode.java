@@ -1,5 +1,7 @@
 package com.agent.core.nodes;
 
+import com.agent.core.cli.CliCommandCatalog;
+import com.agent.core.cli.CliCommandDefinition;
 import com.agent.core.engine.AgentState;
 import com.agent.core.engine.Node;
 import com.agent.core.engine.NodeExecutionContext;
@@ -24,6 +26,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectReader;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -60,6 +63,7 @@ public final class CoderNode implements Node {
     private final ObjectMapper objectMapper;
     private final ToolRegistry toolRegistry;
     private final HarnessToolExecutor harnessToolExecutor;
+    private final CliCommandCatalog commandCatalog;
 
     /**
      * 创建代码修改节点。
@@ -74,6 +78,7 @@ public final class CoderNode implements Node {
         this.objectMapper = null;
         this.toolRegistry = null;
         this.harnessToolExecutor = null;
+        this.commandCatalog = null;
     }
 
     /** 创建执行模型生成、快照、Diff 应用和命令提取的生产 Coder 节点。 */
@@ -89,6 +94,7 @@ public final class CoderNode implements Node {
                 snapshotService, "snapshotService 不能为空");
         this.toolRegistry = null;
         this.harnessToolExecutor = null;
+        this.commandCatalog = null;
         this.changeReader = objectMapper.readerFor(CodeChange.class)
                 .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                 .with(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
@@ -102,6 +108,17 @@ public final class CoderNode implements Node {
             ObjectMapper objectMapper,
             WorkspaceSnapshotService snapshotService,
             ToolRegistry toolRegistry) {
+        this(astService, modelRouter, objectMapper, snapshotService, toolRegistry, null);
+    }
+
+    /** 创建通过受治理工具应用 Diff，并向模型公开精确 CLI 目录的生产 Coder 节点。 */
+    public CoderNode(
+            AstService astService,
+            ModelRouter modelRouter,
+            ObjectMapper objectMapper,
+            WorkspaceSnapshotService snapshotService,
+            ToolRegistry toolRegistry,
+            CliCommandCatalog commandCatalog) {
         this.astService = Objects.requireNonNull(astService, "astService 不能为空");
         this.modelRouter = Objects.requireNonNull(modelRouter, "modelRouter 不能为空");
         Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
@@ -109,6 +126,7 @@ public final class CoderNode implements Node {
                 snapshotService, "snapshotService 不能为空");
         this.toolRegistry = Objects.requireNonNull(toolRegistry, "toolRegistry 不能为空");
         this.harnessToolExecutor = new HarnessToolExecutor(toolRegistry);
+        this.commandCatalog = commandCatalog;
         this.objectMapper = objectMapper;
         this.changeReader = objectMapper.readerFor(CodeChange.class)
                 .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
@@ -158,7 +176,7 @@ public final class CoderNode implements Node {
             output = output.withVariable(REQUEST_KEY, requestText);
             ModelRequest request = new ModelRequest(
                     List.of(
-                            ChatMessage.system("你是代码修改节点。只返回 JSON 对象，字段严格为 summary、unifiedDiff、commandName、commandArguments。unifiedDiff 必须是可应用的 Unified Diff；commandName 必须是已注册 CLI 命令名；commandArguments 必须是 JSON 字符串数组。禁止返回裸 Bash command 字段。"),
+                            ChatMessage.system(systemPrompt()),
                             ChatMessage.user(requestText)),
                     List.of(),
                     null,
@@ -170,7 +188,12 @@ public final class CoderNode implements Node {
                 throw new IllegalStateException("代码模型响应 content 必须是 TextContent");
             }
             String responseText = textContent.text();
-            CodeChange change = changeReader.readValue(responseText);
+            JsonNode responseNode = objectMapper.readTree(responseText);
+            if (!(responseNode instanceof ObjectNode responseObject)) {
+                throw new IllegalArgumentException("代码模型响应必须是 JSON 对象");
+            }
+            CodeChange change = changeReader.readValue(
+                    normalizeCommandArguments(objectMapper, responseObject).toString());
             String commandArguments = objectMapper.writeValueAsString(
                     change.commandArguments());
             output = output
@@ -273,10 +296,47 @@ public final class CoderNode implements Node {
                 .withTraceEntry("coder");
     }
 
+    static ObjectNode normalizeCommandArguments(
+            ObjectMapper objectMapper,
+            ObjectNode response) throws java.io.IOException {
+        Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
+        ObjectNode normalized = Objects.requireNonNull(
+                response, "response 不能为空").deepCopy();
+        JsonNode commandArguments = normalized.get("commandArguments");
+        if (commandArguments == null || !commandArguments.isTextual()) {
+            return normalized;
+        }
+        JsonNode decoded = objectMapper.readTree(commandArguments.textValue());
+        if (decoded == null || !decoded.isArray()) {
+            throw new IllegalArgumentException(
+                    "代码变更 commandArguments 字符串内容必须是 JSON 数组");
+        }
+        normalized.set("commandArguments", decoded);
+        return normalized;
+    }
+
     private Path workspace(AgentState state) {
         return Path.of(requireVariable(state, WORKSPACE_PATH_KEY))
                 .toAbsolutePath()
                 .normalize();
+    }
+
+    private String systemPrompt() {
+        StringBuilder prompt = new StringBuilder()
+                .append("你是代码修改节点。只返回 JSON 对象，字段严格为 summary、unifiedDiff、commandName、commandArguments。")
+                .append("unifiedDiff 必须是可应用的 Unified Diff；commandArguments 必须是 JSON 数组，不能把数组再次编码成字符串。")
+                .append("禁止返回裸 Bash command 字段。");
+        if (commandCatalog == null) {
+            return prompt.append("commandName 必须是已注册 CLI 命令名。").toString();
+        }
+        prompt.append("commandName 必须精确等于下列目录中的 name；fixedArguments 由系统预置，commandArguments 只填写追加参数。")
+                .append("\n允许的 CLI 命令目录：");
+        for (CliCommandDefinition definition : commandCatalog.list()) {
+            prompt.append("\n- name=").append(definition.name())
+                    .append(", executable=").append(definition.executable())
+                    .append(", fixedArguments=").append(definition.fixedArguments());
+        }
+        return prompt.toString();
     }
 
     private String buildRequest(

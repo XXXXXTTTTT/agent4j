@@ -179,12 +179,37 @@ for ($attempt = 1; $attempt -le 120; $attempt++) {
 $final = Get-Content -Raw (Join-Path $evidence "turn-final.json") | ConvertFrom-Json
 if ($final.status -ne "COMPLETED") { throw "真实 Agent 轮次未完成: $($final.status)" }
 if ([string]::IsNullOrWhiteSpace($final.assistantContent)) { throw "final_response 为空" }
+foreach ($requiredResponseText in @(
+        "src/main/java/demo/NumberLabel.java",
+        "mvn",
+        "退出码：0")) {
+    if (-not $final.assistantContent.Contains($requiredResponseText)) {
+        throw "最终回答缺少事实证据: $requiredResponseText"
+    }
+}
 
 if ($null -ne $final.runId) {
     $run = Invoke-Json GET "/api/runs/$($final.runId)" $null
     $run | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath (Join-Path $evidence "run-final.json")
+    if ($run.status -ne "COMPLETED") { throw "Run 未完成: $($run.status)" }
+    $variables = $run.state.variables
+    if ($variables.'ops.exitCode' -ne "0") {
+        throw "Ops 退出码不是 0: $($variables.'ops.exitCode')"
+    }
+    if ($variables.'ops.timedOut' -ne "false") { throw "Ops 不应超时" }
+    if ($variables.'reviewer.approved' -ne "true") { throw "Reviewer 未批准" }
+    if (-not $variables.'coder.updatedFiles'.Contains("src/main/java/demo/NumberLabel.java")) {
+        throw "Run 状态缺少 NumberLabel.java 修改记录"
+    }
     curl.exe --silent --show-error --max-time 15 "http://localhost:8080/api/runs/$($final.runId)/events" | Set-Content -LiteralPath (Join-Path $evidence "trace-sse.txt")
     curl.exe --silent --show-error --max-time 15 "http://localhost:8080/api/runs/$($final.runId)/logs" | Set-Content -LiteralPath (Join-Path $evidence "terminal-sse.txt")
+    $trace = Get-Content -Raw (Join-Path $evidence "trace-sse.txt")
+    foreach ($nodeName in @("planner", "coder", "ops", "reviewer")) {
+        if (-not $trace.Contains($nodeName)) { throw "Trace SSE 缺少节点: $nodeName" }
+    }
+    $terminal = Get-Content -Raw (Join-Path $evidence "terminal-sse.txt")
+    if (-not $terminal.Contains("BUILD SUCCESS")) { throw "终端 SSE 缺少 BUILD SUCCESS" }
+    if (-not $terminal.Contains("Failures: 0")) { throw "终端 SSE 缺少测试通过结果" }
 }
 
 $importedFixture = Join-Path $repoRoot ".agent4j\imports\$workspaceId"
@@ -194,6 +219,20 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Agent 修复后的 Maven 测试失败" }
 } finally {
     Pop-Location
+}
+
+$auditLogPath = Join-Path $repoRoot "logs\agent4j-current.log"
+if (-not (Test-Path -LiteralPath $auditLogPath)) { throw "审计日志不存在: $auditLogPath" }
+$auditLog = Get-Content -Raw -LiteralPath $auditLogPath
+foreach ($auditFact in @(
+        "WORKSPACE_IMPORT_COMPLETED",
+        "CONVERSATION_TURN_SUBMITTED",
+        "CONVERSATION_TURN_STARTED",
+        "CONVERSATION_TURN_COMPLETED",
+        $workspaceId,
+        $turnId,
+        $final.runId)) {
+    if (-not $auditLog.Contains($auditFact)) { throw "审计日志缺少事实: $auditFact" }
 }
 
 Write-Output "workspaceId=$workspaceId"

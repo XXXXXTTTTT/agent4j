@@ -144,7 +144,7 @@ class ProductionCodeAgentIntegrationTest {
                     .containsEntry(OpsNode.AUTHORIZATION_REASON_KEY, "只读命令自动允许")
                     .containsEntry(OpsNode.EXIT_CODE_KEY, "0")
                     .containsEntry(OpsNode.STDOUT_KEY, "after\n")
-                    .containsEntry(ReviewerNode.MODEL_KEY, "vision-model")
+                    .containsEntry(ReviewerNode.MODEL_KEY, "code-model")
                     .containsEntry(ReviewerNode.APPROVED_KEY, "true")
                     .containsKeys(
                             PlannerNode.REQUEST_KEY,

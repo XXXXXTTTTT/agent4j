@@ -190,6 +190,12 @@ public class ProductionGraphConfiguration {
                         "mvn",
                         List.of("test"),
                         CliRiskLevel.READ_ONLY,
+                        Set.of(RequiredCapability.TERMINAL)),
+                new CliCommandDefinition(
+                        "mvn",
+                        "mvn",
+                        List.of(),
+                        CliRiskLevel.READ_ONLY,
                         Set.of(RequiredCapability.TERMINAL))));
     }
 
@@ -275,6 +281,7 @@ public class ProductionGraphConfiguration {
             HarnessHookChain harness,
             SecurityViolationSink securityViolationSink,
             ToolRegistry toolRegistry,
+            CliCommandCatalog commandCatalog,
             CliApprovalInterruptPolicy approvalPolicy,
             BrowserSessionRegistry browserSessions) {
         Objects.requireNonNull(properties, "properties 不能为空");
@@ -292,6 +299,7 @@ public class ProductionGraphConfiguration {
         Objects.requireNonNull(harness, "harness 不能为空");
         Objects.requireNonNull(securityViolationSink, "securityViolationSink 不能为空");
         Objects.requireNonNull(toolRegistry, "toolRegistry 不能为空");
+        Objects.requireNonNull(commandCatalog, "commandCatalog 不能为空");
         Objects.requireNonNull(approvalPolicy, "approvalPolicy 不能为空");
         Objects.requireNonNull(browserSessions, "browserSessions 不能为空");
         return () -> createGraph(
@@ -309,6 +317,7 @@ public class ProductionGraphConfiguration {
                 securityViolationSink,
                 knowledgeProperties.maxTokens(),
                 toolRegistry,
+                commandCatalog,
                 approvalPolicy,
                 browserSessions);
     }
@@ -341,6 +350,7 @@ public class ProductionGraphConfiguration {
             HarnessHookChain harness) {
         BrowserSessionRegistry browserSessions =
                 new BrowserSessionRegistry(PlaywrightBrowserService::new);
+        CliCommandCatalog commandCatalog = productionCliCommandCatalog();
         return codeAgentGraph(
                 properties,
                 new KnowledgeProperties(true, 4_000),
@@ -360,7 +370,8 @@ public class ProductionGraphConfiguration {
                         objectMapper,
                         browserSessions,
                         properties.browserTimeout()),
-                standaloneApprovalPolicy(properties, objectMapper),
+                commandCatalog,
+                standaloneApprovalPolicy(properties, objectMapper, commandCatalog),
                 browserSessions);
     }
 
@@ -451,6 +462,7 @@ public class ProductionGraphConfiguration {
             SecurityViolationSink securityViolationSink,
             int knowledgeMaxTokens,
             ToolRegistry toolRegistry,
+            CliCommandCatalog commandCatalog,
             CliApprovalInterruptPolicy approvalPolicy,
             BrowserSessionRegistry browserSessions) {
         var promptCatalog = PlannerPromptTemplates.catalog();
@@ -471,7 +483,8 @@ public class ProductionGraphConfiguration {
                 new DefaultPromptInjectionDetector(),
                 securityViolationSink);
         CoderNode coder = new CoderNode(
-                astService, modelRouter, objectMapper, snapshotService, toolRegistry);
+                astService, modelRouter, objectMapper, snapshotService, toolRegistry,
+                commandCatalog);
         OpsNode ops = new OpsNode(terminalService, approvalPolicy, logPublisher);
         ReviewerNode reviewer = new ReviewerNode(
                 browserAutomation, modelRouter, objectMapper, properties.browserTimeout());
@@ -528,9 +541,10 @@ public class ProductionGraphConfiguration {
 
     private CliApprovalInterruptPolicy standaloneApprovalPolicy(
             ProductionAgentProperties properties,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            CliCommandCatalog commandCatalog) {
         return new CliApprovalInterruptPolicy(
-                productionCliCommandCatalog(),
+                commandCatalog,
                 workspaceTargetResolver(properties),
                 properties.commandTimeout(),
                 objectMapper);
@@ -642,7 +656,7 @@ public class ProductionGraphConfiguration {
                 .replace('\\', '/');
         return new DockerTarget(
                 properties.dockerImage(),
-                root,
+                workspace,
                 properties.containerWorkspace(),
                 new DockerTarget.ContainerWorkspaceSource(
                         properties.workspaceSourceContainer(),

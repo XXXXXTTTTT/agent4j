@@ -109,6 +109,15 @@ class ProductionGraphConfigurationTest {
     }
 
     @Test
+    void exposesNaturalMavenCommandNameToCodeModel() {
+        var catalog = new ProductionGraphConfiguration().productionCliCommandCatalog();
+
+        var maven = catalog.find("mvn").orElseThrow();
+        assertThat(maven.executable()).isEqualTo("mvn");
+        assertThat(maven.fixedArguments()).isEmpty();
+    }
+
+    @Test
     void resolvesPtyTargetFromEachRealWorkspaceDirectory() throws Exception {
         Path bash = Files.createFile(workspace.resolve("bash.exe"));
         Path first = Files.createDirectories(workspace.resolve("first"));
@@ -171,7 +180,7 @@ class ProductionGraphConfigurationTest {
                 new ProductionGraphConfiguration().workspaceTargetResolver(properties);
 
         DockerTarget target = (DockerTarget) resolver.resolve(child);
-        assertThat(target.hostWorkspace()).isEqualTo(workspace.toRealPath());
+        assertThat(target.hostWorkspace()).isEqualTo(child.toRealPath());
         assertThat(target.workspaceSource()).isEqualTo(
                 new DockerTarget.ContainerWorkspaceSource(
                         "agent4j-web-local", "/agent-workspace", "modules/app"));

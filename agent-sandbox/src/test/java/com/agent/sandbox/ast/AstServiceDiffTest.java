@@ -40,6 +40,20 @@ class AstServiceDiffTest {
              }
             """;
 
+    private static final String APPLY_PATCH_FORMAT = """
+            *** Begin Patch
+            *** Update File: src/main/java/example/Sample.java
+            @@
+             package example;
+             public class Sample {
+                 int value() {
+            -        return 1;
+            +        return 2;
+                 }
+             }
+            *** End Patch
+            """;
+
     @TempDir
     Path temporaryDirectory;
 
@@ -56,6 +70,95 @@ class AstServiceDiffTest {
         assertThat(updatedFiles).containsExactly(sourceFile.toRealPath());
         assertThatThrownBy(() -> updatedFiles.add(sourceFile))
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void acceptsModelApplyPatchFormatForExistingFile() throws Exception {
+        Path repositoryRoot = initializeRepository("apply-patch-format");
+        Path sourceFile = writeSource(repositoryRoot);
+
+        new AstService().applyDiff(repositoryRoot, APPLY_PATCH_FORMAT);
+
+        assertThat(Files.readString(sourceFile, StandardCharsets.UTF_8))
+                .contains("return 2;")
+                .doesNotContain("return 1;");
+    }
+
+    @Test
+    void repairsModelUnifiedDiffHunkLineCounts() throws Exception {
+        Path repositoryRoot = initializeRepository("malformed-hunk-counts");
+        Path sourceFile = writeSource(repositoryRoot);
+        String malformedCounts = VALID_DIFF.replace("@@ -1,6 +1,6 @@", "@@ -1,5 +1,5 @@");
+
+        new AstService().applyDiff(repositoryRoot, malformedCounts);
+
+        assertThat(Files.readString(sourceFile, StandardCharsets.UTF_8))
+                .contains("return 2;")
+                .doesNotContain("return 1;");
+    }
+
+    @Test
+    void rejectsAmbiguousApplyPatchContextAndPreservesFile() throws Exception {
+        Path repositoryRoot = initializeRepository("ambiguous-apply-patch");
+        Path sourceFile = repositoryRoot.resolve("src/main/java/example/Sample.java");
+        Files.createDirectories(sourceFile.getParent());
+        String source = """
+                package example;
+                public class Sample {
+                    int first() {
+                        return 1;
+                    }
+                    int second() {
+                        return 1;
+                    }
+                }
+                """;
+        Files.writeString(sourceFile, source, StandardCharsets.UTF_8);
+        String ambiguousPatch = """
+                *** Begin Patch
+                *** Update File: src/main/java/example/Sample.java
+                @@
+                -        return 1;
+                +        return 2;
+                *** End Patch
+                """;
+
+        assertThatThrownBy(() -> new AstService().applyDiff(repositoryRoot, ambiguousPatch))
+                .isInstanceOf(AstServiceException.class)
+                .hasMessageContaining("不唯一");
+        assertThat(Files.readString(sourceFile, StandardCharsets.UTF_8)).isEqualTo(source);
+    }
+
+    @Test
+    void rejectsUnsupportedApplyPatchDirectiveBeforeChangingFiles() throws Exception {
+        Path repositoryRoot = initializeRepository("unsupported-apply-patch-directive");
+        Path sourceFile = writeSource(repositoryRoot);
+        String mixedPatch = APPLY_PATCH_FORMAT.replace(
+                "*** End Patch",
+                "*** Add File: extra.txt\n+extra\n*** End Patch");
+
+        assertThatThrownBy(() -> new AstService().applyDiff(repositoryRoot, mixedPatch))
+                .isInstanceOf(AstServiceException.class)
+                .hasMessageContaining("不支持");
+        assertThat(Files.readString(sourceFile, StandardCharsets.UTF_8)).isEqualTo(SOURCE);
+        assertThat(repositoryRoot.resolve("extra.txt")).doesNotExist();
+    }
+
+    @Test
+    void appliesModelPatchToCrLfFile() throws Exception {
+        Path repositoryRoot = initializeRepository("crlf-apply-patch");
+        Path sourceFile = repositoryRoot.resolve("src/main/java/example/Sample.java");
+        Files.createDirectories(sourceFile.getParent());
+        String crLfSource = SOURCE.replace("\n", "\r\n");
+        Files.writeString(sourceFile, crLfSource, StandardCharsets.UTF_8);
+
+        new AstService().applyDiff(repositoryRoot, APPLY_PATCH_FORMAT);
+
+        String updated = Files.readString(sourceFile, StandardCharsets.UTF_8);
+        assertThat(updated)
+                .contains("return 2;")
+                .doesNotContain("return 1;")
+                .contains("\r\n");
     }
 
     @Test

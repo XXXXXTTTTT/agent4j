@@ -2691,3 +2691,41 @@ TTFT、总耗时、chunk 数、消费者累计背压和单次最大背压。`Mod
 写入 `agent-eval/target/edd/inference-framework-chapter-26.json`，固定 `mode=deterministic`、
 `modelCallAttempts=0`，且核心模块未引入具体推理服务器 SDK。教程仓库当前导航把同一主题显示为第 25 章，
 本项目沿用已提交的第 26 章矩阵编号，不修改历史里程碑编号。
+
+## 本轮补充：真实外部项目导入与 Code Agent 闭环
+
+### 【问题现象】单元测试通过，但无法证明用户导入的项目真的能被 Agent 修改并验证
+
+固定测试工作区只能证明节点之间的接口契约，不能覆盖 ZIP 上传、Windows/Docker 工作区映射、真实模型
+返回的补丁协议、CLI 命令目录和最终回答投影。此前生产集成测试还保留了 `reviewer.model=vision-model`
+的旧断言，导致纯代码 Reviewer 路由已修复后全量构建仍失败。
+
+### 【根因分析】验收边界与生产边界不一致，测试契约没有随路由语义更新
+
+外部项目导入增加了文件系统、Git、容器和模型网关四个边界；任一边界只做 mock 都无法发现真实路径或
+命令参数问题。Reviewer 是否使用视觉模型取决于是否存在截图证据，纯代码证据必须精确路由到 `CODE`；
+集成测试若继续断言旧模型名，就会把正确的生产行为判为失败。
+
+### 【解决方案/代码级实现】真实 ZIP EDD + 证据驱动的最小契约修复
+
+`.agent4j/acceptance/run-real-agent.ps1` 先让 `square-root-fix` 夹具的 Maven 测试真实失败，再通过
+`POST /api/workspace-imports` 导入 ZIP，创建持久化会话并提交“修复代码并运行 Maven”轮次。脚本校验
+`Run/Turn=COMPLETED`、`coder.updatedFiles`、`ops.exitCode=0`、`reviewer.approved=true`、四节点 Trace、
+终端 `BUILD SUCCESS`/`Failures: 0`、修复后 Maven 结果和带 Workspace/Conversation/Turn/Run ID 的审计日志。
+SSE 是持续连接，验收客户端使用有界读取并校验已收到的事件内容；达到客户端读取上限时的 curl 超时不等价
+于 Agent 失败，Run 状态和事件正文仍以 PostgreSQL/日志为权威证据。
+
+2026-08-10 使用 `.env` 中启用的真实 OpenAI 兼容网关完成一次外部项目闭环：
+
+- `workspaceId=383de3e9-60c0-4906-826e-b5393db75067`，`conversationId=8ef27686-da2e-4eb4-b24d-af3b1254581f`；
+- `turnId=39b3a067-68be-44a9-91be-ad4ae937313d`，`runId=d3f6d5e6-0051-4dde-9e7f-759a62d19f37`，状态均为 `COMPLETED`；
+- 真实模型返回 `gpt-5.4-mini`，`NumberLabel.label` 改为平方根并格式化两位小数；
+- 导入项目 Maven `Tests run: 1, Failures: 0`，Trace SSE 约 `218262` 字节，终端 SSE 约 `100400` 字节；
+- `logs/agent4j-current.log` 以 `+08:00`（北京时间）记录用户内容、节点、模型、HTTP 200、Token 和耗时，
+  并包含 `WORKSPACE_IMPORT_COMPLETED`、轮次提交/启动/完成等审计事件。
+
+### 【证据】
+
+`ProductionCodeAgentIntegrationTest.executesPlannerCoderOpsReviewerWithCompleteModelEvidence` 已与
+纯代码 Reviewer 的 `code-model` 契约一致；全量 `mvn clean verify` 汇总 759 项测试，失败和错误均为 `0`。
+真实证据保存在 `.agent4j/acceptance/evidence/`（该目录按 `.gitignore` 排除），不提交 API Key、日志或导入项目。

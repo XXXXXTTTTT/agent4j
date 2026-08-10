@@ -1,6 +1,10 @@
 package com.agent.core.nodes;
 
+import com.agent.core.cli.CliCommandCatalog;
+import com.agent.core.cli.CliCommandDefinition;
+import com.agent.core.cli.CliRiskLevel;
 import com.agent.core.engine.AgentState;
+import com.agent.core.intent.RequiredCapability;
 import com.agent.core.llm.LlmClient;
 import com.agent.core.llm.ModelEndpoint;
 import com.agent.core.llm.ModelRouter;
@@ -9,6 +13,7 @@ import com.agent.core.tool.DefaultToolRegistry;
 import com.agent.sandbox.ast.AstService;
 import com.agent.sandbox.ast.WorkspaceSnapshotService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +26,8 @@ import org.springframework.web.client.RestClient;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -41,6 +48,19 @@ class CoderNodeTest {
         try (Git ignored = Git.init().setDirectory(workspace.toFile()).call()) {
             // 测试只需要真实 Git 工作树，不创建提交。
         }
+    }
+
+    @Test
+    void normalizesSerializedCommandArgumentsToJsonArray() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("commandArguments", "[\"test\"]");
+
+        ObjectNode normalized = CoderNode.normalizeCommandArguments(objectMapper, response);
+
+        assertThat(normalized.path("commandArguments").isArray()).isTrue();
+        assertThat(normalized.path("commandArguments").get(0).asText())
+                .isEqualTo("test");
     }
 
     @Test
@@ -123,6 +143,8 @@ class CoderNodeTest {
                 TaskType.QUICK_CLASSIFICATION, java.util.List.of(endpoint)));
         server.expect(once(), requestTo("https://coder.test/v1/chat/completions"))
                 .andExpect(content().string(containsString("value.txt")))
+                .andExpect(content().string(containsString(
+                        "name=mvn, executable=mvn, fixedArguments=[]")))
                 .andRespond(withSuccess(coderResponse(objectMapper), MediaType.APPLICATION_JSON));
 
         try (client) {
@@ -134,7 +156,13 @@ class CoderNodeTest {
                         router,
                         objectMapper,
                         new WorkspaceSnapshotService(10, 4096),
-                        registry);
+                        registry,
+                        new CliCommandCatalog(List.of(new CliCommandDefinition(
+                                "mvn",
+                                "mvn",
+                                List.of(),
+                                CliRiskLevel.READ_ONLY,
+                                Set.of(RequiredCapability.TERMINAL)))));
             AgentState result = node.execute(AgentState.empty()
                     .withVariable(PlannerNode.TASK_KEY, "把 value.txt 改成 after")
                     .withVariable(PlannerNode.PLAN_KEY, "修改 value.txt 并运行测试")

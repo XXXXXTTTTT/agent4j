@@ -136,6 +136,22 @@ class DockerCommandExecutorTest {
     }
 
     @Test
+    void resolvesWorkspaceBindSourceUsingDockerHostPathSyntax() {
+        DockerTarget.ContainerWorkspaceSource source =
+                new DockerTarget.ContainerWorkspaceSource(
+                        "agent4j-web-local",
+                        "/agent-workspace",
+                        ".agent4j/imports/workspace-id");
+
+        assertThat(DockerCommandExecutor.resolveWorkspaceBindSource(
+                "D:\\agent4j", source))
+                .isEqualTo("D:\\agent4j\\.agent4j\\imports\\workspace-id");
+        assertThat(DockerCommandExecutor.resolveWorkspaceBindSource(
+                "/srv/agent4j", source))
+                .isEqualTo("/srv/agent4j/.agent4j/imports/workspace-id");
+    }
+
+    @Test
     void rejectsMissingDuplicateReadOnlyAndNamedVolumeSources() {
         DockerTarget.ContainerWorkspaceSource source =
                 new DockerTarget.ContainerWorkspaceSource(

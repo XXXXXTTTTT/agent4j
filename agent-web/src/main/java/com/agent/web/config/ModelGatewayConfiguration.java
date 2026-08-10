@@ -28,6 +28,8 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.net.URI;
+import java.net.URISyntaxException;
 
 /** 将环境配置适配为 Core 使用的构造器注入模型路由。 */
 @Configuration(proxyBeanMethods = false)
@@ -55,8 +57,10 @@ public class ModelGatewayConfiguration {
             ObjectMapper objectMapper,
             CloseableHttpClient httpClient) {
         properties.validate();
+        ResolvedEndpoint endpoint = resolveEndpoint(
+                properties.baseUrl(), properties.chatCompletionsPath());
         RestClient restClient = RestClient.builder()
-                .baseUrl(properties.baseUrl())
+                .baseUrl(endpoint.transportBaseUrl())
                 .requestFactory(new HttpComponentsClientHttpRequestFactory(httpClient))
                 .defaultHeader(
                         HttpHeaders.AUTHORIZATION, "Bearer " + properties.apiKey())
@@ -64,8 +68,69 @@ public class ModelGatewayConfiguration {
         return new LlmClient(
                 restClient,
                 objectMapper,
-                properties.chatCompletionsPath(),
-                properties.baseUrl() + properties.chatCompletionsPath());
+                endpoint.requestPath(),
+                endpoint.requestUrl());
+    }
+
+    /**
+     * 将网关基础地址和 Chat Completions 路径解析为唯一请求地址。
+     * 基础地址可以包含版本前缀，路径已经包含该前缀时不会重复拼接。
+     */
+    static ResolvedEndpoint resolveEndpoint(String baseUrl, String configuredPath) {
+        URI base;
+        try {
+            base = new URI(baseUrl);
+        } catch (URISyntaxException exception) {
+            throw new IllegalArgumentException("agent.llm.base-url URI 无效", exception);
+        }
+        String basePath = normalizePath(base.getPath());
+        String path = configuredPath == null ? "" : configuredPath.trim();
+        if (path.isEmpty() || !path.startsWith("/")) {
+            throw new IllegalArgumentException(
+                    "agent.llm.chat-completions-path 必须以 / 开头");
+        }
+        String finalPath = basePath.isEmpty() || path.equals(basePath)
+                || path.startsWith(basePath + "/")
+                ? path
+                : joinPaths(basePath, path);
+        String transportBaseUrl;
+        try {
+            transportBaseUrl = new URI(
+                    base.getScheme(),
+                    base.getUserInfo(),
+                    base.getHost(),
+                    base.getPort(),
+                    null,
+                    null,
+                    null).toString();
+        } catch (URISyntaxException exception) {
+            throw new IllegalArgumentException("agent.llm.base-url URI 无效", exception);
+        }
+        return new ResolvedEndpoint(
+                transportBaseUrl,
+                finalPath,
+                transportBaseUrl + finalPath);
+    }
+
+    private static String normalizePath(String path) {
+        if (path == null || path.isBlank() || "/".equals(path)) {
+            return "";
+        }
+        String normalized = path.trim();
+        while (normalized.endsWith("/") && normalized.length() > 1) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized.startsWith("/") ? normalized : "/" + normalized;
+    }
+
+    private static String joinPaths(String left, String right) {
+        return normalizePath(left) + "/" + right.substring(1);
+    }
+
+    record ResolvedEndpoint(
+            String transportBaseUrl,
+            String requestPath,
+            String requestUrl) {
     }
 
     /** 为三类任务创建主模型与统一降级模型链。 */
