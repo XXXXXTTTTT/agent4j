@@ -26,6 +26,7 @@ coverage/
 .vite/
 .frontend/
 .worktrees/
+.agent4j/
 
 # 敏感信息
 .env

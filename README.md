@@ -213,6 +213,31 @@ The service rejects cross-workspace access, disabled users, archived conversatio
 concurrent active turns. PostgreSQL is the source of truth; WebSocket and SSE streams are delivery
 channels only.
 
+### Web 项目接入
+
+工作区侧栏的文件夹按钮提供两种项目接入方式：
+
+- **选择已挂载项目**：浏览 `/agent-workspace` 下的目录并注册工作区。文件不会复制，Agent 直接在
+  当前 Compose bind mount 中工作。
+- **导入本地文件夹**：浏览器通过 `webkitdirectory` 选择本地文件夹，前端生成 ZIP 并上传到
+  `/agent-workspace/.agent4j/imports/<workspaceId>`。服务端会拒绝绝对路径、`..` 越界、重复规范化路径，
+  并限制归档大小、解压大小和文件数；数据库注册失败时会删除已发布目录。
+
+对应接口：
+
+```text
+GET  /api/workspace-directories?path=/agent-workspace
+POST /api/workspace-imports    multipart: displayName, repositoryId, archive
+```
+
+外部项目需要零复制挂载时，使用 CLI 启动参数重新声明宿主目录，再在 Web 中选择挂载后的路径：
+
+```powershell
+.\agent4j.ps1 serve --workspace D:\projects\my-service
+```
+
+Web 不能在运行中修改 Docker bind mount；这样可以避免重启服务时中断当前会话、SSE 和 Agent Run。
+
 ### CLI and mounted workspaces
 
 The CLI and Web workbench use the same REST/SSE protocol and PostgreSQL conversations. Build the
