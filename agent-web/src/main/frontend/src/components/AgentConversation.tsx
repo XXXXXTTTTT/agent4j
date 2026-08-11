@@ -4,12 +4,14 @@ import {
   Circle,
   CircleAlert,
   Code2,
+  Image as ImageIcon,
   LoaderCircle,
   Terminal,
   User,
 } from 'lucide-react'
 
 import type { ChatMessage, ConversationTurn, RunView } from '../api/contracts'
+import { MarkdownMessage } from './MarkdownMessage'
 
 interface AgentConversationProps {
   run: RunView | null
@@ -24,6 +26,10 @@ const STAGES = [
   { id: 'reviewer', label: '质量审查' },
 ] as const
 
+const TOOL_STAGES = [
+  { id: 'tool-agent', node: 'tool', label: '调用工具' },
+] as const
+
 function statusLabel(status: RunView['status']): string {
   switch (status) {
     case 'RUNNING': return '执行中'
@@ -34,10 +40,48 @@ function statusLabel(status: RunView['status']): string {
   }
 }
 
-function stageState(run: RunView, currentNode: string | null, stage: string) {
-  if (run.state.trace.includes(stage)) return 'complete'
-  if (currentNode === stage) return 'active'
+function stageState(run: RunView, currentNode: string | null, traceName: string, nodeName = traceName) {
+  if (run.state.trace.includes(traceName)) return 'complete'
+  if (currentNode === nodeName) return 'active'
   return 'pending'
+}
+
+interface ImageArtifact {
+  dataUrl: string
+  model: string
+  revisedPrompt: string
+}
+
+const IMAGE_DATA_URL = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/
+
+function safeImageUrl(value: string): boolean {
+  if (IMAGE_DATA_URL.test(value)) return true
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function parseImageArtifact(value: string | undefined): ImageArtifact | null {
+  if (value === undefined) return null
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (typeof parsed !== 'object' || parsed === null) return null
+    const artifact = parsed as Record<string, unknown>
+    if (artifact.type !== 'image'
+      || typeof artifact.dataUrl !== 'string'
+      || typeof artifact.model !== 'string'
+      || !safeImageUrl(artifact.dataUrl)) return null
+    return {
+      dataUrl: artifact.dataUrl,
+      model: artifact.model,
+      revisedPrompt: typeof artifact.revisedPrompt === 'string' ? artifact.revisedPrompt : '',
+    }
+  } catch {
+    return null
+  }
 }
 
 function StageIcon({ state }: { state: 'complete' | 'active' | 'pending' }) {
@@ -91,7 +135,7 @@ function PersistedTurns({ turns }: { turns: ConversationTurn[] }) {
         <div className="persisted-turn" key={turn.turnId}>
           <article className="conversation-message user-message">
             <span className="message-avatar"><User aria-hidden="true" size={16} /></span>
-            <div className="message-body"><span className="message-author">你</span><p>{turn.userContent}</p></div>
+            <div className="message-body"><span className="message-author">你</span><MarkdownMessage markdown={turn.userContent} /></div>
           </article>
           {turn.assistantContent === null && turn.error === null ? (
             <article className="conversation-message agent-message">
@@ -101,7 +145,7 @@ function PersistedTurns({ turns }: { turns: ConversationTurn[] }) {
           ) : (
             <article className={`conversation-message agent-message ${turn.status === 'FAILED' ? 'is-failed' : ''}`}>
               <span className="message-avatar agent-avatar"><Bot aria-hidden="true" size={17} /></span>
-              <div className="message-body"><div className="agent-message-heading"><span className="message-author">Agent4J</span><TurnStatus status={turn.status} /></div><p>{turn.assistantContent ?? turn.error}</p></div>
+              <div className="message-body"><div className="agent-message-heading"><span className="message-author">Agent4J</span><TurnStatus status={turn.status} /></div><MarkdownMessage markdown={turn.assistantContent ?? turn.error ?? ''} /></div>
             </article>
           )}
         </div>
@@ -121,7 +165,7 @@ function PersistedMessages({ messages }: { messages: ChatMessage[] }) {
               <span className="message-author">{messageRoleLabel(message.role)}</span>
               {message.name === undefined || message.name === null ? null : <code className="message-role-meta">{message.name}</code>}
             </div>
-            <p>{messageText(message)}</p>
+            <MarkdownMessage markdown={messageText(message)} />
           </div>
         </article>
       ))}
@@ -154,6 +198,12 @@ export function AgentConversation({ run, currentNode, turns = [] }: AgentConvers
   const plannerRoute = variables['planner.route']
   const finalResponse = variables['final_response']
   const plannerError = variables['planner.error']
+  const toolRequest = variables['tool.request']
+  const toolResponse = variables['tool.response']
+  const toolResult = variables['tool.result']
+  const toolModel = variables['tool.model']
+  const toolError = variables['tool.error']
+  const activeSkills = variables['skill.active']
   const coderRequest = variables['coder.request']
   const coderResponse = variables['coder.response']
   const coderModel = variables['coder.model']
@@ -171,7 +221,8 @@ export function AgentConversation({ run, currentNode, turns = [] }: AgentConvers
   const reviewFeedback = variables['reviewer.feedback']
   const reviewerError = variables['reviewer.error']
   const approved = variables['reviewer.approved']
-  const executionErrors = [plannerError, coderError, opsError, opsLogError, reviewerError].filter(
+  const imageArtifact = parseImageArtifact(toolResult)
+  const executionErrors = [plannerError, toolError, coderError, opsError, opsLogError, reviewerError].filter(
     (value): value is string => value !== undefined && value.length > 0,
   )
   const hasFailureEvidence = timedOut === 'true' || executionErrors.length > 0 || run.error !== null
@@ -188,7 +239,7 @@ export function AgentConversation({ run, currentNode, turns = [] }: AgentConvers
       {currentTask !== undefined ? (
         <article className="conversation-message user-message">
           <span className="message-avatar"><User aria-hidden="true" size={16} /></span>
-          <div><span className="message-author">你</span><p>{currentTask}</p></div>
+          <div><span className="message-author">你</span><MarkdownMessage markdown={currentTask} /></div>
         </article>
       ) : null}
 
@@ -201,12 +252,12 @@ export function AgentConversation({ run, currentNode, turns = [] }: AgentConvers
           </div>
           {finalResponse !== undefined ? (
             <div className="final-response">
-              <p>{finalResponse}</p>
+              <MarkdownMessage markdown={finalResponse} />
             </div>
           ) : plan === undefined ? (
             <p className="agent-progress-copy">正在读取任务并建立执行计划。</p>
           ) : (
-            <div className="plan-block"><strong>执行计划</strong><p>{plan}</p></div>
+            <div className="plan-block"><strong>执行计划</strong><MarkdownMessage markdown={plan} /></div>
           )}
           {plannerRequest === undefined && plannerResponse === undefined ? null : (
             <details className="evidence-details" open>
@@ -218,8 +269,9 @@ export function AgentConversation({ run, currentNode, turns = [] }: AgentConvers
           )}
           {plannerRoute === 'chat' ? null : (
             <ol className="execution-stages" aria-label="执行阶段">
-              {STAGES.map((stage) => {
-                const state = stageState(run, currentNode, stage.id)
+              {(variables['planner.taskKind'] === 'TOOL_OPERATION' ? TOOL_STAGES : STAGES).map((stage) => {
+                const node = 'node' in stage ? stage.node : stage.id
+                const state = stageState(run, currentNode, stage.id, node)
                 return (
                   <li key={stage.id} className={`stage-${state}`}>
                     <span className="stage-icon"><StageIcon state={state} /></span>
@@ -231,6 +283,34 @@ export function AgentConversation({ run, currentNode, turns = [] }: AgentConvers
           )}
         </div>
       </article>
+
+      {toolRequest === undefined && toolResponse === undefined && toolResult === undefined && toolError === undefined ? null : (
+        <article className={`conversation-message event-message ${toolError === undefined ? '' : 'is-failed'}`}>
+          <span className="message-avatar"><ImageIcon aria-hidden="true" size={16} /></span>
+          <div className="message-body">
+            <div className="event-heading">
+              <span className="message-author">工具调用</span>
+              {toolModel === undefined ? null : <code>{toolModel}</code>}
+            </div>
+            {activeSkills === undefined || activeSkills.length === 0 ? null : (
+              <p className="tool-skill-label">已激活 Skill：<code>{activeSkills}</code></p>
+            )}
+            {imageArtifact === null ? null : (
+              <figure className="tool-image-artifact">
+                <img src={imageArtifact.dataUrl} alt="Agent 生成图片" />
+                <figcaption>
+                  <code>{imageArtifact.model}</code>
+                  {imageArtifact.revisedPrompt.length === 0 ? null : <span>{imageArtifact.revisedPrompt}</span>}
+                </figcaption>
+              </figure>
+            )}
+            {toolResult === undefined || imageArtifact !== null ? null : <pre>{toolResult}</pre>}
+            {toolRequest === undefined ? null : <details className="evidence-details"><summary>工具模型请求</summary><pre>{toolRequest}</pre></details>}
+            {toolResponse === undefined ? null : <details className="evidence-details"><summary>工具模型响应</summary><pre>{toolResponse}</pre></details>}
+            {toolError === undefined ? null : <pre className="run-error-detail">{toolError}</pre>}
+          </div>
+        </article>
+      )}
 
       {updatedFiles === undefined ? null : (
         <article className="conversation-message event-message">
@@ -250,7 +330,7 @@ export function AgentConversation({ run, currentNode, turns = [] }: AgentConvers
               <span className="message-author">Coder 模型与工具</span>
               {coderModel === undefined ? null : <code>{coderModel}</code>}
             </div>
-            {coderSummary === undefined ? null : <p>{coderSummary}</p>}
+            {coderSummary === undefined ? null : <MarkdownMessage markdown={coderSummary} />}
             {coderRequest === undefined ? null : <details className="evidence-details" open><summary>模型请求</summary><pre>{coderRequest}</pre></details>}
             {coderResponse === undefined ? null : <details className="evidence-details"><summary>模型响应</summary><pre>{coderResponse}</pre></details>}
             {coderError === undefined ? null : <pre className="run-error-detail">{coderError}</pre>}
@@ -291,7 +371,7 @@ export function AgentConversation({ run, currentNode, turns = [] }: AgentConvers
               {approved === undefined || hasFailureEvidence ? null : <span>{approved === 'true' ? '审查通过' : '需要修复'}</span>}
             </div>
             {reviewSummary === undefined ? null : <strong className="result-title">{reviewSummary}</strong>}
-            {reviewFeedback === undefined ? null : <p>{reviewFeedback}</p>}
+            {reviewFeedback === undefined ? null : <MarkdownMessage markdown={reviewFeedback} />}
             {reviewerError === undefined ? null : <pre className="run-error-detail">{reviewerError}</pre>}
             {run.error === null ? null : <pre className="run-error-detail">{run.error}</pre>}
           </div>

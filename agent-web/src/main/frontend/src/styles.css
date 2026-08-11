@@ -205,6 +205,25 @@ code, pre { font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
 .conversation-message p { color: #353e39; font-size: 14px; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .user-message p { font-size: 15px; }
 .message-body { min-width: 0; }
+.markdown-message { color: #353e39; font-size: 14px; line-height: 1.65; min-width: 0; overflow-wrap: anywhere; }
+.markdown-message > :first-child { margin-top: 0; }
+.markdown-message > :last-child { margin-bottom: 0; }
+.markdown-message p { margin: 0 0 10px; white-space: normal; }
+.markdown-message ul, .markdown-message ol { margin: 8px 0 12px; padding-left: 24px; }
+.markdown-message li { margin: 3px 0; }
+.markdown-message blockquote { margin: 10px 0; padding: 2px 0 2px 12px; border-left: 3px solid #91a49a; color: #59655f; }
+.markdown-message code { border-radius: 4px; background: #eef2ef; padding: 2px 5px; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.markdown-message pre { max-width: 100%; margin: 10px 0; overflow: auto; border: 1px solid #d9e2dc; border-radius: 6px; background: #17201b; padding: 12px; color: #e8f0eb; }
+.markdown-message pre code { background: transparent; padding: 0; color: inherit; }
+.markdown-message table { display: block; max-width: 100%; margin: 10px 0; overflow-x: auto; border-collapse: collapse; }
+.markdown-message th, .markdown-message td { border: 1px solid #d8e1dc; padding: 7px 10px; text-align: left; }
+.markdown-message th { background: #f2f5f3; font-weight: 700; }
+.markdown-message a { color: #1769aa; text-decoration: underline; text-underline-offset: 2px; }
+.markdown-message img { display: block; width: auto; max-width: min(100%, 720px); max-height: 720px; margin: 12px 0; border: 1px solid #d9e2dc; border-radius: 6px; object-fit: contain; }
+.tool-image-artifact { display: grid; gap: 10px; margin: 12px 0; }
+.tool-image-artifact img { display: block; max-height: 720px; max-width: min(100%, 720px); border: 1px solid #d9e2dc; border-radius: 6px; object-fit: contain; }
+.tool-image-artifact figcaption { color: #68726d; display: flex; flex-wrap: wrap; font-size: 11px; gap: 10px; }
+.tool-skill-label { color: #68726d; font-size: 11px; margin: 8px 0; }
 .persisted-turn { border-bottom: 1px solid #edf0ed; margin-bottom: 25px; padding-bottom: 1px; }
 .turn-status { border-radius: 999px; font: 700 9px "Cascadia Mono", Consolas, monospace; padding: 3px 7px; }
 .turn-status.is-running { background: #e3f0e8; color: #1d694e; }

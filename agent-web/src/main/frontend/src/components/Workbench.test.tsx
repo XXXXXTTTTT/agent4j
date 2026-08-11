@@ -236,6 +236,44 @@ describe('Workbench', () => {
     expect(within(conversation).queryByText('正在读取任务并建立执行计划。')).not.toBeInTheDocument()
   })
 
+  it('展示工具阶段和图片生成工件', () => {
+    render(
+      <Workbench
+        controller={controller({
+          run: runView({
+            state: {
+              messages: [],
+              variables: {
+                'planner.task': '请生成一张蓝色方块图片',
+                'planner.route': 'agent',
+                'planner.taskKind': 'TOOL_OPERATION',
+                'tool.model': 'image-model',
+                'skill.active': 'image-generation@1.0.0',
+                'tool.result': JSON.stringify({
+                  type: 'image',
+                  dataUrl: 'data:image/png;base64,AA==',
+                  revisedPrompt: '蓝色方块',
+                  model: 'image-model',
+                }),
+                final_response: '图片已生成。',
+              },
+              trace: ['planner', 'tool-agent'],
+            },
+          }),
+        })}
+        onTerminalReady={() => undefined}
+      />,
+    )
+
+    const conversation = screen.getByLabelText('Agent 会话')
+    expect(within(conversation).getByText('调用工具')).toBeVisible()
+    expect(within(conversation).queryByText('生成代码变更')).not.toBeInTheDocument()
+    expect(within(conversation).getByText('image-generation@1.0.0')).toBeVisible()
+    expect(within(conversation).getByRole('img', { name: 'Agent 生成图片' }))
+      .toHaveAttribute('src', 'data:image/png;base64,AA==')
+    expect(within(conversation).getByText('蓝色方块')).toBeVisible()
+  })
+
   it('将任务、计划、执行结果和审查结论呈现为连续 Agent 会话', () => {
     render(
       <Workbench
