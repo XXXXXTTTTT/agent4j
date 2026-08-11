@@ -1,8 +1,11 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { ModelConfigurationSnapshot } from '../api/contracts'
 import { ModelSettingsDialog } from './ModelSettingsDialog'
+import { ModelProviderSettingsSection } from './ModelProviderSettingsSection'
+import { ModelEndpointSettingsSection } from './ModelEndpointSettingsSection'
+import { ModelGroupSettingsSection } from './ModelGroupSettingsSection'
 
 const snapshot: ModelConfigurationSnapshot = {
   providers: [{ providerId: 'p1', ownerUserId: 'u1', displayName: 'OpenAI', baseUrl: 'https://api.openai.com', chatCompletionsPath: '/v1/chat/completions', apiKeyMasked: 'sk-***', createdAt: '', updatedAt: '' }],
@@ -38,6 +41,14 @@ describe('ModelSettingsDialog', () => {
     await waitFor(() => expect(update).toHaveBeenCalledWith('p1', { displayName: 'OpenAI 2', baseUrl: 'https://api.openai.com', chatCompletionsPath: '/v1/chat/completions', apiKey: 'secret' }))
   })
 
+  it('omits an empty provider key on update', async () => {
+    const user = userEvent.setup(); const update = vi.fn(async () => snapshot)
+    render(<ModelSettingsDialog controller={controller({ updateModelProvider: update })} onClose={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: '编辑 Provider OpenAI' }))
+    await user.click(screen.getByRole('button', { name: '保存 Provider' }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith('p1', { displayName: 'OpenAI', baseUrl: 'https://api.openai.com', chatCompletionsPath: '/v1/chat/completions' }))
+  })
+
   it('confirms provider deletion and reports conflict', async () => {
     const user = userEvent.setup(); const remove = vi.fn(async () => { throw new Error('Provider 仍被端点引用') })
     vi.spyOn(window, 'confirm').mockReturnValue(true)
@@ -57,5 +68,33 @@ describe('ModelSettingsDialog', () => {
     const vision = screen.getByLabelText('组成员 Vision'); await user.click(vision)
     await user.click(screen.getByRole('button', { name: '保存模型组' }))
     await waitFor(() => expect(updateGroup).toHaveBeenCalledWith('g1', expect.objectContaining({ endpointIds: ['e1'] })))
+    expect(updateEndpoint.mock.calls[0][1]).not.toHaveProperty('providerId')
+    expect(screen.getByText(/P1\/W2/)).toBeInTheDocument()
+  })
+
+  it('reports endpoint and group delete conflicts after confirmation', async () => {
+    const user = userEvent.setup(); vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<ModelSettingsDialog controller={controller({ deleteModelEndpoint: vi.fn(async () => { throw new Error('端点仍被模型组引用') }), deleteModelGroup: vi.fn(async () => { throw new Error('模型组删除冲突') }) })} onClose={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: '删除端点 GPT 4o' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('端点仍被模型组引用'))
+    await user.click(screen.getByRole('button', { name: '删除模型组 代码组' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('模型组删除冲突'))
+  })
+
+  it.each([
+    ['provider', ModelProviderSettingsSection],
+    ['endpoint', ModelEndpointSettingsSection],
+    ['group', ModelGroupSettingsSection],
+  ])('%s serializes an in-flight save', async (_name, Section) => {
+    let resolve!: () => void
+    const onRun = vi.fn(() => new Promise<void>((done) => { resolve = done }))
+    const props = { snapshot, busy: false, onRun, create: vi.fn(async () => snapshot), update: vi.fn(async () => snapshot), remove: vi.fn(async () => snapshot) } as any
+    render(<Section {...props} />)
+    const form = screen.getAllByRole('button', { name: /新增|保存/ }).at(-1)!.closest('form')!
+    fireEvent.submit(form)
+    fireEvent.submit(form)
+    expect(onRun).toHaveBeenCalledTimes(1)
+    expect(Array.from(form.querySelectorAll('input,select,button')).every((control) => (control as HTMLInputElement).disabled)).toBe(true)
+    resolve()
   })
 })
