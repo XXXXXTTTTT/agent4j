@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { ModelConfigurationSnapshot } from '../api/contracts'
+import type { UpdateModelEndpointCommand } from '../api/conversationApi'
 import { ModelSettingsDialog } from './ModelSettingsDialog'
 import { ModelProviderSettingsSection } from './ModelProviderSettingsSection'
 import { ModelEndpointSettingsSection } from './ModelEndpointSettingsSection'
@@ -58,7 +59,7 @@ describe('ModelSettingsDialog', () => {
   })
 
   it('edits endpoint controls and group members in stable order', async () => {
-    const user = userEvent.setup(); const updateEndpoint = vi.fn(async () => snapshot); const updateGroup = vi.fn(async () => snapshot)
+    const user = userEvent.setup(); const updateEndpoint = vi.fn(async (_id: string, _command: UpdateModelEndpointCommand) => snapshot); const updateGroup = vi.fn(async () => snapshot)
     render(<ModelSettingsDialog controller={controller({ updateModelEndpoint: updateEndpoint, updateModelGroup: updateGroup })} onClose={vi.fn()} />)
     await user.click(screen.getByRole('button', { name: '编辑端点 GPT 4o' }))
     await user.clear(screen.getByLabelText('端点优先级')); await user.type(screen.getByLabelText('端点优先级'), '3')
@@ -68,7 +69,7 @@ describe('ModelSettingsDialog', () => {
     const vision = screen.getByLabelText('组成员 Vision'); await user.click(vision)
     await user.click(screen.getByRole('button', { name: '保存模型组' }))
     await waitFor(() => expect(updateGroup).toHaveBeenCalledWith('g1', expect.objectContaining({ endpointIds: ['e1'] })))
-    expect(updateEndpoint.mock.calls[0][1]).not.toHaveProperty('providerId')
+    expect(updateEndpoint).toHaveBeenCalledWith('e1', expect.not.objectContaining({ providerId: expect.anything() }))
     expect(screen.getByText(/P1\/W2/)).toBeInTheDocument()
   })
 
@@ -79,6 +80,31 @@ describe('ModelSettingsDialog', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('端点仍被模型组引用'))
     await user.click(screen.getByRole('button', { name: '删除模型组 代码组' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('模型组删除冲突'))
+  })
+
+  it('shows complete endpoint metadata and honors a declined delete', async () => {
+    const user = userEvent.setup(); const remove = vi.fn(async () => snapshot); const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<ModelSettingsDialog controller={controller({ deleteModelEndpoint: remove })} onClose={vi.fn()} />)
+    expect(screen.getByText(/OpenAI · gpt-4o · CHAT_COMPLETIONS, STREAMING · P1\/W2 · 启用/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '删除端点 GPT 4o' }))
+    expect(confirm).toHaveBeenCalledWith('确认删除端点 GPT 4o？')
+    expect(remove).not.toHaveBeenCalled()
+  })
+
+  it('uses returned snapshots without reloading configuration', async () => {
+    const user = userEvent.setup(); const update = vi.fn(async (_id: string, _command: UpdateModelEndpointCommand) => snapshot); const reload = vi.fn(async () => undefined)
+    render(<ModelSettingsDialog controller={controller({ updateModelEndpoint: update, reloadModelConfiguration: reload })} onClose={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: '编辑端点 GPT 4o' }))
+    await user.click(screen.getByRole('button', { name: '保存端点' }))
+    await waitFor(() => expect(update).toHaveBeenCalled())
+    expect(reload).not.toHaveBeenCalled()
+  })
+
+  it('keeps delete serialized while the first delete is pending', async () => {
+    let resolve!: () => void; const remove = vi.fn(() => new Promise<typeof snapshot>((done) => { resolve = () => done(snapshot) })); const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<ModelEndpointSettingsSection snapshot={snapshot} busy={false} onRun={async (_resource, operation) => { await operation() }} update={vi.fn(async () => snapshot)} remove={remove} create={vi.fn(async () => snapshot)} />)
+    const buttons = screen.getAllByRole('button', { name: '删除端点 GPT 4o' }); fireEvent.click(buttons[0]); fireEvent.click(buttons[0])
+    expect(confirm).toHaveBeenCalled(); expect(remove).toHaveBeenCalledTimes(1); resolve()
   })
 
   it.each([
