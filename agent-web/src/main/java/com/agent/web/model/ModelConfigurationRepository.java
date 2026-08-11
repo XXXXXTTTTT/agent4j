@@ -30,9 +30,16 @@ public interface ModelConfigurationRepository {
                                        String displayName, String modelId,
                                        Set<InferenceCapability> capabilities,
                                        int priority, int weight, boolean enabled, Instant now);
+    ModelEndpointRecord updateEndpoint(UUID endpointId, Actor actor, String displayName, String modelId,
+                                       Set<InferenceCapability> capabilities, int priority, int weight,
+                                       boolean enabled, Instant now);
     ModelGroupRecord createGroup(UUID groupId, Actor actor, String displayName,
                                  TaskType taskType, List<UUID> endpointIds, Instant now);
+    ModelGroupRecord updateGroup(UUID groupId, Actor actor, String displayName,
+                                 TaskType taskType, List<UUID> endpointIds, Instant now);
     void deleteProvider(UUID providerId, String userId);
+    void deleteEndpoint(UUID endpointId, String userId);
+    void deleteGroup(UUID groupId, String userId);
     Optional<String> apiKey(UUID providerId, String userId);
 
     /** 读取当前用户的 Provider 私密运行时配置。 */

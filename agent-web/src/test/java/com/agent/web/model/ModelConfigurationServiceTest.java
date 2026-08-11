@@ -111,6 +111,35 @@ class ModelConfigurationServiceTest {
         }
     }
 
+    @Test
+    void updatesEndpointAndGroupWithCurrentActor() {
+        FakeRepository repository = new FakeRepository();
+        ModelConfigurationService service = new ModelConfigurationService(repository, () -> ACTOR, Clock.fixed(NOW, ZoneOffset.UTC));
+        UUID endpointId = UUID.randomUUID();
+        UUID groupId = UUID.randomUUID();
+        service.updateEndpoint(endpointId, "端点", "model", Set.of(InferenceCapability.CHAT_COMPLETIONS), 1, 2, true);
+        service.updateGroup(groupId, "组", TaskType.CODE, List.of(endpointId));
+        assertThat(repository.updatedEndpointActor).isEqualTo(ACTOR);
+        assertThat(repository.updatedGroupActor).isEqualTo(ACTOR);
+        service.deleteEndpoint(endpointId);
+        service.deleteGroup(groupId);
+        assertThat(repository.deletedEndpointUser).isEqualTo(ACTOR.userId());
+        assertThat(repository.deletedGroupUser).isEqualTo(ACTOR.userId());
+    }
+
+    @Test
+    void rejectsInvalidEndpointAndDuplicateOrEmptyGroupValues() {
+        ModelConfigurationService service = new ModelConfigurationService(new FakeRepository(), () -> ACTOR, Clock.fixed(NOW, ZoneOffset.UTC));
+        UUID id = UUID.randomUUID();
+        assertThatThrownBy(() -> service.updateEndpoint(id, " ", "m", Set.of(InferenceCapability.CHAT_COMPLETIONS), 0, 1, true)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.updateEndpoint(id, "n", " ", Set.of(InferenceCapability.CHAT_COMPLETIONS), 0, 1, true)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.updateEndpoint(id, "n", "m", Set.of(), 0, 1, true)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.updateEndpoint(id, "n", "m", Set.of(InferenceCapability.CHAT_COMPLETIONS), -1, 1, true)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.updateEndpoint(id, "n", "m", Set.of(InferenceCapability.CHAT_COMPLETIONS), 0, 0, true)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.updateGroup(UUID.randomUUID(), "g", TaskType.CODE, List.of())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.updateGroup(UUID.randomUUID(), "g", TaskType.CODE, List.of(id, id))).hasMessageContaining("endpointIds 不能重复");
+    }
+
     private static final class FakeRepository implements ModelConfigurationRepository {
         private String ownerId;
         private String chatCompletionsPath;
@@ -119,6 +148,10 @@ class ModelConfigurationServiceTest {
         private String updatedBaseUrl;
         private String updatedChatCompletionsPath;
         private String updatedApiKey;
+        private Actor updatedEndpointActor;
+        private Actor updatedGroupActor;
+        private String deletedEndpointUser;
+        private String deletedGroupUser;
 
         @Override public List<ModelProviderRecord> findProviders(String userId) { return List.of(); }
         @Override public List<ModelEndpointRecord> findEndpoints(String userId) { return List.of(); }
@@ -143,6 +176,10 @@ class ModelConfigurationServiceTest {
         }
         @Override public ModelEndpointRecord createEndpoint(UUID id, Actor actor, UUID providerId, String displayName, String modelId, Set<InferenceCapability> capabilities, int priority, int weight, boolean enabled, Instant now) { throw new UnsupportedOperationException(); }
         @Override public ModelGroupRecord createGroup(UUID id, Actor actor, String displayName, TaskType taskType, List<UUID> endpointIds, Instant now) { throw new UnsupportedOperationException(); }
+        @Override public ModelEndpointRecord updateEndpoint(UUID id, Actor actor, String n, String m, Set<InferenceCapability> c, int p, int w, boolean e, Instant now) { updatedEndpointActor = actor; return new ModelEndpointRecord(id, UUID.randomUUID(), n, m, c, p, w, e, now, now); }
+        @Override public ModelGroupRecord updateGroup(UUID id, Actor actor, String n, TaskType t, List<UUID> endpoints, Instant now) { updatedGroupActor = actor; return new ModelGroupRecord(id, actor.userId(), n, t, endpoints, now, now); }
+        @Override public void deleteEndpoint(UUID id, String userId) { deletedEndpointUser = userId; }
+        @Override public void deleteGroup(UUID id, String userId) { deletedGroupUser = userId; }
         @Override public void deleteProvider(UUID providerId, String userId) { throw new UnsupportedOperationException(); }
         @Override public Optional<String> apiKey(UUID providerId, String userId) { return Optional.empty(); }
     }

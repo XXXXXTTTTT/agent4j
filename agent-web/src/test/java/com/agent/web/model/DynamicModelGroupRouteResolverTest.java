@@ -120,8 +120,12 @@ class DynamicModelGroupRouteResolverTest {
         @Override public ModelProviderRecord createProvider(UUID id, Actor actor, String name, String baseUrl, String key, Instant now) { throw new UnsupportedOperationException(); }
         @Override public ModelProviderRecord updateProvider(UUID providerId, Actor actor, String displayName, String baseUrl, String chatCompletionsPath, String apiKey, Instant now) { throw new UnsupportedOperationException(); }
         @Override public ModelEndpointRecord createEndpoint(UUID id, Actor actor, UUID providerId, String displayName, String modelId, Set<InferenceCapability> capabilities, int priority, int weight, boolean enabled, Instant now) { throw new UnsupportedOperationException(); }
+        @Override public ModelEndpointRecord updateEndpoint(UUID id, Actor actor, String displayName, String modelId, Set<InferenceCapability> capabilities, int priority, int weight, boolean enabled, Instant now) { throw new UnsupportedOperationException(); }
         @Override public ModelGroupRecord createGroup(UUID id, Actor actor, String displayName, TaskType taskType, List<UUID> endpointIds, Instant now) { throw new UnsupportedOperationException(); }
+        @Override public ModelGroupRecord updateGroup(UUID id, Actor actor, String displayName, TaskType taskType, List<UUID> endpointIds, Instant now) { throw new UnsupportedOperationException(); }
         @Override public void deleteProvider(UUID providerId, String userId) { throw new UnsupportedOperationException(); }
+        @Override public void deleteEndpoint(UUID endpointId, String userId) { throw new UnsupportedOperationException(); }
+        @Override public void deleteGroup(UUID groupId, String userId) { throw new UnsupportedOperationException(); }
         @Override public Optional<String> apiKey(UUID providerId, String userId) { return Optional.ofNullable(providers.get(providerId)).map(ModelProviderRuntime::apiKey); }
         @Override public Optional<ModelProviderRuntime> findProviderRuntime(UUID providerId, String userId) {
             return Optional.ofNullable(providers.get(providerId)).filter(value -> value.ownerUserId().equals(userId));

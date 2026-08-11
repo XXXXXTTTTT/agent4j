@@ -94,9 +94,12 @@ public final class ModelConfigurationService {
         if (priority < 0 || weight <= 0) {
             throw new IllegalArgumentException("priority 必须大于等于 0，weight 必须大于 0");
         }
-        return repository.createEndpoint(UUID.randomUUID(), actorResolver.current(), providerId,
+        Actor actor = actorResolver.current();
+        ModelEndpointRecord endpoint = repository.createEndpoint(UUID.randomUUID(), actor, providerId,
                 displayName.trim(), modelId.trim(), Set.copyOf(capabilities), priority, weight,
                 enabled, clock.instant());
+        auditResource("CREATE", actor, "ENDPOINT", endpoint.endpointId());
+        return endpoint;
     }
 
     public ModelGroupRecord createGroup(String displayName, TaskType taskType, List<UUID> endpointIds) {
@@ -105,8 +108,36 @@ public final class ModelConfigurationService {
         if (endpointIds == null || endpointIds.isEmpty()) {
             throw new IllegalArgumentException("endpointIds 不能为空");
         }
-        return repository.createGroup(UUID.randomUUID(), actorResolver.current(), displayName.trim(),
-                taskType, endpointIds, clock.instant());
+        validateEndpointIds(endpointIds);
+        Actor actor = actorResolver.current();
+        ModelGroupRecord group = repository.createGroup(UUID.randomUUID(), actor, displayName.trim(),
+                taskType, List.copyOf(endpointIds), clock.instant());
+        auditResource("CREATE", actor, "GROUP", group.groupId());
+        return group;
+    }
+
+    public ModelEndpointRecord updateEndpoint(UUID endpointId, String displayName, String modelId,
+                                              Set<InferenceCapability> capabilities, int priority,
+                                              int weight, boolean enabled) {
+        Objects.requireNonNull(endpointId, "endpointId 不能为空");
+        validateEndpoint(displayName, modelId, capabilities, priority, weight);
+        Actor actor = actorResolver.current();
+        ModelEndpointRecord endpoint = repository.updateEndpoint(endpointId, actor, displayName.trim(), modelId.trim(),
+                Set.copyOf(capabilities), priority, weight, enabled, clock.instant());
+        auditResource("UPDATE", actor, "ENDPOINT", endpoint.endpointId());
+        return endpoint;
+    }
+
+    public ModelGroupRecord updateGroup(UUID groupId, String displayName, TaskType taskType, List<UUID> endpointIds) {
+        Objects.requireNonNull(groupId, "groupId 不能为空");
+        requireText(displayName, "displayName");
+        Objects.requireNonNull(taskType, "taskType 不能为空");
+        validateEndpointIds(endpointIds);
+        Actor actor = actorResolver.current();
+        ModelGroupRecord group = repository.updateGroup(groupId, actor, displayName.trim(), taskType,
+                List.copyOf(endpointIds), clock.instant());
+        auditResource("UPDATE", actor, "GROUP", group.groupId());
+        return group;
     }
 
     public void deleteProvider(UUID providerId) {
@@ -114,6 +145,20 @@ public final class ModelConfigurationService {
         Actor actor = actorResolver.current();
         repository.deleteProvider(providerId, actor.userId());
         auditProvider("DELETE", actor, providerId);
+    }
+
+    public void deleteEndpoint(UUID endpointId) {
+        Objects.requireNonNull(endpointId, "endpointId 不能为空");
+        Actor actor = actorResolver.current();
+        repository.deleteEndpoint(endpointId, actor.userId());
+        auditResource("DELETE", actor, "ENDPOINT", endpointId);
+    }
+
+    public void deleteGroup(UUID groupId) {
+        Objects.requireNonNull(groupId, "groupId 不能为空");
+        Actor actor = actorResolver.current();
+        repository.deleteGroup(groupId, actor.userId());
+        auditResource("DELETE", actor, "GROUP", groupId);
     }
 
     public static String maskApiKey(String apiKey) {
@@ -129,6 +174,23 @@ public final class ModelConfigurationService {
         if (Objects.requireNonNull(value, name + " 不能为空").isBlank()) {
             throw new IllegalArgumentException(name + " 不能为空白");
         }
+    }
+
+    private static void validateEndpoint(String displayName, String modelId, Set<InferenceCapability> capabilities,
+                                         int priority, int weight) {
+        requireText(displayName, "displayName");
+        requireText(modelId, "modelId");
+        if (capabilities == null || capabilities.isEmpty()) throw new IllegalArgumentException("capabilities 不能为空");
+        if (priority < 0 || weight <= 0) throw new IllegalArgumentException("priority 必须大于等于 0，weight 必须大于 0");
+    }
+
+    private static void validateEndpointIds(List<UUID> endpointIds) {
+        if (endpointIds == null || endpointIds.isEmpty()) throw new IllegalArgumentException("endpointIds 不能为空");
+        if (endpointIds.stream().distinct().count() != endpointIds.size()) throw new IllegalArgumentException("endpointIds 不能重复");
+    }
+
+    private static void auditResource(String action, Actor actor, String type, UUID id) {
+        AUDIT.info("action={} userId={} resourceType={} resourceId={}", action, actor.userId(), type, id);
     }
 
     private static String normalizeChatCompletionsPath(String value) {
