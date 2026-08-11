@@ -6,6 +6,9 @@ import com.agent.sandbox.pty.DockerTarget;
 import com.agent.sandbox.pty.SandboxExecutionException;
 import com.agent.sandbox.pty.Stream;
 import com.agent.sandbox.pty.TerminalLog;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.async.ResultCallback;
 import com.github.dockerjava.api.command.CreateContainerResponse;
@@ -25,6 +28,7 @@ import com.github.dockerjava.transport.DockerHttpClient;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.List;
 import java.util.Objects;
@@ -37,8 +41,10 @@ public final class DockerCommandExecutor implements AutoCloseable {
 
     private static final Map<String, String> MANAGED_LABEL =
             Map.of("com.agent.runtime.managed", "true");
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final DockerClient dockerClient;
+    private final DockerHttpClient dockerHttpClient;
 
     /** 使用当前 Docker 环境创建执行器。 */
     public DockerCommandExecutor() {
@@ -49,6 +55,7 @@ public final class DockerCommandExecutor implements AutoCloseable {
                 .dockerHost(config.getDockerHost())
                 .sslConfig(config.getSSLConfig())
                 .build();
+        this.dockerHttpClient = httpClient;
         this.dockerClient = DockerClientImpl.getInstance(config, httpClient);
     }
 
@@ -109,12 +116,73 @@ public final class DockerCommandExecutor implements AutoCloseable {
             case DockerTarget.ContainerWorkspaceSource source -> {
                 String bindRoot = resolveContainerBindSource(
                         source,
-                        dockerClient.inspectContainerCmd(source.containerName())
-                                .exec()
-                                .getMounts());
+                        inspectContainerMounts(source.containerName()));
                 yield resolveWorkspaceBindSource(bindRoot, source);
             }
         };
+    }
+
+    private List<InspectContainerResponse.Mount> inspectContainerMounts(
+            String containerName) {
+        DockerHttpClient.Request request = DockerHttpClient.Request.builder()
+                .method(DockerHttpClient.Request.Method.GET)
+                .path("/containers/" + containerName + "/json")
+                .build();
+        try (DockerHttpClient.Response response = dockerHttpClient.execute(request)) {
+            int statusCode = response.getStatusCode();
+            String body = new String(
+                    response.getBody().readAllBytes(), StandardCharsets.UTF_8);
+            if (statusCode != 200) {
+                throw new SandboxExecutionException(
+                        "读取源容器 mount 失败，Docker HTTP 响应码: " + statusCode
+                                + ", body: " + body);
+            }
+            return parseMounts(body);
+        } catch (IOException exception) {
+            throw new SandboxExecutionException("读取源容器 mount 响应失败", exception);
+        }
+    }
+
+    /**
+     * 只解析 Docker Inspect 响应中的 Mounts 数组，避免反序列化 HostConfig.Binds。
+     * Windows 驱动器路径包含冒号，docker-java 将其映射到 Binds 时会解析失败。
+     */
+    static List<InspectContainerResponse.Mount> parseMounts(String inspectJson) {
+        Objects.requireNonNull(inspectJson, "inspectJson 不能为空");
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(inspectJson);
+            if (root == null || !root.isObject() || !root.path("Mounts").isArray()) {
+                return List.of();
+            }
+            List<InspectContainerResponse.Mount> mounts = new ArrayList<>();
+            for (JsonNode mountNode : root.path("Mounts")) {
+                if (!mountNode.isObject()) {
+                    continue;
+                }
+                InspectContainerResponse.Mount mount =
+                        new InspectContainerResponse.Mount();
+                JsonNode destination = mountNode.get("Destination");
+                if (destination != null && destination.isTextual()) {
+                    mount.withDestination(new Volume(destination.textValue()));
+                }
+                JsonNode source = mountNode.get("Source");
+                if (source != null && source.isTextual()) {
+                    mount.withSource(source.textValue());
+                }
+                JsonNode name = mountNode.get("Name");
+                if (name != null && name.isTextual()) {
+                    mount.withName(name.textValue());
+                }
+                JsonNode rw = mountNode.get("RW");
+                if (rw != null && rw.isBoolean()) {
+                    mount.withRw(rw.booleanValue());
+                }
+                mounts.add(mount);
+            }
+            return List.copyOf(mounts);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalArgumentException("Docker Inspect 响应不是有效 JSON", exception);
+        }
     }
 
     static String resolveWorkspaceBindSource(

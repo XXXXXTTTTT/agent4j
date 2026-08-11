@@ -136,6 +136,31 @@ class DockerCommandExecutorTest {
     }
 
     @Test
+    void parsesWindowsDriveBindFromInspectJsonWithoutHostConfigBinds() {
+        String inspectJson = """
+                {
+                  "Mounts": [{
+                    "Type": "bind",
+                    "Source": "D:/agent4j",
+                    "Destination": "/agent-workspace",
+                    "RW": true
+                  }],
+                  "HostConfig": {
+                    "Binds": ["D:/agent4j:/agent-workspace:rw"]
+                  }
+                }
+                """;
+        DockerTarget.ContainerWorkspaceSource source =
+                new DockerTarget.ContainerWorkspaceSource(
+                        "agent4j-web-local", "/agent-workspace");
+
+        assertThat(DockerCommandExecutor.resolveContainerBindSource(
+                source,
+                DockerCommandExecutor.parseMounts(inspectJson)))
+                .isEqualTo("D:/agent4j");
+    }
+
+    @Test
     void resolvesWorkspaceBindSourceUsingDockerHostPathSyntax() {
         DockerTarget.ContainerWorkspaceSource source =
                 new DockerTarget.ContainerWorkspaceSource(
