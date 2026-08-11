@@ -4,7 +4,11 @@ import com.agent.core.llm.InferenceCapability;
 import com.agent.core.llm.TaskType;
 import com.agent.web.identity.Actor;
 import com.agent.web.identity.ActorResolver;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -50,9 +54,71 @@ class ModelConfigurationServiceTest {
         assertThat(repository.chatCompletionsPath).isEqualTo("/openai/chat");
     }
 
+    @Test
+    void updatesProviderWithCurrentActorAndPreservesOrRotatesApiKey() {
+        FakeRepository repository = new FakeRepository();
+        ModelConfigurationService service = new ModelConfigurationService(
+                repository, () -> ACTOR, Clock.fixed(NOW, ZoneOffset.UTC));
+        UUID providerId = UUID.fromString("78e56aa2-56c3-4325-a76f-97eb8c315a51");
+
+        service.updateProvider(providerId, " 更新网关 ", "https://gateway.example/v2", "/chat", null);
+        assertThat(repository.updatedOwnerId).isEqualTo(ACTOR.userId());
+        assertThat(repository.updatedApiKey).isNull();
+        assertThat(repository.updatedDisplayName).isEqualTo("更新网关");
+        assertThat(repository.updatedBaseUrl).isEqualTo("https://gateway.example/v2");
+        assertThat(repository.updatedChatCompletionsPath).isEqualTo("/chat");
+
+        service.updateProvider(providerId, "更新网关", "https://gateway.example/v2", "/chat", " sk-rotated ");
+        assertThat(repository.updatedApiKey).isEqualTo("sk-rotated");
+    }
+
+    @Test
+    void rejectsInvalidProviderUpdateValues() {
+        ModelConfigurationService service = new ModelConfigurationService(
+                new FakeRepository(), () -> ACTOR, Clock.fixed(NOW, ZoneOffset.UTC));
+        UUID providerId = UUID.fromString("80e56aa2-56c3-4325-a76f-97eb8c315a51");
+
+        assertThatThrownBy(() -> service.updateProvider(providerId, " ", "https://gateway.example", "/chat", null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.updateProvider(providerId, "网关", "file:///tmp", "/chat", null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.updateProvider(providerId, "网关", "https://gateway.example", "chat", null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.updateProvider(providerId, "网关", "https://gateway.example", "/chat", " "))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void writesSanitizedStructuredAuditLogForProviderUpdate() {
+        FakeRepository repository = new FakeRepository();
+        ModelConfigurationService service = new ModelConfigurationService(
+                repository, () -> ACTOR, Clock.fixed(NOW, ZoneOffset.UTC));
+        UUID providerId = UUID.fromString("81e56aa2-56c3-4325-a76f-97eb8c315a51");
+        Logger logger = (Logger) LoggerFactory.getLogger("com.agent.audit.model-configuration");
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            service.updateProvider(providerId, "机密网关", "https://secret.example", "/chat", "sk-rotated");
+
+            String message = appender.list.getLast().getFormattedMessage();
+            assertThat(message).contains("action=UPDATE", "userId=model-user",
+                    "resourceType=PROVIDER", "resourceId=" + providerId);
+            assertThat(message).doesNotContain("sk-rotated", "secret.example", "机密网关");
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
     private static final class FakeRepository implements ModelConfigurationRepository {
         private String ownerId;
         private String chatCompletionsPath;
+        private String updatedOwnerId;
+        private String updatedDisplayName;
+        private String updatedBaseUrl;
+        private String updatedChatCompletionsPath;
+        private String updatedApiKey;
 
         @Override public List<ModelProviderRecord> findProviders(String userId) { return List.of(); }
         @Override public List<ModelEndpointRecord> findEndpoints(String userId) { return List.of(); }
@@ -65,6 +131,15 @@ class ModelConfigurationServiceTest {
         @Override public ModelProviderRecord createProvider(UUID id, Actor actor, String name, String baseUrl, String path, String key, Instant now) {
             chatCompletionsPath = path;
             return createProvider(id, actor, name, baseUrl, key, now);
+        }
+        @Override public ModelProviderRecord updateProvider(UUID providerId, Actor actor, String displayName, String baseUrl, String chatCompletionsPath, String apiKey, Instant now) {
+            updatedOwnerId = actor.userId();
+            updatedDisplayName = displayName;
+            updatedBaseUrl = baseUrl;
+            updatedChatCompletionsPath = chatCompletionsPath;
+            updatedApiKey = apiKey;
+            return new ModelProviderRecord(providerId, actor.userId(), displayName, baseUrl,
+                    chatCompletionsPath, ModelConfigurationService.maskApiKey(apiKey == null ? "sk-existing" : apiKey), now, now);
         }
         @Override public ModelEndpointRecord createEndpoint(UUID id, Actor actor, UUID providerId, String displayName, String modelId, Set<InferenceCapability> capabilities, int priority, int weight, boolean enabled, Instant now) { throw new UnsupportedOperationException(); }
         @Override public ModelGroupRecord createGroup(UUID id, Actor actor, String displayName, TaskType taskType, List<UUID> endpointIds, Instant now) { throw new UnsupportedOperationException(); }

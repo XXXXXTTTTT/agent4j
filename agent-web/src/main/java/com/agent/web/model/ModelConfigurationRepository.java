@@ -23,6 +23,9 @@ public interface ModelConfigurationRepository {
                                                String apiKey, Instant now) {
         return createProvider(providerId, actor, displayName, baseUrl, apiKey, now);
     }
+    ModelProviderRecord updateProvider(UUID providerId, Actor actor, String displayName,
+                                       String baseUrl, String chatCompletionsPath,
+                                       String apiKey, Instant now);
     ModelEndpointRecord createEndpoint(UUID endpointId, Actor actor, UUID providerId,
                                        String displayName, String modelId,
                                        Set<InferenceCapability> capabilities,

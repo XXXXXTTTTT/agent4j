@@ -130,6 +130,30 @@ public final class JdbcModelConfigurationRepository implements ModelConfiguratio
     }
 
     @Override
+    public ModelProviderRecord updateProvider(UUID providerId, Actor actor, String displayName,
+                                              String baseUrl, String chatCompletionsPath,
+                                              String apiKey, Instant now) {
+        return Objects.requireNonNull(transactions.execute(status -> {
+            requireOwnedProvider(providerId, actor.userId());
+            jdbc.sql("""
+                    update agent_model_providers
+                    set display_name = :displayName,
+                        base_url = :baseUrl,
+                        chat_completions_path = :chatCompletionsPath,
+                        api_key = coalesce(:apiKey, api_key),
+                        updated_at = :updatedAt
+                    where provider_id = :providerId and owner_user_id = :ownerUserId
+                    """).param("providerId", providerId).param("ownerUserId", actor.userId())
+                    .param("displayName", displayName).param("baseUrl", baseUrl)
+                    .param("chatCompletionsPath", chatCompletionsPath).param("apiKey", apiKey)
+                    .param("updatedAt", timestamp(now)).update();
+            return findProviders(actor.userId()).stream()
+                    .filter(value -> value.providerId().equals(providerId))
+                    .findFirst().orElseThrow();
+        }), "Provider 更新事务返回值不能为空");
+    }
+
+    @Override
     public ModelEndpointRecord createEndpoint(UUID endpointId, Actor actor, UUID providerId,
                                               String displayName, String modelId,
                                               Set<InferenceCapability> capabilities, int priority,
@@ -178,11 +202,12 @@ public final class JdbcModelConfigurationRepository implements ModelConfiguratio
     public void deleteProvider(UUID providerId, String userId) {
         requireOwnedProvider(providerId, userId);
         Long references = jdbc.sql("""
-                select count(*) from agent_model_endpoints endpoint
-                join agent_model_group_endpoints membership on membership.endpoint_id = endpoint.endpoint_id
-                where endpoint.provider_id = :providerId
+                select count(*) from agent_model_endpoints
+                where provider_id = :providerId
                 """).param("providerId", providerId).query(Long.class).single();
-        if (references != 0) throw new ModelConfigurationConflictException("Provider 仍被模型组引用: " + providerId);
+        if (references != 0) {
+            throw new ModelConfigurationConflictException("Provider 存在 Endpoint，请先删除 Endpoint: " + providerId);
+        }
         jdbc.sql("delete from agent_model_providers where provider_id = :providerId")
                 .param("providerId", providerId).update();
     }

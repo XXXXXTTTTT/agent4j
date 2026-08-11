@@ -118,6 +118,7 @@ class DynamicModelGroupRouteResolverTest {
             return snapshot.groups().stream().filter(group -> group.ownerUserId().equals(userId)).toList();
         }
         @Override public ModelProviderRecord createProvider(UUID id, Actor actor, String name, String baseUrl, String key, Instant now) { throw new UnsupportedOperationException(); }
+        @Override public ModelProviderRecord updateProvider(UUID providerId, Actor actor, String displayName, String baseUrl, String chatCompletionsPath, String apiKey, Instant now) { throw new UnsupportedOperationException(); }
         @Override public ModelEndpointRecord createEndpoint(UUID id, Actor actor, UUID providerId, String displayName, String modelId, Set<InferenceCapability> capabilities, int priority, int weight, boolean enabled, Instant now) { throw new UnsupportedOperationException(); }
         @Override public ModelGroupRecord createGroup(UUID id, Actor actor, String displayName, TaskType taskType, List<UUID> endpointIds, Instant now) { throw new UnsupportedOperationException(); }
         @Override public void deleteProvider(UUID providerId, String userId) { throw new UnsupportedOperationException(); }
