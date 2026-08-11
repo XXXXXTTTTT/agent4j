@@ -2830,3 +2830,16 @@ Coder，预算耗尽拒绝进入 `reviewer-failure` 节点。该节点把审查�
 缺少 `reviewerRoute` 编译失败，加入显式失败路由和拓扑节点后 7 项生产图测试全部通过；测试同时断言
 批准、预算内修复、预算耗尽失败三条路径及 `reviewer-failure` 节点存在。历史日志中的同一 Run 保留
 了真实模型响应、`ops.exitCode=1`、两次 Reviewer 拒绝和错误终态，未使用模拟模型替代证据。
+
+修复后于 2026-08-11 重建本地 Docker 并再次运行真实外部项目 EDD：
+
+- `workspaceId=3016da49-01e5-4899-8c18-1ea8c71522a4`，
+  `conversationId=c0ddda6d-5c42-41a0-9845-a190a28e93b5`；
+- `turnId=d2d6b8b1-f596-4892-b68a-d3e5c33fef5a`，
+  `runId=7ef166b7-2741-4358-be02-f80a6a3dc0db`；
+- 夹具修改前为 `Tests run: 1, Failures: 1`，真实模型一次 Coder 修改后为
+  `Tests run: 1, Failures: 0`，`ops.exitCode=0`、`reviewer.approved=true`；
+- Run 与 Turn 均为 `COMPLETED`，Trace 精确包含 `planner -> coder -> ops -> reviewer`，
+  Trace SSE 为 `215909` 字节，终端 SSE 为 `100330` 字节；
+- `logs/agent4j-current.log` 以北京时间 `+08:00` 记录用户原文、模型、HTTP 200、Token、耗时、工具审计
+  和会话终态。该成功路径证明新增失败节点没有误伤一次通过的正常代码闭环。
