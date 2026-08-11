@@ -55,7 +55,7 @@ class ToolAgentNodeTest {
         AtomicReference<ModelRequest> captured = new AtomicReference<>();
         try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
             for (String name : List.of("artifact.create", "artifact_create", "code.apply-diff")) {
-                registry.register(new ToolDefinition(name, name,
+                registry.register(new ToolDefinition(name, "测试说明",
                         mapper.readTree("{\"type\":\"object\"}"),
                         Set.of(com.agent.core.intent.RequiredCapability.TOOL), ToolRiskLevel.LOW,
                         Duration.ofSeconds(2), (call, context) -> mapper.createObjectNode().put("ok", true)));
@@ -70,6 +70,10 @@ class ToolAgentNodeTest {
             assertThat(captured.get().tools()).extracting(tool -> tool.function().name())
                     .containsExactly("artifact_create", "artifact_create_2", "code_apply_diff")
                     .allMatch(name -> name.matches("[A-Za-z0-9_-]+"));
+            String systemPrompt = ((ChatMessage.TextContent) captured.get().messages().getFirst().content()).text();
+            assertThat(systemPrompt)
+                    .contains("artifact_create", "artifact_create_2", "code_apply_diff")
+                    .doesNotContain("artifact.create", "code.apply-diff");
         }
     }
 

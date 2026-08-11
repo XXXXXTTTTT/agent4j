@@ -104,7 +104,7 @@ public final class ToolAgentNode implements Node {
                             definition.description(), definition.inputSchema()))
                     .toList();
             List<ChatMessage> messages = new ArrayList<>();
-            messages.add(ChatMessage.system(systemPrompt(skills, definitions)));
+            messages.add(ChatMessage.system(systemPrompt(skills, definitions, protocolToRegistryName)));
             messages.addAll(output.messages());
             appendTaskIfMissing(messages, task);
             for (int step = 1; step <= maxSteps; step++) {
@@ -262,9 +262,14 @@ public final class ToolAgentNode implements Node {
         return toolRegistry.list().stream().filter(tool -> names.contains(tool.name())).toList();
     }
 
-    private String systemPrompt(SkillPromptContext skills, List<ToolDefinition> definitions) {
+    private String systemPrompt(
+            SkillPromptContext skills,
+            List<ToolDefinition> definitions,
+            Map<String, String> protocolToRegistryName) {
         StringBuilder prompt = new StringBuilder("你是 Agent4J 通用工具节点。只能通过已注册工具完成任务，工具返回后再给出最终回答。\n可用工具：");
-        definitions.forEach(tool -> prompt.append("\n- ").append(tool.name()).append(": ").append(tool.description()));
+        definitions.forEach(tool -> prompt.append("\n- ")
+                .append(protocolName(tool.name(), protocolToRegistryName))
+                .append(": ").append(tool.description()));
         if (skills != null && !skills.activationSection().isBlank()) {
             prompt.append("\n\n已激活 Skill：\n").append(skills.activationSection());
         }
