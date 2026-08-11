@@ -1,6 +1,7 @@
 package com.agent.web.model;
 
 import com.agent.core.llm.InferenceCapability;
+import com.agent.core.llm.TaskType;
 import com.agent.web.identity.Actor;
 import com.agent.web.persistence.JdbcModelConfigurationRepository;
 import org.flywaydb.core.Flyway;
@@ -26,6 +27,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.Set;
 import java.util.UUID;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -166,6 +168,59 @@ class JdbcModelConfigurationRepositoryIntegrationTest {
                 executor.shutdownNow();
             }
         }
+    }
+
+    @Test
+    void updatesEndpointPreservingProviderAndRejectsCrossUserUpdateDelete() {
+        Actor owner = new Actor("endpoint-owner", "Endpoint Owner");
+        Actor other = new Actor("endpoint-other", "Endpoint Other");
+        insertUser(owner); insertUser(other);
+        UUID providerId = UUID.randomUUID(); UUID endpointId = UUID.randomUUID();
+        repository.createProvider(providerId, owner, "p", "https://p", "k", NOW);
+        repository.createEndpoint(endpointId, owner, providerId, "e", "m", Set.of(InferenceCapability.CHAT_COMPLETIONS), 0, 1, true, NOW);
+        assertThatThrownBy(() -> repository.updateEndpoint(endpointId, other, "x", "x", Set.of(InferenceCapability.STREAMING), 1, 2, false, NOW))
+                .isInstanceOf(JdbcModelConfigurationRepository.ModelConfigurationNotFoundException.class);
+        assertThatThrownBy(() -> repository.deleteEndpoint(endpointId, other.userId()))
+                .isInstanceOf(JdbcModelConfigurationRepository.ModelConfigurationNotFoundException.class);
+        ModelEndpointRecord updated = repository.updateEndpoint(endpointId, owner, "x", "x", Set.of(InferenceCapability.STREAMING), 1, 2, false, NOW.plusSeconds(1));
+        assertThat(updated.providerId()).isEqualTo(providerId);
+    }
+
+    @Test
+    void updatesGroupInOrderAndRollsBackOnForeignOrMissingEndpoint() {
+        Actor owner = new Actor("group-owner", "Group Owner"); Actor other = new Actor("group-other", "Group Other");
+        insertUser(owner); insertUser(other);
+        UUID provider = UUID.randomUUID(); UUID foreignProvider = UUID.randomUUID();
+        repository.createProvider(provider, owner, "p", "https://p", "k", NOW);
+        repository.createProvider(foreignProvider, other, "q", "https://q", "k", NOW);
+        UUID a = UUID.randomUUID(), b = UUID.randomUUID(), foreign = UUID.randomUUID();
+        repository.createEndpoint(a, owner, provider, "a", "a", Set.of(InferenceCapability.CHAT_COMPLETIONS), 0, 1, true, NOW);
+        repository.createEndpoint(b, owner, provider, "b", "b", Set.of(InferenceCapability.CHAT_COMPLETIONS), 0, 1, true, NOW);
+        repository.createEndpoint(foreign, other, foreignProvider, "f", "f", Set.of(InferenceCapability.CHAT_COMPLETIONS), 0, 1, true, NOW);
+        UUID groupId = UUID.randomUUID(); repository.createGroup(groupId, owner, "g", TaskType.CODE, List.of(a, b), NOW);
+        assertThat(repository.updateGroup(groupId, owner, "g2", TaskType.CODE, List.of(b, a), NOW.plusSeconds(1)).endpointIds()).containsExactly(b, a);
+        assertThatThrownBy(() -> repository.updateGroup(groupId, other, "x", TaskType.CODE, List.of(a), NOW)).isInstanceOf(JdbcModelConfigurationRepository.ModelConfigurationNotFoundException.class);
+        assertThatThrownBy(() -> repository.deleteGroup(groupId, other.userId())).isInstanceOf(JdbcModelConfigurationRepository.ModelConfigurationNotFoundException.class);
+        assertThatThrownBy(() -> repository.updateGroup(groupId, owner, "bad", TaskType.CODE, List.of(foreign), NOW.plusSeconds(2))).isInstanceOf(JdbcModelConfigurationRepository.ModelConfigurationNotFoundException.class);
+        assertThat(repository.findGroups(owner.userId()).getFirst().endpointIds()).containsExactly(b, a);
+        UUID missing = UUID.randomUUID();
+        assertThatThrownBy(() -> repository.updateGroup(groupId, owner, "bad", TaskType.CODE, List.of(missing), NOW.plusSeconds(2))).isInstanceOf(JdbcModelConfigurationRepository.ModelConfigurationNotFoundException.class);
+        assertThat(repository.findGroups(owner.userId()).getFirst().endpointIds()).containsExactly(b, a);
+    }
+
+    @Test
+    void rejectsReferencedEndpointDeleteAndGroupDeleteKeepsEndpointProvider() {
+        Actor owner = new Actor("delete-owner", "Delete Owner"); insertUser(owner);
+        UUID provider = UUID.randomUUID(), endpoint = UUID.randomUUID(), group = UUID.randomUUID();
+        repository.createProvider(provider, owner, "p", "https://p", "k", NOW);
+        repository.createEndpoint(endpoint, owner, provider, "e", "m", Set.of(InferenceCapability.CHAT_COMPLETIONS), 0, 1, true, NOW);
+        repository.createGroup(group, owner, "g", TaskType.CODE, List.of(endpoint), NOW);
+        assertThatThrownBy(() -> repository.deleteEndpoint(endpoint, owner.userId())).isInstanceOf(JdbcModelConfigurationRepository.ModelConfigurationConflictException.class)
+                .hasMessage("Endpoint 仍被模型组引用，请先从 Group 移除: " + endpoint);
+        repository.deleteGroup(group, owner.userId());
+        assertThat(repository.findGroups(owner.userId())).isEmpty();
+        assertThat(repository.findEndpoints(owner.userId())).extracting(ModelEndpointRecord::endpointId).contains(endpoint);
+        assertThat(repository.findProviders(owner.userId())).extracting(ModelProviderRecord::providerId).contains(provider);
     }
 
     private void insertUser(Actor actor) {

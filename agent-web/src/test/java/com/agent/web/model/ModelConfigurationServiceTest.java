@@ -140,6 +140,32 @@ class ModelConfigurationServiceTest {
         assertThatThrownBy(() -> service.updateGroup(UUID.randomUUID(), "g", TaskType.CODE, List.of(id, id))).hasMessageContaining("endpointIds 不能重复");
     }
 
+    @Test
+    void auditsProviderEndpointAndGroupMutationsWithoutSensitiveInput() {
+        FakeRepository repository = new FakeRepository();
+        ModelConfigurationService service = new ModelConfigurationService(repository, () -> ACTOR, Clock.fixed(NOW, ZoneOffset.UTC));
+        Logger logger = (Logger) LoggerFactory.getLogger("com.agent.audit.model-configuration");
+        ListAppender<ILoggingEvent> appender = new ListAppender<>(); appender.start(); logger.addAppender(appender);
+        try {
+            ModelProviderRecord provider = service.createProvider("provider-secret-name", "https://secret.example", "sk-secret");
+            ModelEndpointRecord endpoint = service.createEndpoint(provider.providerId(), "endpoint-secret-name", "model-secret", Set.of(InferenceCapability.CHAT_COMPLETIONS), 0, 1, true);
+            ModelGroupRecord group = service.createGroup("group-secret-name", TaskType.CODE, List.of(endpoint.endpointId()));
+            service.updateEndpoint(endpoint.endpointId(), "endpoint-updated", "model-updated", Set.of(InferenceCapability.STREAMING), 1, 2, false);
+            service.updateGroup(group.groupId(), "group-updated", TaskType.CODE, List.of(endpoint.endpointId()));
+            service.deleteEndpoint(endpoint.endpointId()); service.deleteGroup(group.groupId());
+            assertThat(appender.list).hasSize(7);
+            for (ILoggingEvent event : appender.list) {
+                String message = event.getFormattedMessage();
+                assertThat(message).contains("userId=model-user", "resourceId=");
+                assertThat(message).doesNotContain("sk-secret", "secret.example", "model-secret", "endpoint-secret-name", "group-secret-name");
+            }
+            assertThat(appender.list).extracting(event -> event.getFormattedMessage())
+                    .anyMatch(message -> message.contains("resourceType=PROVIDER") && message.contains("action=CREATE"))
+                    .anyMatch(message -> message.contains("resourceType=ENDPOINT") && message.contains("action=UPDATE"))
+                    .anyMatch(message -> message.contains("resourceType=GROUP") && message.contains("action=DELETE"));
+        } finally { logger.detachAppender(appender); appender.stop(); }
+    }
+
     private static final class FakeRepository implements ModelConfigurationRepository {
         private String ownerId;
         private String chatCompletionsPath;
@@ -174,8 +200,8 @@ class ModelConfigurationServiceTest {
             return new ModelProviderRecord(providerId, actor.userId(), displayName, baseUrl,
                     chatCompletionsPath, ModelConfigurationService.maskApiKey(apiKey == null ? "sk-existing" : apiKey), now, now);
         }
-        @Override public ModelEndpointRecord createEndpoint(UUID id, Actor actor, UUID providerId, String displayName, String modelId, Set<InferenceCapability> capabilities, int priority, int weight, boolean enabled, Instant now) { throw new UnsupportedOperationException(); }
-        @Override public ModelGroupRecord createGroup(UUID id, Actor actor, String displayName, TaskType taskType, List<UUID> endpointIds, Instant now) { throw new UnsupportedOperationException(); }
+        @Override public ModelEndpointRecord createEndpoint(UUID id, Actor actor, UUID providerId, String displayName, String modelId, Set<InferenceCapability> capabilities, int priority, int weight, boolean enabled, Instant now) { return new ModelEndpointRecord(id, providerId, displayName, modelId, capabilities, priority, weight, enabled, now, now); }
+        @Override public ModelGroupRecord createGroup(UUID id, Actor actor, String displayName, TaskType taskType, List<UUID> endpointIds, Instant now) { return new ModelGroupRecord(id, actor.userId(), displayName, taskType, endpointIds, now, now); }
         @Override public ModelEndpointRecord updateEndpoint(UUID id, Actor actor, String n, String m, Set<InferenceCapability> c, int p, int w, boolean e, Instant now) { updatedEndpointActor = actor; return new ModelEndpointRecord(id, UUID.randomUUID(), n, m, c, p, w, e, now, now); }
         @Override public ModelGroupRecord updateGroup(UUID id, Actor actor, String n, TaskType t, List<UUID> endpoints, Instant now) { updatedGroupActor = actor; return new ModelGroupRecord(id, actor.userId(), n, t, endpoints, now, now); }
         @Override public void deleteEndpoint(UUID id, String userId) { deletedEndpointUser = userId; }

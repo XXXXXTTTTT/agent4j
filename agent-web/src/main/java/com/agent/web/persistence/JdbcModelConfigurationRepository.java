@@ -259,7 +259,7 @@ public final class JdbcModelConfigurationRepository implements ModelConfiguratio
             requireOwnedEndpoint(endpointId, userId);
             long references = jdbc.sql("select count(*) from agent_model_group_endpoints where endpoint_id = :endpointId")
                     .param("endpointId", endpointId).query(Long.class).single();
-            if (references != 0) throw new ModelConfigurationConflictException("Endpoint 仍被 Group 引用，请先从 Group 移除: " + endpointId);
+            if (references != 0) throw new ModelConfigurationConflictException("Endpoint 仍被模型组引用，请先从 Group 移除: " + endpointId);
             jdbc.sql("delete from agent_model_endpoints where endpoint_id = :endpointId").param("endpointId", endpointId).update();
         });
     }
