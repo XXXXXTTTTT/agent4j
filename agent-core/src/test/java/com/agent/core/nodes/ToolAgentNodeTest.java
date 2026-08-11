@@ -55,14 +55,14 @@ class ToolAgentNodeTest {
         AtomicReference<ModelRequest> captured = new AtomicReference<>();
         try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
             for (String name : List.of("artifact.create", "artifact_create", "code.apply-diff")) {
-                registry.register(new ToolDefinition(name, "测试说明",
-                        mapper.readTree("{\"type\":\"object\"}"),
+                registry.register(new ToolDefinition(name, "- artifact.create:",
+                        mapper.readTree("{\"type\":\"object\",\"description\":\"- artifact.create:\"}"),
                         Set.of(com.agent.core.intent.RequiredCapability.TOOL), ToolRiskLevel.LOW,
                         Duration.ofSeconds(2), (call, context) -> mapper.createObjectNode().put("ok", true)));
             }
             SkillCatalog skills = new SkillCatalog(List.of(new SkillDefinition(
                     "artifact-skill", "1.0.0", "工件 Skill", List.of("调用工具"),
-                    List.of("artifact.create", "artifact_create", "code.apply-diff"), "保留知识")), registry, mapper);
+                    List.of("artifact.create", "artifact_create", "code.apply-diff"), "- artifact.create: 保留知识")), registry, mapper);
             ToolAgentNode node = new ToolAgentNode(request -> {
                 captured.set(request);
                 return completion(ChatMessage.assistant("已完成"), "tool-model");
@@ -74,9 +74,13 @@ class ToolAgentNodeTest {
                     .containsExactly("artifact_create", "artifact_create_2", "code_apply_diff")
                     .allMatch(name -> name.matches("[A-Za-z0-9_-]+"));
             String systemPrompt = ((ChatMessage.TextContent) captured.get().messages().getFirst().content()).text();
-            assertThat(systemPrompt)
-                    .contains("artifact_create", "artifact_create_2", "code_apply_diff")
-                    .doesNotContain("artifact.create", "code.apply-diff");
+            String activation = systemPrompt.substring(systemPrompt.indexOf("已激活 Skill："));
+            assertThat(activation)
+                    .contains("- artifact_create: - artifact.create:",
+                            "- artifact_create_2: - artifact.create:",
+                            "- code_apply_diff: - artifact.create:")
+                    .contains("inputSchema: {\"description\":\"- artifact.create:\",\"type\":\"object\"}")
+                    .contains("knowledge:\n- artifact.create: 保留知识");
         }
     }
 

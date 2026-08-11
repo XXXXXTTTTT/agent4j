@@ -282,14 +282,38 @@ public final class ToolAgentNode implements Node {
             SkillPromptContext skills,
             Map<String, String> protocolToRegistryName) {
         String section = skills.activationSection();
-        for (var skill : skills.activatedSkills()) {
-            for (SkillToolMetadata tool : skill.tools()) {
-                String original = "- " + tool.name() + ":";
-                String normalized = "- " + protocolName(tool.name(), protocolToRegistryName) + ":";
-                section = section.replace(original, normalized);
+        String[] lines = section.split("\\n", -1);
+        boolean inTools = false;
+        for (int index = 0; index < lines.length; index++) {
+            String line = lines[index];
+            if (line.equals("tools:")) {
+                inTools = true;
+                continue;
+            }
+            if (line.equals("knowledge:")) {
+                inTools = false;
+                continue;
+            }
+            if (!inTools) {
+                continue;
+            }
+            boolean replaced = false;
+            for (var skill : skills.activatedSkills()) {
+                for (SkillToolMetadata tool : skill.tools()) {
+                    String original = "- " + tool.name() + ":";
+                    if (line.startsWith(original)) {
+                        lines[index] = "- " + protocolName(tool.name(), protocolToRegistryName)
+                                + ":" + line.substring(original.length());
+                        replaced = true;
+                        break;
+                    }
+                }
+                if (replaced) {
+                    break;
+                }
             }
         }
-        return section;
+        return String.join("\n", lines);
     }
 
     private Map<String, String> toolNameMapping(List<ToolDefinition> definitions) {
