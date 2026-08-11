@@ -4,6 +4,7 @@ import com.agent.core.llm.InferenceCapability;
 import com.agent.core.llm.LlmClient;
 import com.agent.core.llm.ModelRouter;
 import com.agent.core.llm.TaskType;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -14,6 +15,28 @@ import static org.mockito.Mockito.mock;
 
 /** 验证 Web 配置把端点能力和预算映射到 Core 契约。 */
 class ModelGatewayConfigurationTest {
+
+    @Test
+    void createsCircuitBreakerConfigFromExactProperties() {
+        ModelCircuitBreakerProperties properties =
+                new ModelCircuitBreakerProperties(
+                        73.0f,
+                        4,
+                        6,
+                        Duration.ofSeconds(17),
+                        2);
+
+        CircuitBreakerConfig config =
+                ModelGatewayConfiguration.circuitBreakerConfig(properties);
+
+        assertThat(config.getFailureRateThreshold()).isEqualTo(73.0f);
+        assertThat(config.getMinimumNumberOfCalls()).isEqualTo(4);
+        assertThat(config.getSlidingWindowSize()).isEqualTo(6);
+        assertThat(config.getWaitIntervalFunctionInOpenState().apply(1))
+                .isEqualTo(Duration.ofSeconds(17).toMillis());
+        assertThat(config.getPermittedNumberOfCallsInHalfOpenState())
+                .isEqualTo(2);
+    }
 
     @Test
     void resolvesConfiguredV1PathOnlyOnceWhenBaseUrlAlreadyContainsV1() {
@@ -59,7 +82,11 @@ class ModelGatewayConfigurationTest {
                 Set.of(InferenceCapability.CHAT_COMPLETIONS));
 
         ModelRouter router = new ModelGatewayConfiguration()
-                .modelRouter(properties, mock(LlmClient.class));
+                .modelRouter(
+                        properties,
+                        new ModelCircuitBreakerProperties(
+                                null, null, null, null, null),
+                        mock(LlmClient.class));
 
         assertThat(router.serviceContracts().get(TaskType.CODE).getFirst().capabilities())
                 .containsExactlyInAnyOrder(

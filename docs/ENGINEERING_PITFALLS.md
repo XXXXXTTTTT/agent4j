@@ -209,7 +209,34 @@ API 抛错都会绕过普通清理逻辑，留下容器和工作区挂载。
 `returnsActualNonZeroExitCode`、`stopsAndRemovesContainerAtTimeout`，以及每个测试后的容器
 标签清理断言。
 
-### 2.10 Coder -> Ops 不能吞工具异常
+### 2.10 Windows Docker bind 路径不能经过 HostConfig.Binds 反序列化
+
+**【问题现象】** 真实项目导入修复 EDD 中，Planner、Coder、Reviewer 均实际调用模型并返回
+HTTP 200，Coder 也成功生成并应用两次修改，但 Ops 在读取源容器工作区时失败：
+`Error parsing Bind 'D:/agent4j:/agent-workspace:rw'`。因此流程失败点不是模型路由、代码补丁
+或 Maven fixture，而是 Windows 主机路径包含盘符冒号。
+
+**【根因分析】** `dockerClient.inspectContainerCmd(...).exec()` 会把完整 Inspect 响应映射到
+`InspectContainerResponse`，其中 `HostConfig.Binds` 仍按 Unix 风格冒号分隔规则解析
+`D:/agent4j:/agent-workspace:rw`，在 docker-java 3.7.1 上抛出反序列化异常。Ops 实际只需要
+根响应中的 `Mounts` 数组，却被迫经过无关的 `HostConfig.Binds` 字段。
+
+**【解决方案/代码级实现】** `DockerCommandExecutor` 保存构造时的 `DockerHttpClient`，对源容器
+直接发送 `GET /containers/{containerName}/json`，读取原始 JSON 后只解析 `Mounts`，精确映射
+`Destination`、`Source`、`Name`、`RW` 四个字段，再交给原有的唯一、可读写、bind 类型校验。
+非 200 响应和 JSON 解析错误都转换为带上下文的沙箱异常；Docker 客户端仍负责容器创建、启动、
+日志和删除，关闭时沿用 `DockerClientImpl.close()` 的传输层生命周期。
+
+**【验证结果】** `DockerCommandExecutorTest.parsesWindowsDriveBindFromInspectJsonWithoutHostConfigBinds`
+先以缺失 `parseMounts` 的编译失败作为 RED，再以 GREEN 通过；完整
+`DockerCommandExecutorTest` 在真实 Docker Engine 上 8/8 通过。真实 EDD 的模型请求证据为
+`planner/coder/reviewer: gpt-5.4-mini HTTP 200`；修复后的真实 Run
+`29f20c66-1d9b-4c86-be2c-f98d2f19f586` 已验证 Ops `exitCode=0`、`timedOut=false`、Reviewer
+批准以及完整 `planner -> coder -> ops -> reviewer` Trace。连续对话 Run
+`aa47228c-e6e3-4394-88e6-2cdd4eeaaa72` 与
+`b7a19424-0acd-4ed0-9e10-a6031caa92b1` 也均以 `COMPLETED` 结束。
+
+### 2.11 Coder -> Ops 不能吞工具异常
 
 **【问题现象】** 如果补丁冲突或命令 Future 异常只变成一个短错误消息，后续 Agent 无法
 判断失败层级，也无法形成可靠修复循环。
@@ -2885,3 +2912,35 @@ Run ID。readiness 字节使用 UTF-8 显式解码；REST 数组直接赋值并�
 - 第二轮回答精确包含“新余高新区”和“电瓶车”，五个 ID 均存在于 `agent4j-current.log`。
 
 这条门禁直接调用已配置模型，不以 mock、HTTP 200 或日志中出现模型名替代真实连续对话结果。
+
+## 2026-08-11 模型端点熔断默认值与真实延迟
+
+### 【现象】主模型连续 500 仍在每轮先被请求
+
+真实两轮会话 EDD 的审计日志显示，\`gpt-5.6-luna\` 每次返回 HTTP 500 后都继续参与下一轮
+Planner 请求，随后才由 \`gpt-5.4-mini\` 返回 HTTP 200。第二轮耗时达到 11680ms，fallback
+虽然可用，但没有消除主端点的失败等待。
+
+### 【根因】Resilience4j 默认最小调用数不适合 Agent 低频端点
+
+`ModelGatewayConfiguration.modelRouter()` 使用 `CircuitBreakerConfig.ofDefaults()`。
+Resilience4j 2.4.0 的精确默认值为 `minimumNumberOfCalls=100`、
+`slidingWindowSize=100`、`failureRateThreshold=50`、OPEN 等待 60 秒。单轮只有 1-2
+次同端点请求，连续 HTTP 500 永远难以达到 100 次调用门槛，因此生产熔断器没有及时进入 OPEN。
+Core `ModelRouter` 本身已正确跳过 OPEN 端点，问题位于 Web 生产装配参数。
+
+### 【修复】按 Agent 工作负载绑定强类型熔断配置
+
+新增 `agent.llm.circuit-breaker` 配置记录，默认 `failure-rate-threshold=100`、
+`minimum-number-of-calls=2`、`sliding-window-size=2`、
+`wait-duration-in-open-state=30s`、`permitted-number-of-calls-in-half-open-state=1`。
+同一 TaskType 的每个端点仍使用独立 CircuitBreaker；连续两次失败后 OPEN 期间不发主端点
+HTTP 请求，30 秒后只允许一次探测。配置通过 `AGENT_LLM_CIRCUIT_BREAKER_*` 环境变量覆盖，
+非法窗口和计数在启动绑定阶段直接失败。
+
+### 【证据门禁】
+
+先用 `ModelRouterTest.opensCircuitAfterTwoFailuresAndSkipsPrimaryOnThirdCall` 验证两次 HTTP
+失败后第三次调用不触达主端点，再用本地 Compose 执行真实多轮 EDD。日志审计只记录端点、
+模型、HTTP 状态和耗时，不记录 API Key 或消息正文；验收必须同时看到前两次主端点 500、
+后续 OPEN 跳过和 fallback 成功，不能用 mock 200 代替真实模型证据。

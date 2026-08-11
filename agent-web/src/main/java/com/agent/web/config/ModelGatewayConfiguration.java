@@ -34,7 +34,10 @@ import java.net.URISyntaxException;
 /** 将环境配置适配为 Core 使用的构造器注入模型路由。 */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(name = "agent.llm.enabled", havingValue = "true")
-@EnableConfigurationProperties(ModelGatewayProperties.class)
+@EnableConfigurationProperties({
+        ModelGatewayProperties.class,
+        ModelCircuitBreakerProperties.class
+})
 public class ModelGatewayConfiguration {
 
     /** 创建带有界连接和读取超时的 Apache HTTP 客户端。 */
@@ -137,9 +140,11 @@ public class ModelGatewayConfiguration {
     @Bean
     ModelRouter modelRouter(
             ModelGatewayProperties properties,
+            ModelCircuitBreakerProperties circuitBreakerProperties,
             LlmClient client) {
         properties.validate();
-        CircuitBreakerConfig breakerConfig = CircuitBreakerConfig.ofDefaults();
+        CircuitBreakerConfig breakerConfig =
+                circuitBreakerConfig(circuitBreakerProperties);
         InferenceBudget budget = new InferenceBudget(
                 properties.maxConcurrentRequests(),
                 properties.maxRequestsPerMinute(),
@@ -161,6 +166,19 @@ public class ModelGatewayConfiguration {
                 endpoint("quick-fallback", properties.fallbackModel(), client, breakerConfig,
                         properties.fallbackCapabilities(), budget)));
         return new ModelRouter(Map.copyOf(routes));
+    }
+
+    /** 将强类型环境配置转换为每个端点复用的熔断器配置。 */
+    static CircuitBreakerConfig circuitBreakerConfig(
+            ModelCircuitBreakerProperties properties) {
+        return CircuitBreakerConfig.custom()
+                .failureRateThreshold(properties.failureRateThreshold())
+                .minimumNumberOfCalls(properties.minimumNumberOfCalls())
+                .slidingWindowSize(properties.slidingWindowSize())
+                .waitDurationInOpenState(properties.waitDurationInOpenState())
+                .permittedNumberOfCallsInHalfOpenState(
+                        properties.permittedNumberOfCallsInHalfOpenState())
+                .build();
     }
 
     private static ModelEndpoint endpoint(

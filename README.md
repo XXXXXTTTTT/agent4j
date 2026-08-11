@@ -98,11 +98,18 @@ AGENT_LLM_CODE_CAPABILITIES=CHAT_COMPLETIONS,STREAMING,TOOL_CALLING
 AGENT_LLM_VISION_CAPABILITIES=CHAT_COMPLETIONS,STREAMING,VISION_INPUT
 AGENT_LLM_QUICK_CLASSIFICATION_CAPABILITIES=CHAT_COMPLETIONS,STREAMING
 AGENT_LLM_FALLBACK_CAPABILITIES=CHAT_COMPLETIONS
+AGENT_LLM_CIRCUIT_BREAKER_FAILURE_RATE_THRESHOLD=100
+AGENT_LLM_CIRCUIT_BREAKER_MINIMUM_NUMBER_OF_CALLS=2
+AGENT_LLM_CIRCUIT_BREAKER_SLIDING_WINDOW_SIZE=2
+AGENT_LLM_CIRCUIT_BREAKER_WAIT_DURATION_IN_OPEN_STATE=30s
+AGENT_LLM_CIRCUIT_BREAKER_PERMITTED_NUMBER_OF_CALLS_IN_HALF_OPEN_STATE=1
 ```
 
 应用启动时会严格校验 endpoint、API Key、路径和四个模型名；缺少任一配置会快速失败。`.env` 已被 `.gitignore` 排除，禁止提交真实密钥。
 
 能力声明不会根据模型名称推断。模型端点在请求前按 `CHAT_COMPLETIONS`、`STREAMING`、`TOOL_CALLING` 和 `VISION_INPUT` 做强类型准入；并发、每分钟请求数和排队时限也是端点级预算。流式调用会记录 TTFT、chunk 数和消费者背压耗时。
+
+每个模型端点都有独立熔断器。默认连续两次失败后进入 OPEN，OPEN 期间不再发送主端点 HTTP 请求并直接使用 fallback；30 秒后只允许一次 HALF_OPEN 探测。可通过上述 `AGENT_LLM_CIRCUIT_BREAKER_*` 变量调整阈值、窗口和探测策略。
 
 ### PostgreSQL 连接
 
@@ -287,7 +294,7 @@ restore the same project and conversation.
 | --- | --- | --- |
 | Database | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | Compose-local values |
 | Demo graph | `AGENT_SAMPLE_ENABLED` | `true` |
-| Model gateway | `AGENT_LLM_ENABLED`, `AGENT_LLM_BASE_URL`, `AGENT_LLM_API_KEY`, `AGENT_LLM_*_MODEL`, `AGENT_LLM_*_CAPABILITIES`, `AGENT_LLM_MAX_CONCURRENT_REQUESTS`, `AGENT_LLM_MAX_REQUESTS_PER_MINUTE`, `AGENT_LLM_QUEUE_TIMEOUT` | disabled |
+| Model gateway | `AGENT_LLM_ENABLED`, `AGENT_LLM_BASE_URL`, `AGENT_LLM_API_KEY`, `AGENT_LLM_*_MODEL`, `AGENT_LLM_*_CAPABILITIES`, `AGENT_LLM_MAX_CONCURRENT_REQUESTS`, `AGENT_LLM_MAX_REQUESTS_PER_MINUTE`, `AGENT_LLM_QUEUE_TIMEOUT`, `AGENT_LLM_CIRCUIT_BREAKER_*` | disabled |
 | Observability | `AGENT_OBSERVABILITY_ENABLED`, `AGENT_OBSERVABILITY_OTLP_TRACES_ENDPOINT`, `AGENT_OBSERVABILITY_AUTHORIZATION` | disabled |
 
 The model layer remains framework-independent: `ModelRouter` accepts endpoint chains through constructor injection, while `agent-web` supplies an optional environment-backed adapter. Each endpoint exposes a portable OpenAI-compatible service contract and independent admission budget. This keeps `agent-core` testable and makes the Docker deployment configurable without hard-coding vendor credentials.

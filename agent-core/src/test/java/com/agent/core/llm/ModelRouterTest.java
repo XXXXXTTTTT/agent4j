@@ -13,6 +13,7 @@ import com.agent.core.observability.ModelUsage;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -96,6 +97,53 @@ class ModelRouterTest {
                 "vision-fallback-model",
                 "fallback-result");
         assertThat(primary.circuitBreaker().getMetrics().getNumberOfFailedCalls()).isEqualTo(1);
+    }
+
+    @Test
+    void opensCircuitAfterTwoFailuresAndSkipsPrimaryOnThirdCall() {
+        EndpointFixture code = endpoint("code-primary", "code-model");
+        EndpointFixture primary = endpointWithCircuitBreaker(
+                "vision-primary",
+                "vision-primary-model",
+                CircuitBreakerConfig.custom()
+                        .failureRateThreshold(100.0f)
+                        .minimumNumberOfCalls(2)
+                        .slidingWindowSize(2)
+                        .waitDurationInOpenState(Duration.ofSeconds(30))
+                        .permittedNumberOfCallsInHalfOpenState(1)
+                        .build());
+        EndpointFixture fallback = endpoint("vision-fallback", "vision-fallback-model");
+        EndpointFixture classification = endpoint("classification-primary", "quick-model");
+        expectBadGateway(primary);
+        expectBadGateway(primary);
+        expectSuccess(fallback, "fallback-result-1");
+        expectSuccess(fallback, "fallback-result-2");
+        expectSuccess(fallback, "fallback-result-3");
+        ModelRouter router = router(
+                code.endpoint(),
+                List.of(primary.endpoint(), fallback.endpoint()),
+                classification.endpoint());
+
+        assertRoutedTo(
+                router.complete(TaskType.VISION, request()),
+                "vision-fallback",
+                "vision-fallback-model",
+                "fallback-result-1");
+        assertRoutedTo(
+                router.complete(TaskType.VISION, request()),
+                "vision-fallback",
+                "vision-fallback-model",
+                "fallback-result-2");
+        assertRoutedTo(
+                router.complete(TaskType.VISION, request()),
+                "vision-fallback",
+                "vision-fallback-model",
+                "fallback-result-3");
+
+        assertThat(primary.circuitBreaker().getState())
+                .isEqualTo(CircuitBreaker.State.OPEN);
+        assertThat(primary.circuitBreaker().getMetrics().getNumberOfFailedCalls())
+                .isEqualTo(2);
     }
 
     @Test
@@ -525,6 +573,18 @@ class ModelRouterTest {
                 InferenceAdmissionController.unlimited());
     }
 
+    private EndpointFixture endpointWithCircuitBreaker(
+            String name,
+            String model,
+            CircuitBreakerConfig breakerConfig) {
+        return endpoint(
+                name,
+                model,
+                InferenceServiceContract.allCapabilities(),
+                InferenceAdmissionController.unlimited(),
+                breakerConfig);
+    }
+
     private EndpointFixture endpoint(
             String name,
             String model,
@@ -541,14 +601,29 @@ class ModelRouterTest {
             String model,
             Set<InferenceCapability> capabilities,
             InferenceAdmissionController admissionController) {
+        return endpoint(
+                name,
+                model,
+                capabilities,
+                admissionController,
+                CircuitBreakerConfig.ofDefaults());
+    }
+
+    private EndpointFixture endpoint(
+            String name,
+            String model,
+            Set<InferenceCapability> capabilities,
+            InferenceAdmissionController admissionController,
+            CircuitBreakerConfig breakerConfig) {
         endpointSequence++;
         String baseUrl = "https://endpoint-" + endpointSequence + ".test";
         RestClient.Builder builder = RestClient.builder().baseUrl(baseUrl);
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
         LlmClient client = new LlmClient(
                 builder.build(), objectMapper, CHAT_COMPLETIONS_PATH);
-        CircuitBreaker circuitBreaker = CircuitBreaker.ofDefaults(
-                name + "-" + endpointSequence);
+        CircuitBreaker circuitBreaker = CircuitBreaker.of(
+                name + "-" + endpointSequence,
+                breakerConfig);
         clients.add(client);
         servers.add(server);
         return new EndpointFixture(
