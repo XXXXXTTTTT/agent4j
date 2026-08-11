@@ -20,6 +20,9 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 class DynamicModelGroupRouteResolverTest {
     private final LlmClient client = new LlmClient(
@@ -102,6 +105,52 @@ class DynamicModelGroupRouteResolverTest {
                 .extracting("model").containsExactly("model-a", "model-b");
         assertThat(resolver.resolveForUser("user-a", groupId.toString(), TaskType.CODE))
                 .extracting("model").containsExactly("model-b", "model-a");
+    }
+
+    @Test
+    void replacesCachedClientWhenRuntimeConfigurationChangesExactly() {
+        UUID groupId = UUID.randomUUID();
+        UUID endpointId = UUID.randomUUID();
+        UUID providerId = UUID.randomUUID();
+        FakeRepository repository = new FakeRepository(new ModelConfigurationSnapshot(
+                List.of(),
+                List.of(new ModelEndpointRecord(endpointId, providerId, "端点", "model-a",
+                        Set.of(InferenceCapability.CHAT_COMPLETIONS), 1, 1, true, Instant.EPOCH, Instant.EPOCH)),
+                List.of(new ModelGroupRecord(groupId, "user-a", "代码组", TaskType.CODE,
+                        List.of(endpointId), Instant.EPOCH, Instant.EPOCH))));
+        LlmClient first = mock(LlmClient.class);
+        LlmClient second = mock(LlmClient.class);
+        LlmClient third = mock(LlmClient.class);
+        LlmClient fourth = mock(LlmClient.class);
+        List<LlmClient> created = new java.util.ArrayList<>(List.of(first, second, third, fourth));
+        DynamicModelGroupRouteResolver resolver = new DynamicModelGroupRouteResolver(
+                repository, ignored -> created.removeFirst());
+
+        repository.providers.put(providerId, runtime(providerId, "https://gateway.test", "/v1/chat", "Aa"));
+        assertThat(resolver.resolveForUser("user-a", groupId.toString(), TaskType.CODE))
+                .singleElement().extracting(com.agent.core.llm.ModelEndpoint::client).isSameAs(first);
+
+        repository.providers.put(providerId, runtime(providerId, "https://gateway.test", "/v1/chat", "BB"));
+        assertThat(resolver.resolveForUser("user-a", groupId.toString(), TaskType.CODE))
+                .singleElement().extracting(com.agent.core.llm.ModelEndpoint::client).isSameAs(second);
+        verify(first, times(1)).close();
+
+        repository.providers.put(providerId, runtime(providerId, "https://new-gateway.test", "/v1/chat", "BB"));
+        assertThat(resolver.resolveForUser("user-a", groupId.toString(), TaskType.CODE))
+                .singleElement().extracting(com.agent.core.llm.ModelEndpoint::client).isSameAs(third);
+        verify(second, times(1)).close();
+
+        repository.providers.put(providerId, runtime(providerId, "https://new-gateway.test", "/custom/chat", "BB"));
+        assertThat(resolver.resolveForUser("user-a", groupId.toString(), TaskType.CODE))
+                .singleElement().extracting(com.agent.core.llm.ModelEndpoint::client).isSameAs(fourth);
+        verify(third, times(1)).close();
+
+        resolver.close();
+        verify(fourth, times(1)).close();
+    }
+
+    private ModelProviderRuntime runtime(UUID providerId, String baseUrl, String path, String apiKey) {
+        return new ModelProviderRuntime(providerId, "user-a", baseUrl, path, apiKey);
     }
 
     private static final class FakeRepository implements ModelConfigurationRepository {
