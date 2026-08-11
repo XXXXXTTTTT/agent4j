@@ -257,10 +257,13 @@ public final class JdbcModelConfigurationRepository implements ModelConfiguratio
     public void deleteEndpoint(UUID endpointId, String userId) {
         transactions.executeWithoutResult(status -> {
             requireOwnedEndpoint(endpointId, userId);
+            jdbc.sql("select endpoint_id from agent_model_endpoints where endpoint_id = :endpointId for update")
+                    .param("endpointId", endpointId).query(UUID.class).single();
             long references = jdbc.sql("select count(*) from agent_model_group_endpoints where endpoint_id = :endpointId")
                     .param("endpointId", endpointId).query(Long.class).single();
             if (references != 0) throw new ModelConfigurationConflictException("Endpoint 仍被模型组引用，请先从 Group 移除: " + endpointId);
-            jdbc.sql("delete from agent_model_endpoints where endpoint_id = :endpointId").param("endpointId", endpointId).update();
+            jdbc.sql("delete from agent_model_endpoints where endpoint_id = :endpointId and provider_id in (select provider_id from agent_model_providers where owner_user_id = :userId)")
+                    .param("endpointId", endpointId).param("userId", userId).update();
         });
     }
 

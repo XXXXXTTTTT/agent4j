@@ -14,6 +14,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -138,6 +139,8 @@ class ModelConfigurationServiceTest {
         assertThatThrownBy(() -> service.updateEndpoint(id, "n", "m", Set.of(InferenceCapability.CHAT_COMPLETIONS), 0, 0, true)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> service.updateGroup(UUID.randomUUID(), "g", TaskType.CODE, List.of())).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> service.updateGroup(UUID.randomUUID(), "g", TaskType.CODE, List.of(id, id))).hasMessageContaining("endpointIds 不能重复");
+        assertThatThrownBy(() -> service.updateGroup(UUID.randomUUID(), "g", TaskType.CODE, Arrays.asList((UUID) null)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("endpointIds 不能包含 null");
     }
 
     @Test

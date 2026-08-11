@@ -186,6 +186,7 @@ public final class ModelConfigurationService {
 
     private static void validateEndpointIds(List<UUID> endpointIds) {
         if (endpointIds == null || endpointIds.isEmpty()) throw new IllegalArgumentException("endpointIds 不能为空");
+        if (endpointIds.stream().anyMatch(Objects::isNull)) throw new IllegalArgumentException("endpointIds 不能包含 null");
         if (endpointIds.stream().distinct().count() != endpointIds.size()) throw new IllegalArgumentException("endpointIds 不能重复");
     }
 
