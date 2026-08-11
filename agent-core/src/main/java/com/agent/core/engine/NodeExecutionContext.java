@@ -46,6 +46,11 @@ public record NodeExecutionContext(UUID runId, String nodeName) {
         return Optional.ofNullable(CURRENT.get());
     }
 
+    /** 返回当前节点绑定的不可变 AgentState。上下文外返回空。 */
+    public static Optional<AgentState> currentState() {
+        return Optional.ofNullable(STATE.get());
+    }
+
     /** 发布当前节点的过程摘要；没有图监听器时安全丢弃。 */
     public static void progress(String summary) {
         if (summary == null || summary.isBlank()) {

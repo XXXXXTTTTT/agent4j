@@ -1,6 +1,7 @@
 package com.agent.web.controller;
 
 import com.agent.web.conversation.ConversationService;
+import com.agent.web.conversation.ConversationTurnRecord;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.beans.factory.ObjectProvider;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -45,14 +47,22 @@ public final class ConversationController {
     public ResponseEntity<ConversationTurnView> submit(
             @PathVariable UUID conversationId,
             @Valid @RequestBody SubmitConversationTurnRequest request) {
+        ConversationTurnRecord turn = request.modelGroupId() == null
+                ? service().submitTurn(conversationId, request.content(), request.reviewerUrl())
+                : service().submitTurn(conversationId, request.content(), request.reviewerUrl(),
+                        request.modelGroupId());
         return ResponseEntity.accepted().body(ConversationTurnView.from(
-                service().submitTurn(
-                        conversationId, request.content(), request.reviewerUrl())));
+                turn));
     }
 
     @PostMapping("/{conversationId}/archive")
     public ConversationView archive(@PathVariable UUID conversationId) {
         return ConversationView.from(service().archive(conversationId));
+    }
+
+    @DeleteMapping("/{conversationId}")
+    public ConversationView delete(@PathVariable UUID conversationId) {
+        return ConversationView.from(service().delete(conversationId));
     }
 
     private ConversationService service() {

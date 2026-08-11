@@ -10,6 +10,9 @@ import com.agent.core.conversation.ConversationContextProvider;
 import com.agent.web.log.InMemoryRunLogEventBus;
 import com.agent.web.persistence.JdbcCheckpointer;
 import com.agent.web.persistence.JdbcConversationRepository;
+import com.agent.web.persistence.JdbcModelConfigurationRepository;
+import com.agent.web.model.ModelConfigurationRepository;
+import com.agent.web.model.ModelConfigurationService;
 import com.agent.web.conversation.ConversationRunProjector;
 import com.agent.web.conversation.ConversationService;
 import com.agent.web.conversation.JdbcConversationContextProvider;
@@ -88,6 +91,26 @@ public class HarnessConfiguration {
                 jdbcClient,
                 new TransactionTemplate(transactionManager),
                 harnessClock);
+    }
+
+    /** 创建用户模型池配置仓储。 */
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    ModelConfigurationRepository modelConfigurationRepository(
+            JdbcClient jdbcClient,
+            PlatformTransactionManager transactionManager) {
+        return new JdbcModelConfigurationRepository(
+                jdbcClient, new TransactionTemplate(transactionManager));
+    }
+
+    /** 创建用户模型池配置服务。 */
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    ModelConfigurationService modelConfigurationService(
+            ModelConfigurationRepository repository,
+            ActorResolver actorResolver,
+            Clock harnessClock) {
+        return new ModelConfigurationService(repository, actorResolver, harnessClock);
     }
 
     /** 将 PostgreSQL 完成轮次组装为核心短期上下文。 */

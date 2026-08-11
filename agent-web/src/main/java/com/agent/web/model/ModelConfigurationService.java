@@ -1,0 +1,99 @@
+package com.agent.web.model;
+
+import com.agent.core.llm.InferenceCapability;
+import com.agent.core.llm.TaskType;
+import com.agent.web.identity.Actor;
+import com.agent.web.identity.ActorResolver;
+
+import java.net.URI;
+import java.time.Clock;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+
+/** 用户隔离的模型 Provider、端点和模型组应用服务。 */
+public final class ModelConfigurationService {
+    private final ModelConfigurationRepository repository;
+    private final ActorResolver actorResolver;
+    private final Clock clock;
+
+    public ModelConfigurationService(ModelConfigurationRepository repository,
+                                     ActorResolver actorResolver, Clock clock) {
+        this.repository = Objects.requireNonNull(repository, "repository 不能为空");
+        this.actorResolver = Objects.requireNonNull(actorResolver, "actorResolver 不能为空");
+        this.clock = Objects.requireNonNull(clock, "clock 不能为空");
+    }
+
+    public ModelConfigurationSnapshot snapshot() {
+        String userId = actorResolver.current().userId();
+        return new ModelConfigurationSnapshot(
+                repository.findProviders(userId),
+                repository.findEndpoints(userId),
+                repository.findGroups(userId));
+    }
+
+    public ModelProviderRecord createProvider(String displayName, String baseUrl, String apiKey) {
+        requireText(displayName, "displayName");
+        requireText(apiKey, "apiKey");
+        URI uri;
+        try {
+            uri = URI.create(Objects.requireNonNull(baseUrl, "baseUrl 不能为空").trim());
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException("baseUrl 必须是有效 URI", exception);
+        }
+        if (!uri.isAbsolute() || !("http".equalsIgnoreCase(uri.getScheme())
+                || "https".equalsIgnoreCase(uri.getScheme()))) {
+            throw new IllegalArgumentException("baseUrl 必须是 HTTP/HTTPS URI");
+        }
+        Actor actor = actorResolver.current();
+        return repository.createProvider(UUID.randomUUID(), actor, displayName.trim(),
+                uri.toString(), apiKey.trim(), clock.instant());
+    }
+
+    public ModelEndpointRecord createEndpoint(UUID providerId, String displayName, String modelId,
+                                              Set<InferenceCapability> capabilities,
+                                              int priority, int weight, boolean enabled) {
+        Objects.requireNonNull(providerId, "providerId 不能为空");
+        requireText(displayName, "displayName");
+        requireText(modelId, "modelId");
+        if (capabilities == null || capabilities.isEmpty()) {
+            throw new IllegalArgumentException("capabilities 不能为空");
+        }
+        if (priority < 0 || weight <= 0) {
+            throw new IllegalArgumentException("priority 必须大于等于 0，weight 必须大于 0");
+        }
+        return repository.createEndpoint(UUID.randomUUID(), actorResolver.current(), providerId,
+                displayName.trim(), modelId.trim(), Set.copyOf(capabilities), priority, weight,
+                enabled, clock.instant());
+    }
+
+    public ModelGroupRecord createGroup(String displayName, TaskType taskType, List<UUID> endpointIds) {
+        requireText(displayName, "displayName");
+        Objects.requireNonNull(taskType, "taskType 不能为空");
+        if (endpointIds == null || endpointIds.isEmpty()) {
+            throw new IllegalArgumentException("endpointIds 不能为空");
+        }
+        return repository.createGroup(UUID.randomUUID(), actorResolver.current(), displayName.trim(),
+                taskType, endpointIds, clock.instant());
+    }
+
+    public void deleteProvider(UUID providerId) {
+        repository.deleteProvider(providerId, actorResolver.current().userId());
+    }
+
+    public static String maskApiKey(String apiKey) {
+        requireText(apiKey, "apiKey");
+        String value = apiKey.trim();
+        if (value.length() <= 8) {
+            return "****";
+        }
+        return value.substring(0, 4) + "****" + value.substring(value.length() - 4);
+    }
+
+    private static void requireText(String value, String name) {
+        if (Objects.requireNonNull(value, name + " 不能为空").isBlank()) {
+            throw new IllegalArgumentException(name + " 不能为空白");
+        }
+    }
+}

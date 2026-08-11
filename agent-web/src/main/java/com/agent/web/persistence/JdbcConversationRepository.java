@@ -107,6 +107,9 @@ public final class JdbcConversationRepository implements WorkspaceRepository, Co
                         :workspaceId, :ownerUserId, :displayName, :workspacePath,
                         :repositoryId, :createdAt, :updatedAt
                     )
+                    on conflict (owner_user_id, workspace_path, repository_id) do update set
+                        display_name = excluded.display_name,
+                        updated_at = excluded.updated_at
                     """)
                     .param("workspaceId", workspaceId)
                     .param("ownerUserId", owner.userId())
@@ -116,8 +119,19 @@ public final class JdbcConversationRepository implements WorkspaceRepository, Co
                     .param("createdAt", timestamp(now))
                     .param("updatedAt", timestamp(now))
                     .update();
-            insertMember(workspaceId, owner.userId(), WorkspacePermission.OWNER, now);
-            return findWorkspace(workspaceId, owner.userId()).orElseThrow();
+            UUID actualWorkspaceId = jdbcClient.sql("""
+                    select workspace_id from agent_workspaces
+                    where owner_user_id = :ownerUserId
+                      and workspace_path = :workspacePath
+                      and repository_id = :repositoryId
+                    """)
+                    .param("ownerUserId", owner.userId())
+                    .param("workspacePath", workspacePath.toString())
+                    .param("repositoryId", repositoryId)
+                    .query(UUID.class)
+                    .single();
+            insertMember(actualWorkspaceId, owner.userId(), WorkspacePermission.OWNER, now);
+            return findWorkspace(actualWorkspaceId, owner.userId()).orElseThrow();
         }));
     }
 
@@ -146,9 +160,8 @@ public final class JdbcConversationRepository implements WorkspaceRepository, Co
                         :workspaceId, :ownerUserId, :displayName, :workspacePath,
                         :repositoryId, :createdAt, :updatedAt
                     )
-                    on conflict (owner_user_id, workspace_path) do update set
+                    on conflict (owner_user_id, workspace_path, repository_id) do update set
                         display_name = excluded.display_name,
-                        repository_id = excluded.repository_id,
                         updated_at = excluded.updated_at
                     """)
                     .param("workspaceId", workspaceId)
@@ -161,10 +174,13 @@ public final class JdbcConversationRepository implements WorkspaceRepository, Co
                     .update();
             UUID actualWorkspaceId = jdbcClient.sql("""
                     select workspace_id from agent_workspaces
-                    where owner_user_id = :ownerUserId and workspace_path = :workspacePath
+                    where owner_user_id = :ownerUserId
+                      and workspace_path = :workspacePath
+                      and repository_id = :repositoryId
                     """)
                     .param("ownerUserId", owner.userId())
                     .param("workspacePath", workspacePath.toString())
+                    .param("repositoryId", repositoryId)
                     .query(UUID.class)
                     .single();
             insertMember(actualWorkspaceId, owner.userId(), WorkspacePermission.OWNER, now);
@@ -214,6 +230,16 @@ public final class JdbcConversationRepository implements WorkspaceRepository, Co
             UUID workspaceId,
             String userId,
             String query) {
+        return findConversations(workspaceId, userId, query, false);
+    }
+
+    /** 按成员关系查询会话，可选包含已归档会话。 */
+    @Override
+    public List<ConversationRecord> findConversations(
+            UUID workspaceId,
+            String userId,
+            String query,
+            boolean includeArchived) {
         Objects.requireNonNull(workspaceId, "workspaceId 不能为空");
         requireText(userId, "userId");
         String titleQuery = query == null ? "" : query;
@@ -232,11 +258,13 @@ public final class JdbcConversationRepository implements WorkspaceRepository, Co
                 join agent_users app_user on app_user.user_id = member.user_id
                 where conversation.workspace_id = :workspaceId
                   and app_user.enabled = true
+                  and (:includeArchived = true or conversation.status = 'ACTIVE')
                   and (:query = '' or position(:query in conversation.title) > 0)
                 order by conversation.updated_at desc, conversation.conversation_id
                 """)
                 .param("workspaceId", workspaceId)
                 .param("userId", userId)
+                .param("includeArchived", includeArchived)
                 .param("query", titleQuery)
                 .query(this::mapConversation)
                 .list());
@@ -331,6 +359,48 @@ public final class JdbcConversationRepository implements WorkspaceRepository, Co
                     .update();
             return findConversation(conversationId, userId).orElseThrow();
         }));
+    }
+
+    /** 删除会话及其轮次、Run、Checkpoint；工作区和成员关系保持不变。 */
+    @Override
+    public void deleteConversation(UUID conversationId, String userId, Instant now) {
+        Objects.requireNonNull(conversationId, "conversationId 不能为空");
+        requireText(userId, "userId");
+        Objects.requireNonNull(now, "now 不能为空");
+        transactionTemplate.executeWithoutResult(status -> {
+            ConversationRecord conversation = findConversationForUpdate(conversationId, userId)
+                    .orElseThrow(() -> new ConversationNotFoundException(conversationId));
+            jdbcClient.sql("""
+                    delete from agent_checkpoints
+                    where run_id in (
+                        select run_id from agent_conversation_turns
+                        where conversation_id = :conversationId and run_id is not null
+                    )
+                    """)
+                    .param("conversationId", conversationId)
+                    .update();
+            jdbcClient.sql("""
+                    delete from agent_runs
+                    where run_id in (
+                        select run_id from agent_conversation_turns
+                        where conversation_id = :conversationId and run_id is not null
+                    )
+                    """)
+                    .param("conversationId", conversationId)
+                    .update();
+            jdbcClient.sql("""
+                    delete from agent_conversation_turns
+                    where conversation_id = :conversationId
+                    """)
+                    .param("conversationId", conversationId)
+                    .update();
+            jdbcClient.sql("""
+                    delete from agent_conversations
+                    where conversation_id = :conversationId
+                    """)
+                    .param("conversationId", conversation.conversationId())
+                    .update();
+        });
     }
 
     /** 在成员权限范围内更新会话标题。 */

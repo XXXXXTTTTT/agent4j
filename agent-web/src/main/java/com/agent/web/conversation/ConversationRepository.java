@@ -14,6 +14,17 @@ public interface ConversationRepository {
         throw unsupported("findConversations");
     }
 
+    /** 按归档筛选查询会话；默认实现兼容旧仓储。 */
+    default List<ConversationRecord> findConversations(
+            UUID workspaceId, String userId, String query, boolean includeArchived) {
+        List<ConversationRecord> conversations = findConversations(workspaceId, userId, query);
+        return includeArchived
+                ? conversations
+                : conversations.stream()
+                        .filter(conversation -> conversation.status() == ConversationStatus.ACTIVE)
+                        .toList();
+    }
+
     default Optional<ConversationRecord> findConversation(UUID conversationId, String userId) {
         throw unsupported("findConversation");
     }
@@ -29,6 +40,11 @@ public interface ConversationRepository {
 
     default ConversationRecord archiveConversation(UUID conversationId, String userId, Instant now) {
         throw unsupported("archiveConversation");
+    }
+
+    /** 删除会话及其轮次、Run、Checkpoint，不删除工作区。 */
+    default void deleteConversation(UUID conversationId, String userId, Instant now) {
+        throw unsupported("deleteConversation");
     }
 
     /** 更新会话展示标题。 */

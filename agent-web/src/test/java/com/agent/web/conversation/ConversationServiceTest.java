@@ -157,6 +157,52 @@ class ConversationServiceTest {
     }
 
     @Test
+    void operatorCanDeleteConversationWithoutDeletingWorkspace() {
+        Actor operator = new Actor("delete-user", "Delete");
+        FakeConversationRepository repository = new FakeConversationRepository();
+        repository.conversation = new ConversationRecord(
+                CONVERSATION_ID, WORKSPACE_ID, operator.userId(), "标题",
+                ConversationStatus.ACTIVE, NOW, NOW);
+        ConversationService service = new ConversationService(
+                repository,
+                new WorkspaceAccessService(
+                        new TestWorkspaceRepository(operator), Path.of("D:/agent4j"),
+                        Clock.fixed(NOW, ZoneOffset.UTC)),
+                (id, userId, maxTurns, maxCharacters) -> new ConversationContext(List.of(), 0, false),
+                () -> operator,
+                new CapturingStarter(),
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        service.delete(CONVERSATION_ID);
+
+        assertThat(repository.deletedConversationId).isEqualTo(CONVERSATION_ID);
+        assertThat(repository.deletedUserId).isEqualTo(operator.userId());
+    }
+
+    @Test
+    void archivedConversationIsHiddenByDefaultAndVisibleWhenRequested() {
+        Actor operator = new Actor("list-user", "List");
+        FakeConversationRepository repository = new FakeConversationRepository();
+        repository.conversation = new ConversationRecord(
+                CONVERSATION_ID, WORKSPACE_ID, operator.userId(), "标题",
+                ConversationStatus.ARCHIVED, NOW, NOW);
+        ConversationService service = new ConversationService(
+                repository,
+                new WorkspaceAccessService(
+                        new TestWorkspaceRepository(operator), Path.of("D:/agent4j"),
+                        Clock.fixed(NOW, ZoneOffset.UTC)),
+                (id, userId, maxTurns, maxCharacters) -> new ConversationContext(List.of(), 0, false),
+                () -> operator,
+                new CapturingStarter(),
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        assertThat(service.listConversations(WORKSPACE_ID, "", false)).isEmpty();
+        assertThat(service.listConversations(WORKSPACE_ID, "", true))
+                .containsExactly(repository.conversation);
+        assertThat(repository.lastIncludeArchived).isTrue();
+    }
+
+    @Test
     void rejectsNonHttpReviewerUrlBeforeCreatingRun() {
         Actor operator = new Actor("operator-user", "Operator");
         FakeConversationRepository repository = new FakeConversationRepository();
@@ -283,10 +329,31 @@ class ConversationServiceTest {
         private ConversationTurnRecord running;
         private List<ConversationTurnRecord> turns = List.of();
         private int findTurnsCalls;
+        private UUID deletedConversationId;
+        private String deletedUserId;
+        private boolean lastIncludeArchived;
 
         @Override
         public Optional<ConversationRecord> findConversation(UUID conversationId, String userId) {
             return Optional.ofNullable(conversation);
+        }
+
+        @Override
+        public List<ConversationRecord> findConversations(
+                UUID workspaceId, String userId, String query, boolean includeArchived) {
+            lastIncludeArchived = includeArchived;
+            if (!includeArchived && conversation != null
+                    && conversation.status() == ConversationStatus.ARCHIVED) {
+                return List.of();
+            }
+            return conversation == null ? List.of() : List.of(conversation);
+        }
+
+        @Override
+        public void deleteConversation(UUID conversationId, String userId, Instant now) {
+            deletedConversationId = conversationId;
+            deletedUserId = userId;
+            conversation = null;
         }
 
         @Override

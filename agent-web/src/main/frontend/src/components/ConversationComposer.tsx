@@ -12,13 +12,17 @@ interface ConversationComposerProps {
 /** 提交持久化轮次，并把已创建 Run 接入证据检查器。 */
 export function ConversationComposer({ conversation, runController }: ConversationComposerProps) {
   const [content, setContent] = useState('')
+  const [modelGroupId, setModelGroupId] = useState('')
+  const modelGroups = conversation.modelConfiguration?.groups ?? []
   const [inputError, setInputError] = useState<string | null>(null)
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
     setInputError(null)
     try {
-      const turn = await conversation.submit(content)
+      const turn = modelGroupId
+        ? await conversation.submit(content, undefined, modelGroupId)
+        : await conversation.submit(content)
       setContent('')
       if (turn.runId !== null) await runController.followRun(turn.runId)
     } catch (failure) {
@@ -34,6 +38,13 @@ export function ConversationComposer({ conversation, runController }: Conversati
         {inputError === null ? null : <p className="inline-error" role="alert">{inputError}</p>}
         <div className="composer-toolbar">
           <div className="composer-context"><span>{conversation.activeWorkspace?.displayName ?? '未选择工作区'}</span></div>
+          <label className="composer-model-select">
+            <span className="sr-only">模型组</span>
+            <select aria-label="模型组" value={modelGroupId} onChange={(event) => setModelGroupId(event.target.value)} disabled={modelGroups.length === 0}>
+              <option value="">默认模型组</option>
+              {modelGroups.map((group) => <option key={group.groupId} value={group.groupId}>{group.displayName}</option>)}
+            </select>
+          </label>
           <button className="primary-command" type="submit" aria-label="发送消息" title="发送消息" disabled={conversation.activeConversation === null || conversation.submitting || content.trim().length === 0}>
             <Send aria-hidden="true" size={17} />
           </button>

@@ -7,5 +7,6 @@ import jakarta.validation.constraints.NotBlank;
 @JsonIgnoreProperties(ignoreUnknown = false)
 public record SubmitConversationTurnRequest(
         @NotBlank String content,
-        String reviewerUrl) {
+        String reviewerUrl,
+        String modelGroupId) {
 }

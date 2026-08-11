@@ -5,6 +5,7 @@ import com.agent.core.engine.GraphNotFoundException;
 import com.agent.core.engine.RunNotFoundException;
 import com.agent.core.profile.AgentProfileNotFoundException;
 import com.agent.web.persistence.JdbcConversationRepository;
+import com.agent.web.persistence.JdbcModelConfigurationRepository;
 import com.agent.web.conversation.ConversationService;
 import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspaceImportService;
@@ -85,7 +86,8 @@ public final class RunExceptionHandler {
             WorkspaceAccessService.WorkspaceNotFoundException.class,
             JdbcConversationRepository.ConversationNotFoundException.class,
             JdbcConversationRepository.ConversationTurnNotFoundException.class,
-            ConversationService.ConversationNotFoundException.class
+            ConversationService.ConversationNotFoundException.class,
+            JdbcModelConfigurationRepository.ModelConfigurationNotFoundException.class
     })
     public ResponseEntity<ProblemDetail> resourceNotFound(
             RuntimeException exception,
@@ -112,6 +114,14 @@ public final class RunExceptionHandler {
     /** 映射会话归档和活动轮次冲突。 */
     @ExceptionHandler(JdbcConversationRepository.ConversationConflictException.class)
     public ResponseEntity<ProblemDetail> conversationConflict(
+            RuntimeException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);
+    }
+
+    /** 映射模型 Provider 被引用等配置冲突。 */
+    @ExceptionHandler(JdbcModelConfigurationRepository.ModelConfigurationConflictException.class)
+    public ResponseEntity<ProblemDetail> modelConfigurationConflict(
             RuntimeException exception,
             ServerWebExchange exchange) {
         return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);

@@ -8,6 +8,7 @@ import type {
   WorkspaceDirectoryEntry,
   WorkspaceDirectoryListing,
   WorkspacePermission,
+  ModelConfigurationSnapshot,
 } from './contracts'
 
 type JsonObject = Record<string, unknown>
@@ -15,6 +16,8 @@ type JsonObject = Record<string, unknown>
 const WORKSPACE_PERMISSIONS = new Set<WorkspacePermission>(['VIEWER', 'OPERATOR', 'OWNER'])
 const CONVERSATION_STATUSES = new Set<ConversationStatus>(['ACTIVE', 'ARCHIVED'])
 const TURN_STATUSES = new Set<ConversationTurnStatus>(['PENDING', 'RUNNING', 'COMPLETED', 'FAILED'])
+const MODEL_TASK_TYPES = new Set(['CODE', 'VISION', 'QUICK_CLASSIFICATION'])
+const MODEL_CAPABILITIES = new Set(['CHAT_COMPLETIONS', 'STREAMING', 'TOOL_CALLING', 'VISION_INPUT'])
 
 export class ConversationApiError extends Error {
   constructor(message: string, readonly status: number, readonly responseBody: string) {
@@ -206,14 +209,57 @@ export async function importWorkspace(command: ImportWorkspaceCommand, fetcher: 
   return decodeWorkspace(await requestJson('/api/workspace-imports', { method: 'POST', body: form }, fetcher))
 }
 
-export async function listConversations(workspaceId: string, fetcher: typeof fetch = globalThis.fetch): Promise<Conversation[]> {
+export async function listConversations(workspaceId: string, includeArchivedOrFetcher: boolean | typeof fetch = false, fetcher: typeof fetch = globalThis.fetch): Promise<Conversation[]> {
+  const includeArchived = typeof includeArchivedOrFetcher === 'boolean' ? includeArchivedOrFetcher : false
+  if (typeof includeArchivedOrFetcher === 'function') fetcher = includeArchivedOrFetcher
   const id = nonBlankStringAt(workspaceId, 'workspaceId')
-  return decodeArray(await requestJson(`/api/workspaces/${encodeURIComponent(id)}/conversations`, { method: 'GET' }, fetcher), decodeConversation, 'conversations')
+  return decodeArray(await requestJson(`/api/workspaces/${encodeURIComponent(id)}/conversations${includeArchived ? '?includeArchived=true' : ''}`, { method: 'GET' }, fetcher), decodeConversation, 'conversations')
 }
 
-export async function searchConversations(workspaceId: string, query: string, fetcher: typeof fetch = globalThis.fetch): Promise<Conversation[]> {
+export async function listModelConfiguration(fetcher: typeof fetch = globalThis.fetch): Promise<ModelConfigurationSnapshot> {
+  const value = objectAt(await requestJson('/api/model-config', { method: 'GET' }, fetcher), 'modelConfiguration')
+  exactKeys(value, ['providers', 'endpoints', 'groups'], 'modelConfiguration')
+  const providers = decodeArray(value.providers, (item, path) => {
+    const object = objectAt(item, path); exactKeys(object, ['providerId', 'ownerUserId', 'displayName', 'baseUrl', 'apiKeyMasked', 'createdAt', 'updatedAt'], path)
+    return { providerId: nonBlankStringAt(object.providerId, `${path}.providerId`), ownerUserId: nonBlankStringAt(object.ownerUserId, `${path}.ownerUserId`), displayName: nonBlankStringAt(object.displayName, `${path}.displayName`), baseUrl: nonBlankStringAt(object.baseUrl, `${path}.baseUrl`), apiKeyMasked: nonBlankStringAt(object.apiKeyMasked, `${path}.apiKeyMasked`), createdAt: stringAt(object.createdAt, `${path}.createdAt`), updatedAt: stringAt(object.updatedAt, `${path}.updatedAt`) }
+  }, 'providers')
+  const endpoints = decodeArray(value.endpoints, (item, path) => {
+    const object = objectAt(item, path); exactKeys(object, ['endpointId', 'providerId', 'displayName', 'modelId', 'capabilities', 'priority', 'weight', 'enabled', 'createdAt', 'updatedAt'], path)
+    if (!Array.isArray(object.capabilities) || object.capabilities.some((entry) => typeof entry !== 'string' || !MODEL_CAPABILITIES.has(entry))) throw new TypeError(`${path}.capabilities 非法`)
+    return { endpointId: nonBlankStringAt(object.endpointId, `${path}.endpointId`), providerId: nonBlankStringAt(object.providerId, `${path}.providerId`), displayName: nonBlankStringAt(object.displayName, `${path}.displayName`), modelId: nonBlankStringAt(object.modelId, `${path}.modelId`), capabilities: object.capabilities as any[], priority: nonNegativeIntegerAt(object.priority, `${path}.priority`), weight: nonNegativeIntegerAt(object.weight, `${path}.weight`), enabled: object.enabled === true, createdAt: stringAt(object.createdAt, `${path}.createdAt`), updatedAt: stringAt(object.updatedAt, `${path}.updatedAt`) }
+  }, 'endpoints')
+  const groups = decodeArray(value.groups, (item, path) => {
+    const object = objectAt(item, path); exactKeys(object, ['groupId', 'ownerUserId', 'displayName', 'taskType', 'endpointIds', 'createdAt', 'updatedAt'], path)
+    if (!Array.isArray(object.endpointIds) || object.endpointIds.some((entry) => typeof entry !== 'string')) throw new TypeError(`${path}.endpointIds 非法`)
+    return { groupId: nonBlankStringAt(object.groupId, `${path}.groupId`), ownerUserId: nonBlankStringAt(object.ownerUserId, `${path}.ownerUserId`), displayName: nonBlankStringAt(object.displayName, `${path}.displayName`), taskType: enumAt(object.taskType, MODEL_TASK_TYPES, `${path}.taskType`) as any, endpointIds: object.endpointIds as string[], createdAt: stringAt(object.createdAt, `${path}.createdAt`), updatedAt: stringAt(object.updatedAt, `${path}.updatedAt`) }
+  }, 'groups')
+  return { providers, endpoints, groups }
+}
+
+export interface CreateModelProviderCommand { displayName: string; baseUrl: string; apiKey: string }
+export async function createModelProvider(command: CreateModelProviderCommand, fetcher: typeof fetch = globalThis.fetch): Promise<ModelConfigurationSnapshot> {
+  await requestJson('/api/model-config/providers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command) }, fetcher)
+  return listModelConfiguration(fetcher)
+}
+
+export interface CreateModelGroupCommand { displayName: string; taskType: string; endpointIds: string[] }
+export async function createModelGroup(command: CreateModelGroupCommand, fetcher: typeof fetch = globalThis.fetch): Promise<ModelConfigurationSnapshot> {
+  await requestJson('/api/model-config/groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command) }, fetcher)
+  return listModelConfiguration(fetcher)
+}
+
+export interface CreateModelEndpointCommand { providerId: string; displayName: string; modelId: string; capabilities: string[]; priority: number; weight: number; enabled: boolean }
+export async function createModelEndpoint(command: CreateModelEndpointCommand, fetcher: typeof fetch = globalThis.fetch): Promise<ModelConfigurationSnapshot> {
+  await requestJson('/api/model-config/endpoints', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command) }, fetcher)
+  return listModelConfiguration(fetcher)
+}
+
+export async function searchConversations(workspaceId: string, query: string, includeArchivedOrFetcher: boolean | typeof fetch = false, fetcher: typeof fetch = globalThis.fetch): Promise<Conversation[]> {
+  const includeArchived = typeof includeArchivedOrFetcher === 'boolean' ? includeArchivedOrFetcher : false
+  if (typeof includeArchivedOrFetcher === 'function') fetcher = includeArchivedOrFetcher
   const id = nonBlankStringAt(workspaceId, 'workspaceId')
-  return decodeArray(await requestJson(`/api/workspaces/${encodeURIComponent(id)}/conversations?query=${encodeURIComponent(query)}`, { method: 'GET' }, fetcher), decodeConversation, 'conversations')
+  const params = new URLSearchParams({ query }); if (includeArchived) params.set('includeArchived', 'true')
+  return decodeArray(await requestJson(`/api/workspaces/${encodeURIComponent(id)}/conversations?${params.toString()}`, { method: 'GET' }, fetcher), decodeConversation, 'conversations')
 }
 
 export async function createConversation(workspaceId: string, fetcher: typeof fetch = globalThis.fetch): Promise<Conversation> {
@@ -221,13 +267,19 @@ export async function createConversation(workspaceId: string, fetcher: typeof fe
   return decodeConversation(await requestJson(`/api/workspaces/${encodeURIComponent(id)}/conversations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, fetcher))
 }
 
-export interface SubmitConversationTurnCommand { content: string; reviewerUrl?: string }
+export interface SubmitConversationTurnCommand { content: string; reviewerUrl?: string; modelGroupId?: string }
 
 export async function submitConversationTurn(conversationId: string, command: SubmitConversationTurnCommand, fetcher: typeof fetch = globalThis.fetch): Promise<ConversationTurn> {
   const id = nonBlankStringAt(conversationId, 'conversationId')
   const body: Record<string, string> = { content: nonBlankStringAt(command.content, 'content') }
   if (command.reviewerUrl !== undefined && command.reviewerUrl.trim().length > 0) body.reviewerUrl = command.reviewerUrl.trim()
+  if (command.modelGroupId !== undefined && command.modelGroupId.trim().length > 0) body.modelGroupId = command.modelGroupId.trim()
   return decodeConversationTurn(await requestJson(`/api/conversations/${encodeURIComponent(id)}/turns`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, fetcher))
+}
+
+export async function deleteConversation(conversationId: string, fetcher: typeof fetch = globalThis.fetch): Promise<Conversation> {
+  const id = nonBlankStringAt(conversationId, 'conversationId')
+  return decodeConversation(await requestJson(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }, fetcher))
 }
 
 export async function listConversationTurns(conversationId: string, fetcher: typeof fetch = globalThis.fetch): Promise<ConversationTurn[]> {

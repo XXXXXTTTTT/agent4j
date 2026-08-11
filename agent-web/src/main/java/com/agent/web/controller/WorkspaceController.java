@@ -58,8 +58,9 @@ public final class WorkspaceController {
     @GetMapping("/{workspaceId}/conversations")
     public List<ConversationView> conversations(
             @PathVariable UUID workspaceId,
-            @RequestParam(defaultValue = "") String query) {
-        return service().listConversations(workspaceId, query).stream()
+            @RequestParam(defaultValue = "") String query,
+            @RequestParam(defaultValue = "false") boolean includeArchived) {
+        return service().listConversations(workspaceId, query, includeArchived).stream()
                 .map(ConversationView::from)
                 .toList();
     }

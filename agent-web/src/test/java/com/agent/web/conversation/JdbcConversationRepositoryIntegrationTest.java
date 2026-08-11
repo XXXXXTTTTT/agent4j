@@ -108,6 +108,23 @@ class JdbcConversationRepositoryIntegrationTest {
     }
 
     @Test
+    void createsWorkspaceIdempotentlyByOwnerPathAndRepository() {
+        Actor owner = new Actor("create-owner", "Owner");
+        WorkspaceRecord first = repository.createWorkspace(
+                WORKSPACE_ID, owner, "项目工作区", Path.of("D:/agent4j"), "repo-a", NOW);
+        WorkspaceRecord second = repository.createWorkspace(
+                UUID.randomUUID(), owner, "项目工作区更新", Path.of("D:/agent4j"), "repo-a", NOW.plusSeconds(1));
+        WorkspaceRecord differentRepository = repository.createWorkspace(
+                UUID.randomUUID(), owner, "另一个仓库", Path.of("D:/agent4j"), "repo-b", NOW);
+
+        assertThat(second.workspaceId()).isEqualTo(first.workspaceId());
+        assertThat(repository.findWorkspaces(owner.userId()))
+                .extracting(WorkspaceRecord::repositoryId)
+                .containsExactlyInAnyOrder("repo-b", "repo-a");
+        assertThat(differentRepository.workspaceId()).isNotEqualTo(first.workspaceId());
+    }
+
+    @Test
     void disabledUsersCannotReadWorkspace() {
         Actor owner = new Actor("owner-disabled", "Owner");
         repository.ensureDefaultWorkspace(

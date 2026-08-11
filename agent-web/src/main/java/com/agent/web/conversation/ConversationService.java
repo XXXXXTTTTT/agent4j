@@ -107,10 +107,21 @@ public final class ConversationService {
 
     /** 查询当前用户可见的工作区会话。 */
     public List<ConversationRecord> listConversations(UUID workspaceId, String query) {
+        return listConversations(workspaceId, query, false);
+    }
+
+    /** 查询当前用户可见的工作区会话，可选包含已归档会话。 */
+    public List<ConversationRecord> listConversations(
+            UUID workspaceId, String query, boolean includeArchived) {
         Actor actor = actorResolver.current();
         WorkspaceRecord workspace = workspaceAccess.requireWorkspace(
                 workspaceId, actor.userId(), WorkspacePermission.VIEWER);
-        return repository.findConversations(workspace.workspaceId(), actor.userId(), query);
+        return repository.findConversations(
+                        workspace.workspaceId(), actor.userId(), query, includeArchived)
+                .stream()
+                .filter(conversation -> includeArchived
+                        || conversation.status() == ConversationStatus.ACTIVE)
+                .toList();
     }
 
     /** 读取当前用户可见的会话。 */
@@ -147,6 +158,15 @@ public final class ConversationService {
             UUID conversationId,
             String content,
             String reviewerUrl) {
+        return submitTurn(conversationId, content, reviewerUrl, null);
+    }
+
+    /** 提交一轮任务并在 Run 状态中保留用户选择的模型组。 */
+    public ConversationTurnRecord submitTurn(
+            UUID conversationId,
+            String content,
+            String reviewerUrl,
+            String modelGroupId) {
         Actor actor = actorResolver.current();
         requireText(content, "content");
         String exactReviewerUrl = ReviewerUrlValidator.validateOptional(reviewerUrl);
@@ -180,6 +200,9 @@ public final class ConversationService {
                             "conversation.workspaceId", workspace.workspaceId().toString(),
                             "conversation.turnId", pending.turnId().toString()),
                     List.of());
+            if (modelGroupId != null && !modelGroupId.isBlank()) {
+                state = state.withVariable("model.groupId", modelGroupId.trim());
+            }
             if (!exactReviewerUrl.isBlank()) {
                 state = state.withVariable("reviewer.url", exactReviewerUrl);
             }
@@ -222,6 +245,21 @@ public final class ConversationService {
                 archived.conversationId(), null, null, null,
                 archived.status().name(), null, null, null, null));
         return archived;
+    }
+
+    /** 删除当前用户可操作的会话，保留工作区及其长期记忆。 */
+    public ConversationRecord delete(UUID conversationId) {
+        Actor actor = actorResolver.current();
+        ConversationRecord conversation = getConversation(conversationId);
+        workspaceAccess.requireWorkspace(
+                conversation.workspaceId(), actor.userId(), WorkspacePermission.OPERATOR);
+        repository.deleteConversation(conversationId, actor.userId(), clock.instant());
+        audit(new ConversationAuditEvent(
+                ConversationAuditEventType.CONVERSATION_DELETED,
+                clock.instant(), actor.userId(), conversation.workspaceId(),
+                conversation.conversationId(), null, null, null,
+                conversation.status().name(), null, null, null, null));
+        return conversation;
     }
 
     private ConversationAuditEvent turnEvent(
