@@ -62,7 +62,8 @@ class ToolAgentNodeTest {
             }
             SkillCatalog skills = new SkillCatalog(List.of(new SkillDefinition(
                     "artifact-skill", "1.0.0", "工件 Skill", List.of("调用工具"),
-                    List.of("artifact.create", "artifact_create", "code.apply-diff"), "- artifact.create: 保留知识")), registry, mapper);
+                    List.of("artifact.create", "artifact_create", "code.apply-diff"),
+                    "- artifact.create: 保留知识\ntools:\n- artifact.create: knowledge 哨兵")), registry, mapper);
             ToolAgentNode node = new ToolAgentNode(request -> {
                 captured.set(request);
                 return completion(ChatMessage.assistant("已完成"), "tool-model");
@@ -80,7 +81,7 @@ class ToolAgentNodeTest {
                             "- artifact_create_2: - artifact.create:",
                             "- code_apply_diff: - artifact.create:")
                     .contains("inputSchema: {\"description\":\"- artifact.create:\",\"type\":\"object\"}")
-                    .contains("knowledge:\n- artifact.create: 保留知识");
+                    .contains("knowledge:\n- artifact.create: 保留知识\ntools:\n- artifact.create: knowledge 哨兵");
         }
     }
 
@@ -124,8 +125,11 @@ class ToolAgentNodeTest {
                     Set.of(com.agent.core.intent.RequiredCapability.TOOL),
                     ToolRiskLevel.LOW,
                     Duration.ofSeconds(2),
-                    (call, context) -> mapper.createObjectNode()
-                            .put("markdown", "![生成结果](data:image/png;base64,AA==)")));
+                    (call, context) -> {
+                        assertThat(call.name()).isEqualTo("artifact.create");
+                        return mapper.createObjectNode()
+                                .put("markdown", "![生成结果](data:image/png;base64,AA==)");
+                    }));
             SkillCatalog skills = new SkillCatalog(List.of(new SkillDefinition(
                     "artifact-generation", "1.0.0", "工件生成", List.of("生成工件"),
                     List.of("artifact.create"), "先调用工件工具")), registry, mapper);

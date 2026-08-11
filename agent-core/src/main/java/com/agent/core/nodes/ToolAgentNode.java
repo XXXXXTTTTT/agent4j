@@ -23,6 +23,9 @@ import com.agent.core.tool.ToolResultStatus;
 import com.agent.core.tool.builtin.ImageGenerationTool;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -33,6 +36,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.EnumSet;
 import java.util.function.Function;
@@ -271,7 +275,7 @@ public final class ToolAgentNode implements Node {
         definitions.forEach(tool -> prompt.append("\n- ")
                 .append(protocolName(tool.name(), protocolToRegistryName))
                 .append(": ").append(tool.description()));
-        if (skills != null && !skills.activationSection().isBlank()) {
+        if (skills != null && !skills.activatedSkills().isEmpty()) {
             prompt.append("\n\n已激活 Skill：\n")
                     .append(normalizedActivationSection(skills, protocolToRegistryName));
         }
@@ -281,39 +285,42 @@ public final class ToolAgentNode implements Node {
     private String normalizedActivationSection(
             SkillPromptContext skills,
             Map<String, String> protocolToRegistryName) {
-        String section = skills.activationSection();
-        String[] lines = section.split("\\n", -1);
-        boolean inTools = false;
-        for (int index = 0; index < lines.length; index++) {
-            String line = lines[index];
-            if (line.equals("tools:")) {
-                inTools = true;
-                continue;
+        StringBuilder section = new StringBuilder();
+        for (var skill : skills.activatedSkills()) {
+            section.append("## ").append(skill.name()).append('@').append(skill.version()).append('\n');
+            section.append("tools:\n");
+            for (SkillToolMetadata tool : skill.tools()) {
+                section.append("- ").append(protocolName(tool.name(), protocolToRegistryName))
+                        .append(": ").append(tool.description()).append("\n")
+                        .append("  inputSchema: ").append(canonicalJson(tool.inputSchema())).append('\n');
             }
-            if (line.equals("knowledge:")) {
-                inTools = false;
-                continue;
-            }
-            if (!inTools) {
-                continue;
-            }
-            boolean replaced = false;
-            for (var skill : skills.activatedSkills()) {
-                for (SkillToolMetadata tool : skill.tools()) {
-                    String original = "- " + tool.name() + ":";
-                    if (line.startsWith(original)) {
-                        lines[index] = "- " + protocolName(tool.name(), protocolToRegistryName)
-                                + ":" + line.substring(original.length());
-                        replaced = true;
-                        break;
-                    }
-                }
-                if (replaced) {
-                    break;
-                }
-            }
+            section.append("knowledge:\n").append(skill.promptFragment()).append('\n');
         }
-        return String.join("\n", lines);
+        return section.toString();
+    }
+
+    private String canonicalJson(JsonNode node) {
+        try {
+            return objectMapper.writeValueAsString(canonicalize(node));
+        } catch (Exception exception) {
+            throw new IllegalStateException("Skill 工具 Schema 渲染失败", exception);
+        }
+    }
+
+    private JsonNode canonicalize(JsonNode node) {
+        if (node.isObject()) {
+            TreeMap<String, JsonNode> values = new TreeMap<>();
+            node.fields().forEachRemaining(field -> values.put(field.getKey(), canonicalize(field.getValue())));
+            ObjectNode result = JsonNodeFactory.instance.objectNode();
+            values.forEach(result::set);
+            return result;
+        }
+        if (node.isArray()) {
+            ArrayNode result = JsonNodeFactory.instance.arrayNode();
+            node.elements().forEachRemaining(value -> result.add(canonicalize(value)));
+            return result;
+        }
+        return node.deepCopy();
     }
 
     private Map<String, String> toolNameMapping(List<ToolDefinition> definitions) {
