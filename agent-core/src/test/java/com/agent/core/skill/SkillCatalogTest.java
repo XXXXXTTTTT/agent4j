@@ -22,6 +22,14 @@ class SkillCatalogTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Test
+    void canonicalSkillJsonSortsObjectKeysAndPreservesArrayOrder() throws Exception {
+        var schema = mapper.readTree("{\"z\":1,\"a\":{\"d\":2,\"b\":3},\"items\":[{\"z\":0,\"a\":1},2]}");
+
+        assertThat(SkillPromptJson.canonicalJson(mapper, schema))
+                .isEqualTo("{\"a\":{\"b\":3,\"d\":2},\"items\":[{\"a\":1,\"z\":0},2],\"z\":1}");
+    }
+
+    @Test
     void exposesOnlySummaryUntilTriggerActivation() throws Exception {
         try (ToolRegistry registry = registry("weather.lookup")) {
             SkillCatalog catalog = catalog(registry, skill("weather", List.of("天气"), List.of("weather.lookup")));
