@@ -5,11 +5,13 @@ import com.agent.core.engine.GraphNotFoundException;
 import com.agent.core.engine.RunNotFoundException;
 import com.agent.core.profile.AgentProfileNotFoundException;
 import com.agent.web.persistence.JdbcConversationRepository;
+import com.agent.web.persistence.JdbcModelConfigurationRepository;
 import com.agent.web.conversation.ConversationService;
 import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspaceImportService;
 import com.agent.web.audit.AuditTextRedactor;
 import org.springframework.core.codec.DecodingException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -85,7 +87,8 @@ public final class RunExceptionHandler {
             WorkspaceAccessService.WorkspaceNotFoundException.class,
             JdbcConversationRepository.ConversationNotFoundException.class,
             JdbcConversationRepository.ConversationTurnNotFoundException.class,
-            ConversationService.ConversationNotFoundException.class
+            ConversationService.ConversationNotFoundException.class,
+            JdbcModelConfigurationRepository.ModelConfigurationNotFoundException.class
     })
     public ResponseEntity<ProblemDetail> resourceNotFound(
             RuntimeException exception,
@@ -115,6 +118,22 @@ public final class RunExceptionHandler {
             RuntimeException exception,
             ServerWebExchange exchange) {
         return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);
+    }
+
+    /** 映射模型 Provider 被引用等配置冲突。 */
+    @ExceptionHandler(JdbcModelConfigurationRepository.ModelConfigurationConflictException.class)
+    public ResponseEntity<ProblemDetail> modelConfigurationConflict(
+            RuntimeException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);
+    }
+
+    /** 将数据库唯一约束冲突转换为稳定的客户端错误。 */
+    @ExceptionHandler(DuplicateKeyException.class)
+    public ResponseEntity<ProblemDetail> duplicateConfiguration(
+            DuplicateKeyException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.CONFLICT, "模型配置与已有记录冲突", exchange);
     }
 
     /** 映射工作区导入的体积与文件数量上限。 */

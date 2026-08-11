@@ -100,6 +100,74 @@ class ModelRouterTest {
     }
 
     @Test
+    void resolvesExplicitModelGroupThroughDynamicResolver() {
+        EndpointFixture code = endpoint("code-default", "default-model");
+        EndpointFixture vision = endpoint("vision-default", "vision-default-model");
+        EndpointFixture classification = endpoint("classification-default", "quick-model");
+        EndpointFixture selected = endpoint("group-primary", "group-model");
+        expectSuccess(selected, "group-result");
+        ModelGroupRouteResolver resolver = (groupId, taskType) ->
+                "group-1".equals(groupId) && taskType == TaskType.CODE
+                        ? List.of(selected.endpoint()) : List.of();
+        ModelRouter router = new ModelRouter(
+                Map.of(
+                        TaskType.CODE, List.of(code.endpoint()),
+                        TaskType.VISION, List.of(vision.endpoint()),
+                        TaskType.QUICK_CLASSIFICATION, List.of(classification.endpoint())),
+                resolver,
+                ModelCallObserver.noop());
+
+        RoutedCompletion result = router.complete(
+                TaskType.CODE,
+                new ModelRequest(request().messages(), request().tools(), null, null, "group-1"));
+
+        assertRoutedTo(result, "group-primary", "group-model", "group-result");
+    }
+
+    @Test
+    void rejectsUnknownDynamicModelGroupWithoutUsingDefaultRoute() {
+        EndpointFixture code = endpoint("code-default", "default-model");
+        EndpointFixture vision = endpoint("vision-default", "vision-default-model");
+        EndpointFixture classification = endpoint("classification-default", "quick-model");
+        ModelRouter router = new ModelRouter(
+                Map.of(
+                        TaskType.CODE, List.of(code.endpoint()),
+                        TaskType.VISION, List.of(vision.endpoint()),
+                        TaskType.QUICK_CLASSIFICATION, List.of(classification.endpoint())),
+                (groupId, taskType) -> List.of(),
+                ModelCallObserver.noop());
+
+        assertThatThrownBy(() -> router.complete(
+                TaskType.CODE,
+                new ModelRequest(request().messages(), request().tools(), null, null, "missing")))
+                .isInstanceOf(ModelRoutingException.class)
+                .hasMessageContaining("missing");
+    }
+
+    @Test
+    void wrapsDynamicResolverFailureAsModelRoutingException() {
+        EndpointFixture code = endpoint("code-default", "default-model");
+        EndpointFixture vision = endpoint("vision-default", "vision-default-model");
+        EndpointFixture classification = endpoint("classification-default", "quick-model");
+        ModelRouter router = new ModelRouter(
+                Map.of(
+                        TaskType.CODE, List.of(code.endpoint()),
+                        TaskType.VISION, List.of(vision.endpoint()),
+                        TaskType.QUICK_CLASSIFICATION, List.of(classification.endpoint())),
+                (groupId, taskType) -> {
+                    throw new IllegalStateException("配置读取失败");
+                },
+                ModelCallObserver.noop());
+
+        assertThatThrownBy(() -> router.complete(
+                TaskType.CODE,
+                new ModelRequest(request().messages(), request().tools(), null, null, "group-1")))
+                .isInstanceOf(ModelRoutingException.class)
+                .hasMessage("模型组解析失败: group-1/CODE")
+                .hasRootCauseMessage("配置读取失败");
+    }
+
+    @Test
     void opensCircuitAfterTwoFailuresAndSkipsPrimaryOnThirdCall() {
         EndpointFixture code = endpoint("code-primary", "code-model");
         EndpointFixture primary = endpointWithCircuitBreaker(

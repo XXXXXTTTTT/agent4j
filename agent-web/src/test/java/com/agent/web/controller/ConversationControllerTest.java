@@ -124,6 +124,31 @@ class ConversationControllerTest {
     }
 
     @Test
+    void deletesConversationAndSupportsArchivedFilter() {
+        ConversationRecord archived = new ConversationRecord(
+                CONVERSATION_ID, WORKSPACE_ID, "local", "归档",
+                ConversationStatus.ARCHIVED, NOW, NOW);
+        when(conversationService.listConversations(WORKSPACE_ID, "", true))
+                .thenReturn(List.of(archived));
+        when(conversationService.delete(CONVERSATION_ID)).thenReturn(archived);
+
+        webTestClient.get().uri(uriBuilder -> uriBuilder
+                        .path("/api/workspaces/{id}/conversations")
+                        .queryParam("includeArchived", "true")
+                        .build(WORKSPACE_ID))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[0].status").isEqualTo("ARCHIVED");
+
+        webTestClient.delete().uri("/api/conversations/{id}", CONVERSATION_ID)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.conversationId").isEqualTo(CONVERSATION_ID.toString());
+    }
+
+    @Test
     void mapsConversationNotFoundConflictAndWorkspaceForbidden() {
         when(conversationService.getConversation(CONVERSATION_ID))
                 .thenThrow(new ConversationService.ConversationNotFoundException(CONVERSATION_ID));

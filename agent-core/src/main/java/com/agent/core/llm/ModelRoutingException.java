@@ -14,4 +14,8 @@ public final class ModelRoutingException extends RuntimeException {
         super("模型路由全部失败: taskType="
                 + Objects.requireNonNull(taskType, "taskType 不能为空"));
     }
+
+    public ModelRoutingException(String message) {
+        super(Objects.requireNonNull(message, "message 不能为空"));
+    }
 }

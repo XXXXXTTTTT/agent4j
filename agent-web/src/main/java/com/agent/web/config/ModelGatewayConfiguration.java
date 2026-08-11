@@ -10,6 +10,9 @@ import com.agent.core.llm.InferenceProtocol;
 import com.agent.core.llm.InferenceServiceContract;
 import com.agent.core.llm.ModelEndpoint;
 import com.agent.core.llm.ModelRouter;
+import com.agent.web.model.DynamicModelGroupRouteResolver;
+import com.agent.web.model.ModelConfigurationRepository;
+import com.agent.web.model.ModelProviderRuntime;
 import com.agent.core.llm.TaskType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -17,6 +20,7 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.client.RestClient;
@@ -120,7 +124,28 @@ public class ModelGatewayConfiguration {
     ModelRouter modelRouter(
             ModelGatewayProperties properties,
             ModelCircuitBreakerProperties circuitBreakerProperties,
+            LlmClient client,
+            ObjectProvider<DynamicModelGroupRouteResolver> dynamicResolver) {
+        return buildModelRouter(
+                properties,
+                circuitBreakerProperties,
+                client,
+                dynamicResolver.getIfAvailable());
+    }
+
+    /** 保留直接配置测试和本地调用的静态路由构造入口。 */
+    ModelRouter modelRouter(
+            ModelGatewayProperties properties,
+            ModelCircuitBreakerProperties circuitBreakerProperties,
             LlmClient client) {
+        return buildModelRouter(properties, circuitBreakerProperties, client, null);
+    }
+
+    private ModelRouter buildModelRouter(
+            ModelGatewayProperties properties,
+            ModelCircuitBreakerProperties circuitBreakerProperties,
+            LlmClient client,
+            DynamicModelGroupRouteResolver dynamicResolver) {
         properties.validate();
         CircuitBreakerConfig breakerConfig =
                 circuitBreakerConfig(circuitBreakerProperties);
@@ -144,7 +169,42 @@ public class ModelGatewayConfiguration {
                         properties.quickClassificationCapabilities(), budget),
                 endpoint("quick-fallback", properties.fallbackModel(), client, breakerConfig,
                         properties.fallbackCapabilities(), budget)));
-        return new ModelRouter(Map.copyOf(routes));
+        return new ModelRouter(
+                Map.copyOf(routes),
+                dynamicResolver,
+                com.agent.core.observability.ModelCallObserver.noop());
+    }
+
+    /** 使用数据库 Provider 创建动态模型组解析器。 */
+    @Bean(destroyMethod = "close")
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnBean(ModelConfigurationRepository.class)
+    DynamicModelGroupRouteResolver dynamicModelGroupRouteResolver(
+            ModelConfigurationRepository repository,
+            CloseableHttpClient httpClient,
+            ObjectMapper objectMapper) {
+        return new DynamicModelGroupRouteResolver(
+                repository,
+                runtime -> dynamicClient(runtime, httpClient, objectMapper));
+    }
+
+    private LlmClient dynamicClient(
+            ModelProviderRuntime runtime,
+            CloseableHttpClient httpClient,
+            ObjectMapper objectMapper) {
+        ResolvedEndpoint endpoint = resolveEndpoint(
+                runtime.baseUrl(), runtime.chatCompletionsPath());
+        RestClient restClient = RestClient.builder()
+                .baseUrl(endpoint.transportBaseUrl())
+                .requestFactory(new HttpComponentsClientHttpRequestFactory(
+                        httpClient))
+                .defaultHeader(
+                        HttpHeaders.AUTHORIZATION, "Bearer " + runtime.apiKey())
+                .build();
+        return new LlmClient(
+                restClient,
+                objectMapper,
+                endpoint.requestPath(),
+                endpoint.requestUrl());
     }
 
     /** 将强类型环境配置转换为每个端点复用的熔断器配置。 */
