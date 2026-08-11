@@ -2944,3 +2944,27 @@ HTTP 请求，30 秒后只允许一次探测。配置通过 `AGENT_LLM_CIRCUIT_B
 失败后第三次调用不触达主端点，再用本地 Compose 执行真实多轮 EDD。日志审计只记录端点、
 模型、HTTP 状态和耗时，不记录 API Key 或消息正文；验收必须同时看到前两次主端点 500、
 后续 OPEN 跳过和 fallback 成功，不能用 mock 200 代替真实模型证据。
+
+## 2026-08-11 真实 GUI EDD 暴露的端点与能力契约问题
+
+### 【问题现象】真实 EDD 请求重复拼接 `/v1`，GUI fallback 无法接管
+
+网关配置为 `AGENT_LLM_BASE_URL=https://zz.cxwms.com/v1` 且路径为
+`/v1/chat/completions` 时，独立 EDD 直接拼接成了
+`/v1/v1/chat/completions`，所有真实请求返回 404。修正路径后，视觉模型
+`gpt-image-2` 对 Chat Completions 返回 400；GUI DOM 降级仍因 fallback 只声明
+`CHAT_COMPLETIONS` 而缺少 `TOOL_CALLING` 无法执行浏览器动作。
+
+### 【修复】共享端点解析与按消息内容判断视觉能力
+
+`agent-core` 新增 `OpenAiEndpoint`，Web 生产装配和真实 EDD 共同使用同一解析规则，
+基础地址的版本前缀只保留一次。`ModelRouter` 只有在消息实际包含
+`ImageUrlPart` 时才要求 `VISION_INPUT`；DOM 文本请求仍严格要求其工具调用能力。
+已验证 `gpt-5.4-mini` 对浏览器函数工具返回 HTTP 200，fallback 示例配置更新为
+`CHAT_COMPLETIONS,TOOL_CALLING`。
+
+### 【真实证据】
+
+Java 21 下 `LlmEddTest` 的 2 个测试和 `LiveGuiAgentWorkflowEddTest` 的 2 个测试均通过。
+GUI EDD 真实经历视觉模型 400，随后 fallback 返回工具调用，Playwright 完成表单填充、
+点击、DOM 断言和 PNG 签名断言；审计日志保留每次模型 URL、模型、状态码、Token 和耗时。

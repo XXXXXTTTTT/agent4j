@@ -168,7 +168,7 @@ class ModelRouterTest {
     }
 
     @Test
-    void skipsEndpointWithoutVisionCapabilityBeforeHttpCall() {
+    void skipsEndpointWithoutVisionCapabilityForMultimodalRequest() {
         EndpointFixture code = endpoint("code-primary", "code-model");
         EndpointFixture vision = endpoint(
                 "vision-primary",
@@ -176,15 +176,33 @@ class ModelRouterTest {
                 Set.of(InferenceCapability.CHAT_COMPLETIONS));
         EndpointFixture fallback = endpoint("vision-fallback", "fallback-model");
         EndpointFixture classification = endpoint("classification-primary", "quick-model");
-        expectSuccess(fallback, "fallback-result");
         ModelRouter router = router(
                 code.endpoint(),
                 List.of(vision.endpoint(), fallback.endpoint()),
                 classification.endpoint());
 
-        RoutedCompletion result = router.complete(TaskType.VISION, request());
+        expectAnySuccess(fallback, "fallback-result");
+        RoutedCompletion result = router.complete(TaskType.VISION, multimodalRequest());
 
         assertRoutedTo(result, "vision-fallback", "fallback-model", "fallback-result");
+        assertThat(vision.circuitBreaker().getMetrics().getNumberOfFailedCalls()).isZero();
+    }
+
+    @Test
+    void allowsDomVisionRequestWithoutVisionInputWhenToolCallingIsAvailable() {
+        EndpointFixture code = endpoint("code-primary", "code-model");
+        EndpointFixture vision = endpoint(
+                "vision-primary",
+                "vision-model",
+                Set.of(InferenceCapability.CHAT_COMPLETIONS,
+                        InferenceCapability.TOOL_CALLING));
+        EndpointFixture classification = endpoint("classification-primary", "quick-model");
+        expectToolSuccess(vision, "dom-result");
+        ModelRouter router = router(code.endpoint(), vision.endpoint(), classification.endpoint());
+
+        RoutedCompletion result = router.complete(TaskType.VISION, toolRequest());
+
+        assertRoutedTo(result, "vision-primary", "vision-model", "dom-result");
         assertThat(vision.circuitBreaker().getMetrics().getNumberOfFailedCalls()).isZero();
     }
 
@@ -568,6 +586,18 @@ class ModelRouterTest {
                 null);
     }
 
+    private ModelRequest multimodalRequest() {
+        return new ModelRequest(
+                List.of(ChatMessage.userMultimodal(List.of(
+                        new ChatMessage.TextPart("route"),
+                        new ChatMessage.ImageUrlPart(new ChatMessage.ImageUrl(
+                                "data:image/png;base64,AA==",
+                                ChatMessage.ImageDetail.LOW))))),
+                List.of(),
+                null,
+                null);
+    }
+
     private EndpointFixture endpoint(String name, String model) {
         return endpoint(name, model, InferenceServiceContract.allCapabilities(),
                 InferenceAdmissionController.unlimited());
@@ -687,6 +717,24 @@ class ModelRouterTest {
                           "stream": false
                         }
                         """.formatted(fixture.endpoint().model()), true))
+                .andRespond(withSuccess("""
+                        {
+                          "id": "response-id",
+                          "object": "chat.completion",
+                          "created": 1720000000,
+                          "model": "%s",
+                          "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "%s"},
+                            "finish_reason": "stop"
+                          }]
+                        }
+                        """.formatted(fixture.endpoint().model(), contentText),
+                        MediaType.APPLICATION_JSON));
+    }
+
+    private void expectAnySuccess(EndpointFixture fixture, String contentText) {
+        fixture.server().expect(once(), requestTo(fixture.baseUrl() + CHAT_COMPLETIONS_PATH))
                 .andRespond(withSuccess("""
                         {
                           "id": "response-id",

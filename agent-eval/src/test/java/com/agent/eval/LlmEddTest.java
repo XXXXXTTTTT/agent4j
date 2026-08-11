@@ -5,6 +5,7 @@ import com.agent.core.llm.LlmClient;
 import com.agent.core.llm.ChatMessage;
 import com.agent.core.llm.ModelEndpoint;
 import com.agent.core.llm.ModelRouter;
+import com.agent.core.llm.OpenAiEndpoint;
 import com.agent.core.llm.TaskType;
 import com.agent.core.memory.MemoryContext;
 import com.agent.core.nodes.CoderNode;
@@ -47,16 +48,18 @@ class LlmEddTest {
             Assumptions.assumeTrue(false, "AGENT_LLM_ENABLED 未开启，跳过真实 LLM EDD");
         }
         EddConfiguration configuration = EddConfiguration.fromEnvironment();
+        OpenAiEndpoint endpoint = OpenAiEndpoint.resolve(
+                configuration.baseUrl(), configuration.chatCompletionsPath());
         ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
         RestClient restClient = RestClient.builder()
-                .baseUrl(configuration.baseUrl())
+                .baseUrl(endpoint.transportBaseUrl())
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + configuration.apiKey())
                 .build();
         try (LlmClient client = new LlmClient(
                 restClient,
                 objectMapper,
-                configuration.chatCompletionsPath(),
-                configuration.baseUrl() + configuration.chatCompletionsPath())) {
+                endpoint.requestPath(),
+                endpoint.requestUrl())) {
             AtomicInteger modelCallAttempts = new AtomicInteger();
             ModelRouter router = router(configuration, client, modelCallAttempts);
             List<EddScenario> scenarios = List.of(
@@ -107,17 +110,19 @@ class LlmEddTest {
             Assumptions.assumeTrue(false, "AGENT_LLM_ENABLED 未开启，跳过真实 RAG 模型 EDD");
         }
         EddConfiguration configuration = EddConfiguration.fromEnvironment();
+        OpenAiEndpoint endpoint = OpenAiEndpoint.resolve(
+                configuration.baseUrl(), configuration.chatCompletionsPath());
         ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
         RestClient restClient = RestClient.builder()
-                .baseUrl(configuration.baseUrl())
+                .baseUrl(endpoint.transportBaseUrl())
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + configuration.apiKey())
                 .build();
         List<RagEnhancerResult> results;
         try (LlmClient client = new LlmClient(
                 restClient,
                 objectMapper,
-                configuration.chatCompletionsPath(),
-                configuration.baseUrl() + configuration.chatCompletionsPath())) {
+                endpoint.requestPath(),
+                endpoint.requestUrl())) {
             AtomicInteger modelCallAttempts = new AtomicInteger();
             ModelRouter router = router(configuration, client, modelCallAttempts);
             results = List.of(

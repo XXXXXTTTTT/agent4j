@@ -6,6 +6,7 @@ import com.agent.core.gui.BrowserSessionRegistry;
 import com.agent.core.llm.LlmClient;
 import com.agent.core.llm.ModelEndpoint;
 import com.agent.core.llm.ModelRouter;
+import com.agent.core.llm.OpenAiEndpoint;
 import com.agent.core.llm.TaskType;
 import com.agent.core.nodes.CoderNode;
 import com.agent.core.nodes.GuiAgentNode;
@@ -77,6 +78,8 @@ class LiveGuiAgentWorkflowEddTest {
             Assumptions.assumeTrue(false, "AGENT_LLM_ENABLED 未开启，跳过 Live GUI EDD");
         }
         Configuration configuration = Configuration.fromEnvironment();
+        OpenAiEndpoint endpoint = OpenAiEndpoint.resolve(
+                configuration.baseUrl(), configuration.chatCompletionsPath());
         requireLaunchableChromium();
         HttpServer pageServer = startPageServer();
         URI pageUri = URI.create("http://127.0.0.1:"
@@ -99,13 +102,13 @@ class LiveGuiAgentWorkflowEddTest {
                     System::nanoTime);
             client = new LlmClient(
                     org.springframework.web.client.RestClient.builder()
-                            .baseUrl(configuration.baseUrl())
+                            .baseUrl(endpoint.transportBaseUrl())
                             .defaultHeader(org.springframework.http.HttpHeaders.AUTHORIZATION,
                                     "Bearer " + configuration.apiKey())
                             .build(),
                     mapper,
-                    configuration.chatCompletionsPath(),
-                    configuration.baseUrl() + configuration.chatCompletionsPath());
+                    endpoint.requestPath(),
+                    endpoint.requestUrl());
             tools.registerAll(com.agent.core.tool.builtin.BrowserToolDefinitions.definitions(
                     sessions, mapper, BROWSER_TIMEOUT));
             ModelRouter router = router(configuration, client);
@@ -171,14 +174,19 @@ class LiveGuiAgentWorkflowEddTest {
     }
 
     private ModelRouter router(Configuration configuration, LlmClient client) {
-        ModelEndpoint endpoint = new ModelEndpoint(
+        ModelEndpoint primary = new ModelEndpoint(
                 "live-vision-primary",
                 configuration.visionModel(),
                 client,
                 CircuitBreaker.ofDefaults("live-gui-vision"));
+        ModelEndpoint fallback = new ModelEndpoint(
+                "live-vision-fallback",
+                configuration.fallbackModel(),
+                client,
+                CircuitBreaker.ofDefaults("live-gui-fallback"));
         EnumMap<TaskType, List<ModelEndpoint>> routes = new EnumMap<>(TaskType.class);
         for (TaskType taskType : TaskType.values()) {
-            routes.put(taskType, List.of(endpoint));
+            routes.put(taskType, List.of(primary, fallback));
         }
         return new ModelRouter(routes);
     }
@@ -295,14 +303,16 @@ class LiveGuiAgentWorkflowEddTest {
             String baseUrl,
             String apiKey,
             String chatCompletionsPath,
-            String visionModel) {
+            String visionModel,
+            String fallbackModel) {
 
         private static Configuration fromEnvironment() {
             return new Configuration(
                     required("AGENT_LLM_BASE_URL"),
                     required("AGENT_LLM_API_KEY"),
                     valueOrDefault("AGENT_LLM_CHAT_COMPLETIONS_PATH", "/v1/chat/completions"),
-                    required("AGENT_LLM_VISION_MODEL"));
+                    required("AGENT_LLM_VISION_MODEL"),
+                    required("AGENT_LLM_FALLBACK_MODEL"));
         }
 
         private static String required(String name) {

@@ -170,10 +170,19 @@ public final class ModelRouter {
         if (!request.tools().isEmpty()) {
             required.add(InferenceCapability.TOOL_CALLING);
         }
-        if (taskType == TaskType.VISION) {
+        if (taskType == TaskType.VISION && containsImage(request.messages())) {
             required.add(InferenceCapability.VISION_INPUT);
         }
         return required;
+    }
+
+    private boolean containsImage(List<ChatMessage> messages) {
+        return messages.stream()
+                .map(ChatMessage::content)
+                .filter(ChatMessage.MultimodalContent.class::isInstance)
+                .map(ChatMessage.MultimodalContent.class::cast)
+                .flatMap(content -> content.parts().stream())
+                .anyMatch(ChatMessage.ImageUrlPart.class::isInstance);
     }
 
     private void requireCapabilities(
