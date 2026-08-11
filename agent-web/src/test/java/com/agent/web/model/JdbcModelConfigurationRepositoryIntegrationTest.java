@@ -223,6 +223,25 @@ class JdbcModelConfigurationRepositoryIntegrationTest {
         assertThat(repository.findProviders(owner.userId())).extracting(ModelProviderRecord::providerId).contains(provider);
     }
 
+    @Test
+    void rollsBackGroupAndMembershipWhenDuplicateMembershipInsertFails() {
+        Actor owner = new Actor("rollback-owner", "Rollback Owner");
+        insertUser(owner);
+        UUID provider = UUID.randomUUID(), first = UUID.randomUUID(), second = UUID.randomUUID(), group = UUID.randomUUID();
+        repository.createProvider(provider, owner, "p", "https://p", "k", NOW);
+        repository.createEndpoint(first, owner, provider, "first", "m1", Set.of(InferenceCapability.CHAT_COMPLETIONS), 0, 1, true, NOW);
+        repository.createEndpoint(second, owner, provider, "second", "m2", Set.of(InferenceCapability.CHAT_COMPLETIONS), 0, 1, true, NOW);
+        repository.createGroup(group, owner, "original", TaskType.CODE, List.of(first, second), NOW);
+
+        assertThatThrownBy(() -> repository.updateGroup(group, owner, "should-rollback", TaskType.VISION,
+                List.of(first, first), NOW.plusSeconds(1))).isInstanceOf(RuntimeException.class);
+
+        ModelGroupRecord restored = repository.findGroups(owner.userId()).getFirst();
+        assertThat(restored.displayName()).isEqualTo("original");
+        assertThat(restored.taskType()).isEqualTo(TaskType.CODE);
+        assertThat(restored.endpointIds()).containsExactly(first, second);
+    }
+
     private void insertUser(Actor actor) {
         jdbc.sql("insert into agent_users (user_id, display_name, enabled, created_at, updated_at) values (:userId, :displayName, true, :now, :now)")
                 .param("userId", actor.userId()).param("displayName", actor.displayName())
