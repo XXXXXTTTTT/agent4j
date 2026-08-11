@@ -115,13 +115,13 @@ AGENT_LLM_CIRCUIT_BREAKER_PERMITTED_NUMBER_OF_CALLS_IN_HALF_OPEN_STATE=1
 
 Compose 默认使用 `pgvector/pgvector:pg16`，并由 `POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD` 控制数据库初始化。应用容器通过 `SPRING_DATASOURCE_*` 连接 Compose 内的 `postgres` 服务。
 
-如果日志出现 `password authentication failed` 或 `role does not exist`，说明 `.env` 与既有数据卷的初始化凭据不一致。以下命令会从 Compose 的实际解析结果读取数据库、账号、密码和数据卷，并在保留数据的前提下修复凭据：
+如果日志出现 `password authentication failed`、`role does not exist` 或 `must be owner of table`，说明 `.env` 与既有数据卷的初始化账号不一致。以下命令会从 Compose 的实际解析结果读取数据库、账号、密码和数据卷，并在保留数据的前提下修复登录凭据、public schema 以及现有表和序列的 owner：
 
 ```powershell
 .\scripts\repair-local-postgres.ps1
 ```
 
-脚本只创建或更新登录角色并补齐数据库权限，不删除数据库、表或数据卷。健康检查会验证同一组账号密码后，`agent-web` 才会启动。
+脚本只创建或更新登录角色、补齐权限并转移 owner，不删除数据库、表或数据卷。健康检查会验证同一组账号密码后，`agent-web` 才会启动。
 
 ## Architecture
 

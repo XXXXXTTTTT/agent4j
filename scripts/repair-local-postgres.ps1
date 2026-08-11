@@ -76,6 +76,8 @@ $sql = @(
     "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $usernameIdentifier;"
     "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO $usernameIdentifier;"
     "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO $usernameIdentifier;"
+    "DO `$agent4j`$ DECLARE item record; BEGIN FOR item IN SELECT n.nspname AS schema_name, c.relname AS relation_name, c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'S') AND c.relowner <> (SELECT oid FROM pg_roles WHERE rolname = $usernameLiteral) LOOP IF item.relkind = 'S' THEN EXECUTE format('ALTER SEQUENCE %I.%I OWNER TO %I', item.schema_name, item.relation_name, $usernameLiteral); ELSE EXECUTE format('ALTER TABLE %I.%I OWNER TO %I', item.schema_name, item.relation_name, $usernameLiteral); END IF; END LOOP; END `$agent4j`$;"
+    "ALTER SCHEMA public OWNER TO $usernameIdentifier;"
 ) -join "`n"
 
 $sql | docker run --rm -i --user postgres `
