@@ -42,7 +42,7 @@ export interface ConversationWorkspaceApi {
   archiveConversation(conversationId: string): Promise<Conversation>
   deleteConversation?(conversationId: string): Promise<Conversation>
   listModelConfiguration?(): Promise<ModelConfigurationSnapshot>
-  createModelProvider?(command: { displayName: string; baseUrl: string; apiKey: string }): Promise<ModelConfigurationSnapshot>
+  createModelProvider?(command: { displayName: string; baseUrl: string; chatCompletionsPath?: string; apiKey: string }): Promise<ModelConfigurationSnapshot>
   createModelGroup?(command: { displayName: string; taskType: string; endpointIds: string[] }): Promise<ModelConfigurationSnapshot>
   createModelEndpoint?(command: { providerId: string; displayName: string; modelId: string; capabilities: string[]; priority: number; weight: number; enabled: boolean }): Promise<ModelConfigurationSnapshot>
 }
@@ -61,7 +61,7 @@ const DEFAULT_API: ConversationWorkspaceApi = {
   archiveConversation: (conversationId) => archiveConversation(conversationId),
   deleteConversation: (conversationId) => deleteConversation(conversationId),
   listModelConfiguration: () => listModelConfiguration(),
-  createModelProvider: (command) => createModelProvider(command),
+    createModelProvider: (command) => createModelProvider(command),
   createModelGroup: (command) => createModelGroup(command),
   createModelEndpoint: (command) => createModelEndpoint(command),
 }
@@ -96,7 +96,7 @@ export interface UseConversationWorkspaceResult {
   archive(): Promise<void>
   reload(): Promise<void>
   reloadModelConfiguration(): Promise<void>
-  createModelProvider?(command: { displayName: string; baseUrl: string; apiKey: string }): Promise<ModelConfigurationSnapshot>
+  createModelProvider?(command: { displayName: string; baseUrl: string; chatCompletionsPath?: string; apiKey: string }): Promise<ModelConfigurationSnapshot>
   createModelGroup?(command: { displayName: string; taskType: string; endpointIds: string[] }): Promise<ModelConfigurationSnapshot>
   createModelEndpoint?(command: { providerId: string; displayName: string; modelId: string; capabilities: string[]; priority: number; weight: number; enabled: boolean }): Promise<ModelConfigurationSnapshot>
 }

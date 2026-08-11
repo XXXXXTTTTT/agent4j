@@ -28,6 +28,7 @@ public final class ModelRouter {
 
     private final Map<TaskType, List<ModelEndpoint>> routes;
     private final Map<String, Map<TaskType, List<ModelEndpoint>>> groupRoutes;
+    private final ModelGroupRouteResolver groupRouteResolver;
     private final ModelCallObserver modelCallObserver;
 
     /**
@@ -36,7 +37,7 @@ public final class ModelRouter {
      * @param routes 每种任务对应的有序端点列表
      */
     public ModelRouter(Map<TaskType, List<ModelEndpoint>> routes) {
-        this(routes, Map.of(), ModelCallObserver.noop());
+        this(routes, Map.of(), null, ModelCallObserver.noop());
     }
 
     /**
@@ -48,7 +49,7 @@ public final class ModelRouter {
     public ModelRouter(
             Map<TaskType, List<ModelEndpoint>> routes,
             ModelCallObserver modelCallObserver) {
-        this(routes, Map.of(), modelCallObserver);
+        this(routes, Map.of(), null, modelCallObserver);
     }
 
     /** 使用静态模型组路由创建路由器；组内端点仍沿用同一熔断和准入策略。 */
@@ -56,8 +57,26 @@ public final class ModelRouter {
             Map<TaskType, List<ModelEndpoint>> routes,
             Map<String, Map<TaskType, List<ModelEndpoint>>> groupRoutes,
             ModelCallObserver modelCallObserver) {
+        this(routes, groupRoutes, null, modelCallObserver);
+    }
+
+    /** 使用动态模型组解析器创建路由器，未命中静态组时延迟读取组配置。 */
+    public ModelRouter(
+            Map<TaskType, List<ModelEndpoint>> routes,
+            ModelGroupRouteResolver groupRouteResolver,
+            ModelCallObserver modelCallObserver) {
+        this(routes, Map.of(), groupRouteResolver, modelCallObserver);
+    }
+
+    /** 同时支持静态组和动态组解析。 */
+    public ModelRouter(
+            Map<TaskType, List<ModelEndpoint>> routes,
+            Map<String, Map<TaskType, List<ModelEndpoint>>> groupRoutes,
+            ModelGroupRouteResolver groupRouteResolver,
+            ModelCallObserver modelCallObserver) {
         Objects.requireNonNull(routes, "routes 不能为空");
         Objects.requireNonNull(groupRoutes, "groupRoutes 不能为空");
+        this.groupRouteResolver = groupRouteResolver;
         this.modelCallObserver = Objects.requireNonNull(
                 modelCallObserver, "modelCallObserver 不能为空");
         EnumMap<TaskType, List<ModelEndpoint>> copiedRoutes =
@@ -198,10 +217,26 @@ public final class ModelRouter {
             return routes.get(taskType);
         }
         Map<TaskType, List<ModelEndpoint>> selected = groupRoutes.get(groupId);
-        if (selected == null || selected.get(taskType) == null || selected.get(taskType).isEmpty()) {
-            throw new ModelRoutingException("模型组不存在或不支持任务类型: " + groupId + "/" + taskType);
+        if (selected != null && selected.get(taskType) != null
+                && !selected.get(taskType).isEmpty()) {
+            return selected.get(taskType);
         }
-        return selected.get(taskType);
+        if (groupRouteResolver != null) {
+            try {
+                List<ModelEndpoint> resolved = groupRouteResolver.resolve(groupId, taskType);
+                if (resolved != null && !resolved.isEmpty()) {
+                    return List.copyOf(resolved);
+                }
+            } catch (ModelRoutingException exception) {
+                throw exception;
+            } catch (RuntimeException exception) {
+                ModelRoutingException routingException = new ModelRoutingException(
+                        "模型组解析失败: " + groupId + "/" + taskType);
+                routingException.initCause(exception);
+                throw routingException;
+            }
+        }
+        throw new ModelRoutingException("模型组不存在或不支持任务类型: " + groupId + "/" + taskType);
     }
 
     private static Map<String, Map<TaskType, List<ModelEndpoint>>> freezeGroups(

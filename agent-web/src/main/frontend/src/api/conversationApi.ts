@@ -220,8 +220,8 @@ export async function listModelConfiguration(fetcher: typeof fetch = globalThis.
   const value = objectAt(await requestJson('/api/model-config', { method: 'GET' }, fetcher), 'modelConfiguration')
   exactKeys(value, ['providers', 'endpoints', 'groups'], 'modelConfiguration')
   const providers = decodeArray(value.providers, (item, path) => {
-    const object = objectAt(item, path); exactKeys(object, ['providerId', 'ownerUserId', 'displayName', 'baseUrl', 'apiKeyMasked', 'createdAt', 'updatedAt'], path)
-    return { providerId: nonBlankStringAt(object.providerId, `${path}.providerId`), ownerUserId: nonBlankStringAt(object.ownerUserId, `${path}.ownerUserId`), displayName: nonBlankStringAt(object.displayName, `${path}.displayName`), baseUrl: nonBlankStringAt(object.baseUrl, `${path}.baseUrl`), apiKeyMasked: nonBlankStringAt(object.apiKeyMasked, `${path}.apiKeyMasked`), createdAt: stringAt(object.createdAt, `${path}.createdAt`), updatedAt: stringAt(object.updatedAt, `${path}.updatedAt`) }
+    const object = objectAt(item, path); exactKeys(object, ['providerId', 'ownerUserId', 'displayName', 'baseUrl', 'chatCompletionsPath', 'apiKeyMasked', 'createdAt', 'updatedAt'], path)
+    return { providerId: nonBlankStringAt(object.providerId, `${path}.providerId`), ownerUserId: nonBlankStringAt(object.ownerUserId, `${path}.ownerUserId`), displayName: nonBlankStringAt(object.displayName, `${path}.displayName`), baseUrl: nonBlankStringAt(object.baseUrl, `${path}.baseUrl`), chatCompletionsPath: nonBlankStringAt(object.chatCompletionsPath, `${path}.chatCompletionsPath`), apiKeyMasked: nonBlankStringAt(object.apiKeyMasked, `${path}.apiKeyMasked`), createdAt: stringAt(object.createdAt, `${path}.createdAt`), updatedAt: stringAt(object.updatedAt, `${path}.updatedAt`) }
   }, 'providers')
   const endpoints = decodeArray(value.endpoints, (item, path) => {
     const object = objectAt(item, path); exactKeys(object, ['endpointId', 'providerId', 'displayName', 'modelId', 'capabilities', 'priority', 'weight', 'enabled', 'createdAt', 'updatedAt'], path)
@@ -236,7 +236,7 @@ export async function listModelConfiguration(fetcher: typeof fetch = globalThis.
   return { providers, endpoints, groups }
 }
 
-export interface CreateModelProviderCommand { displayName: string; baseUrl: string; apiKey: string }
+export interface CreateModelProviderCommand { displayName: string; baseUrl: string; chatCompletionsPath?: string; apiKey: string }
 export async function createModelProvider(command: CreateModelProviderCommand, fetcher: typeof fetch = globalThis.fetch): Promise<ModelConfigurationSnapshot> {
   await requestJson('/api/model-config/providers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command) }, fetcher)
   return listModelConfiguration(fetcher)

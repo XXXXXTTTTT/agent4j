@@ -38,8 +38,21 @@ class ModelConfigurationServiceTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void preservesProviderChatCompletionsPathForRuntimeRouting() {
+        FakeRepository repository = new FakeRepository();
+        ModelConfigurationService service = new ModelConfigurationService(
+                repository, () -> ACTOR, Clock.fixed(NOW, ZoneOffset.UTC));
+
+        service.createProvider(
+                "自定义网关", "https://gateway.example/base", "/openai/chat", "sk-secret");
+
+        assertThat(repository.chatCompletionsPath).isEqualTo("/openai/chat");
+    }
+
     private static final class FakeRepository implements ModelConfigurationRepository {
         private String ownerId;
+        private String chatCompletionsPath;
 
         @Override public List<ModelProviderRecord> findProviders(String userId) { return List.of(); }
         @Override public List<ModelEndpointRecord> findEndpoints(String userId) { return List.of(); }
@@ -48,6 +61,10 @@ class ModelConfigurationServiceTest {
             ownerId = actor.userId();
             return new ModelProviderRecord(id, actor.userId(), name, baseUrl,
                     ModelConfigurationService.maskApiKey(key), now, now);
+        }
+        @Override public ModelProviderRecord createProvider(UUID id, Actor actor, String name, String baseUrl, String path, String key, Instant now) {
+            chatCompletionsPath = path;
+            return createProvider(id, actor, name, baseUrl, key, now);
         }
         @Override public ModelEndpointRecord createEndpoint(UUID id, Actor actor, UUID providerId, String displayName, String modelId, Set<InferenceCapability> capabilities, int priority, int weight, boolean enabled, Instant now) { throw new UnsupportedOperationException(); }
         @Override public ModelGroupRecord createGroup(UUID id, Actor actor, String displayName, TaskType taskType, List<UUID> endpointIds, Instant now) { throw new UnsupportedOperationException(); }

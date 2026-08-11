@@ -7,6 +7,7 @@ import com.agent.web.model.ModelConfigurationRepository;
 import com.agent.web.model.ModelEndpointRecord;
 import com.agent.web.model.ModelGroupRecord;
 import com.agent.web.model.ModelProviderRecord;
+import com.agent.web.model.ModelProviderRuntime;
 import com.agent.web.model.ModelConfigurationService;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -35,7 +36,8 @@ public final class JdbcModelConfigurationRepository implements ModelConfiguratio
     @Override
     public List<ModelProviderRecord> findProviders(String userId) {
         return jdbc.sql("""
-                select provider_id, owner_user_id, display_name, base_url, api_key,
+                select provider_id, owner_user_id, display_name, base_url,
+                       chat_completions_path, api_key,
                        created_at, updated_at
                 from agent_model_providers
                 where owner_user_id = :userId
@@ -43,6 +45,7 @@ public final class JdbcModelConfigurationRepository implements ModelConfiguratio
                 """).param("userId", userId).query((rs, n) -> new ModelProviderRecord(
                 rs.getObject("provider_id", UUID.class), rs.getString("owner_user_id"),
                 rs.getString("display_name"), rs.getString("base_url"),
+                rs.getString("chat_completions_path"),
                 ModelConfigurationService.maskApiKey(rs.getString("api_key")),
                 rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("updated_at").toInstant()))
                 .list();
@@ -104,12 +107,23 @@ public final class JdbcModelConfigurationRepository implements ModelConfiguratio
     @Override
     public ModelProviderRecord createProvider(UUID providerId, Actor actor, String displayName,
                                               String baseUrl, String apiKey, Instant now) {
+        return createProvider(providerId, actor, displayName, baseUrl,
+                "/v1/chat/completions", apiKey, now);
+    }
+
+    @Override
+    public ModelProviderRecord createProvider(UUID providerId, Actor actor, String displayName,
+                                              String baseUrl, String chatCompletionsPath,
+                                              String apiKey, Instant now) {
         jdbc.sql("""
                 insert into agent_model_providers
-                    (provider_id, owner_user_id, display_name, base_url, api_key, created_at, updated_at)
-                values (:providerId, :ownerUserId, :displayName, :baseUrl, :apiKey, :createdAt, :updatedAt)
+                    (provider_id, owner_user_id, display_name, base_url,
+                     chat_completions_path, api_key, created_at, updated_at)
+                values (:providerId, :ownerUserId, :displayName, :baseUrl,
+                        :chatCompletionsPath, :apiKey, :createdAt, :updatedAt)
                 """).param("providerId", providerId).param("ownerUserId", actor.userId())
-                .param("displayName", displayName).param("baseUrl", baseUrl).param("apiKey", apiKey)
+                .param("displayName", displayName).param("baseUrl", baseUrl)
+                .param("chatCompletionsPath", chatCompletionsPath).param("apiKey", apiKey)
                 .param("createdAt", timestamp(now)).param("updatedAt", timestamp(now)).update();
         return findProviders(actor.userId()).stream().filter(value -> value.providerId().equals(providerId))
                 .findFirst().orElseThrow();
@@ -177,6 +191,22 @@ public final class JdbcModelConfigurationRepository implements ModelConfiguratio
     public Optional<String> apiKey(UUID providerId, String userId) {
         return jdbc.sql("select api_key from agent_model_providers where provider_id = :providerId and owner_user_id = :userId")
                 .param("providerId", providerId).param("userId", userId).query(String.class).optional();
+    }
+
+    @Override
+    public Optional<ModelProviderRuntime> findProviderRuntime(UUID providerId, String userId) {
+        return jdbc.sql("""
+                select provider_id, owner_user_id, base_url,
+                       chat_completions_path, api_key
+                from agent_model_providers
+                where provider_id = :providerId and owner_user_id = :userId
+                """).param("providerId", providerId).param("userId", userId)
+                .query((rs, n) -> new ModelProviderRuntime(
+                        rs.getObject("provider_id", UUID.class),
+                        rs.getString("owner_user_id"),
+                        rs.getString("base_url"),
+                        rs.getString("chat_completions_path"),
+                        rs.getString("api_key"))).optional();
     }
 
     private void requireOwnedProvider(UUID providerId, String userId) {

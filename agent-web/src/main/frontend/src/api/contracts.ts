@@ -180,7 +180,7 @@ export interface ConversationTurn {
 
 export type ModelTaskType = 'CODE' | 'VISION' | 'QUICK_CLASSIFICATION'
 export type InferenceCapability = 'CHAT_COMPLETIONS' | 'STREAMING' | 'TOOL_CALLING' | 'VISION_INPUT'
-export interface ModelProvider { providerId: string; ownerUserId: string; displayName: string; baseUrl: string; apiKeyMasked: string; createdAt: string; updatedAt: string }
+export interface ModelProvider { providerId: string; ownerUserId: string; displayName: string; baseUrl: string; chatCompletionsPath: string; apiKeyMasked: string; createdAt: string; updatedAt: string }
 export interface ModelEndpoint { endpointId: string; providerId: string; displayName: string; modelId: string; capabilities: InferenceCapability[]; priority: number; weight: number; enabled: boolean; createdAt: string; updatedAt: string }
 export interface ModelGroup { groupId: string; ownerUserId: string; displayName: string; taskType: ModelTaskType; endpointIds: string[]; createdAt: string; updatedAt: string }
 export interface ModelConfigurationSnapshot { providers: ModelProvider[]; endpoints: ModelEndpoint[]; groups: ModelGroup[] }

@@ -1,6 +1,7 @@
 package com.agent.web.model;
 
 import com.agent.core.llm.InferenceCapability;
+import com.agent.core.llm.OpenAiEndpoint;
 import com.agent.core.llm.TaskType;
 import com.agent.web.identity.Actor;
 import com.agent.web.identity.ActorResolver;
@@ -34,8 +35,15 @@ public final class ModelConfigurationService {
     }
 
     public ModelProviderRecord createProvider(String displayName, String baseUrl, String apiKey) {
+        return createProvider(displayName, baseUrl, "/v1/chat/completions", apiKey);
+    }
+
+    /** 创建使用精确 Chat Completions 路径的 Provider。 */
+    public ModelProviderRecord createProvider(
+            String displayName, String baseUrl, String chatCompletionsPath, String apiKey) {
         requireText(displayName, "displayName");
         requireText(apiKey, "apiKey");
+        String exactPath = normalizeChatCompletionsPath(chatCompletionsPath);
         URI uri;
         try {
             uri = URI.create(Objects.requireNonNull(baseUrl, "baseUrl 不能为空").trim());
@@ -48,7 +56,7 @@ public final class ModelConfigurationService {
         }
         Actor actor = actorResolver.current();
         return repository.createProvider(UUID.randomUUID(), actor, displayName.trim(),
-                uri.toString(), apiKey.trim(), clock.instant());
+                uri.toString(), exactPath, apiKey.trim(), clock.instant());
     }
 
     public ModelEndpointRecord createEndpoint(UUID providerId, String displayName, String modelId,
@@ -95,5 +103,15 @@ public final class ModelConfigurationService {
         if (Objects.requireNonNull(value, name + " 不能为空").isBlank()) {
             throw new IllegalArgumentException(name + " 不能为空白");
         }
+    }
+
+    private static String normalizeChatCompletionsPath(String value) {
+        String path = value == null || value.isBlank()
+                ? "/v1/chat/completions" : value.trim();
+        if (!path.startsWith("/")) {
+            throw new IllegalArgumentException("chatCompletionsPath 必须以 / 开头");
+        }
+        OpenAiEndpoint.resolve("https://model-provider.invalid", path);
+        return path;
     }
 }

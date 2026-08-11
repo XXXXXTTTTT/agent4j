@@ -49,7 +49,7 @@ public final class ModelConfigurationController {
     public ResponseEntity<ModelProviderRecord> createProvider(
             @Valid @RequestBody CreateProviderRequest request) {
         return ResponseEntity.status(201).body(service().createProvider(
-                request.displayName(), request.baseUrl(), request.apiKey()));
+                request.displayName(), request.baseUrl(), request.chatCompletionsPath(), request.apiKey()));
     }
 
     @PostMapping("/endpoints")
@@ -82,6 +82,7 @@ public final class ModelConfigurationController {
     public record CreateProviderRequest(
             @NotBlank String displayName,
             @NotBlank String baseUrl,
+            String chatCompletionsPath,
             @NotBlank String apiKey) {
     }
 

@@ -17,6 +17,12 @@ public interface ModelConfigurationRepository {
     List<ModelGroupRecord> findGroups(String userId);
     ModelProviderRecord createProvider(UUID providerId, Actor actor, String displayName,
                                        String baseUrl, String apiKey, Instant now);
+    /** 使用精确 Chat Completions 路径创建 Provider。 */
+    default ModelProviderRecord createProvider(UUID providerId, Actor actor, String displayName,
+                                               String baseUrl, String chatCompletionsPath,
+                                               String apiKey, Instant now) {
+        return createProvider(providerId, actor, displayName, baseUrl, apiKey, now);
+    }
     ModelEndpointRecord createEndpoint(UUID endpointId, Actor actor, UUID providerId,
                                        String displayName, String modelId,
                                        Set<InferenceCapability> capabilities,
@@ -25,4 +31,9 @@ public interface ModelConfigurationRepository {
                                  TaskType taskType, List<UUID> endpointIds, Instant now);
     void deleteProvider(UUID providerId, String userId);
     Optional<String> apiKey(UUID providerId, String userId);
+
+    /** 读取当前用户的 Provider 私密运行时配置。 */
+    default Optional<ModelProviderRuntime> findProviderRuntime(UUID providerId, String userId) {
+        return Optional.empty();
+    }
 }
