@@ -17,6 +17,12 @@ import {
   createModelProvider,
   createModelGroup,
   createModelEndpoint,
+  updateModelProvider,
+  updateModelEndpoint,
+  updateModelGroup,
+  deleteModelProvider,
+  deleteModelEndpoint,
+  deleteModelGroup,
 } from '../api/conversationApi'
 import type {
   Actor,
@@ -26,7 +32,7 @@ import type {
   WorkspaceDirectoryListing,
   ModelConfigurationSnapshot,
 } from '../api/contracts'
-import type { CreateWorkspaceCommand, ImportWorkspaceCommand } from '../api/conversationApi'
+import type { CreateWorkspaceCommand, ImportWorkspaceCommand, UpdateModelEndpointCommand, UpdateModelGroupCommand, UpdateModelProviderCommand } from '../api/conversationApi'
 
 export interface ConversationWorkspaceApi {
   getIdentity(): Promise<Actor>
@@ -45,6 +51,12 @@ export interface ConversationWorkspaceApi {
   createModelProvider?(command: { displayName: string; baseUrl: string; chatCompletionsPath?: string; apiKey: string }): Promise<ModelConfigurationSnapshot>
   createModelGroup?(command: { displayName: string; taskType: string; endpointIds: string[] }): Promise<ModelConfigurationSnapshot>
   createModelEndpoint?(command: { providerId: string; displayName: string; modelId: string; capabilities: string[]; priority: number; weight: number; enabled: boolean }): Promise<ModelConfigurationSnapshot>
+  updateModelProvider?(id: string, command: UpdateModelProviderCommand): Promise<ModelConfigurationSnapshot>
+  updateModelEndpoint?(id: string, command: UpdateModelEndpointCommand): Promise<ModelConfigurationSnapshot>
+  updateModelGroup?(id: string, command: UpdateModelGroupCommand): Promise<ModelConfigurationSnapshot>
+  deleteModelProvider?(id: string): Promise<ModelConfigurationSnapshot>
+  deleteModelEndpoint?(id: string): Promise<ModelConfigurationSnapshot>
+  deleteModelGroup?(id: string): Promise<ModelConfigurationSnapshot>
 }
 
 const DEFAULT_API: ConversationWorkspaceApi = {
@@ -61,9 +73,15 @@ const DEFAULT_API: ConversationWorkspaceApi = {
   archiveConversation: (conversationId) => archiveConversation(conversationId),
   deleteConversation: (conversationId) => deleteConversation(conversationId),
   listModelConfiguration: () => listModelConfiguration(),
-    createModelProvider: (command) => createModelProvider(command),
+  createModelProvider: (command) => createModelProvider(command),
   createModelGroup: (command) => createModelGroup(command),
   createModelEndpoint: (command) => createModelEndpoint(command),
+  updateModelProvider: (id, command) => updateModelProvider(id, command),
+  updateModelEndpoint: (id, command) => updateModelEndpoint(id, command),
+  updateModelGroup: (id, command) => updateModelGroup(id, command),
+  deleteModelProvider: (id) => deleteModelProvider(id),
+  deleteModelEndpoint: (id) => deleteModelEndpoint(id),
+  deleteModelGroup: (id) => deleteModelGroup(id),
 }
 
 export interface UseConversationWorkspaceOptions {
@@ -99,6 +117,12 @@ export interface UseConversationWorkspaceResult {
   createModelProvider?(command: { displayName: string; baseUrl: string; chatCompletionsPath?: string; apiKey: string }): Promise<ModelConfigurationSnapshot>
   createModelGroup?(command: { displayName: string; taskType: string; endpointIds: string[] }): Promise<ModelConfigurationSnapshot>
   createModelEndpoint?(command: { providerId: string; displayName: string; modelId: string; capabilities: string[]; priority: number; weight: number; enabled: boolean }): Promise<ModelConfigurationSnapshot>
+  updateModelProvider(id: string, command: UpdateModelProviderCommand): Promise<ModelConfigurationSnapshot>
+  updateModelEndpoint(id: string, command: UpdateModelEndpointCommand): Promise<ModelConfigurationSnapshot>
+  updateModelGroup(id: string, command: UpdateModelGroupCommand): Promise<ModelConfigurationSnapshot>
+  deleteModelProvider(id: string): Promise<ModelConfigurationSnapshot>
+  deleteModelEndpoint(id: string): Promise<ModelConfigurationSnapshot>
+  deleteModelGroup(id: string): Promise<ModelConfigurationSnapshot>
 }
 
 function asError(value: unknown): Error {
@@ -316,6 +340,23 @@ export function useConversationWorkspace(
     setModelConfiguration(await apiRef.current.listModelConfiguration())
   }, [])
 
+  const runModelConfigurationCommand = useCallback(async (command: (() => Promise<ModelConfigurationSnapshot>) | undefined, missingMessage: string): Promise<ModelConfigurationSnapshot> => {
+    if (command === undefined) {
+      const failure = new Error(missingMessage)
+      setError(failure)
+      throw failure
+    }
+    setError(null)
+    try {
+      const snapshot = await command()
+      setModelConfiguration(snapshot)
+      return snapshot
+    } catch (failure) {
+      setError(asError(failure))
+      throw failure
+    }
+  }, [])
+
   const archive = useCallback(async (): Promise<void> => {
     if (activeConversationId === null) throw new Error('当前没有会话')
     try {
@@ -384,12 +425,15 @@ export function useConversationWorkspace(
     browseWorkspaceDirectories: browseWorkspaceDirectoryEntries,
     importWorkspace: importWorkspaceEntry,
     submit, archive, deleteConversation: deleteActiveConversation, reload, reloadModelConfiguration,
-    createModelProvider: (command) => apiRef.current.createModelProvider === undefined
-      ? Promise.reject(new Error('模型 Provider 接口未配置')) : apiRef.current.createModelProvider(command),
-    createModelGroup: (command) => apiRef.current.createModelGroup === undefined
-      ? Promise.reject(new Error('模型组接口未配置')) : apiRef.current.createModelGroup(command),
-    createModelEndpoint: (command) => apiRef.current.createModelEndpoint === undefined
-      ? Promise.reject(new Error('模型端点接口未配置')) : apiRef.current.createModelEndpoint(command),
+    createModelProvider: (command) => runModelConfigurationCommand(apiRef.current.createModelProvider === undefined ? undefined : () => apiRef.current.createModelProvider!(command), '模型 Provider 接口未配置'),
+    createModelGroup: (command) => runModelConfigurationCommand(apiRef.current.createModelGroup === undefined ? undefined : () => apiRef.current.createModelGroup!(command), '模型组接口未配置'),
+    createModelEndpoint: (command) => runModelConfigurationCommand(apiRef.current.createModelEndpoint === undefined ? undefined : () => apiRef.current.createModelEndpoint!(command), '模型端点接口未配置'),
+    updateModelProvider: (id, command) => runModelConfigurationCommand(apiRef.current.updateModelProvider === undefined ? undefined : () => apiRef.current.updateModelProvider!(id, command), '更新模型 Provider 接口未配置'),
+    updateModelEndpoint: (id, command) => runModelConfigurationCommand(apiRef.current.updateModelEndpoint === undefined ? undefined : () => apiRef.current.updateModelEndpoint!(id, command), '更新模型端点接口未配置'),
+    updateModelGroup: (id, command) => runModelConfigurationCommand(apiRef.current.updateModelGroup === undefined ? undefined : () => apiRef.current.updateModelGroup!(id, command), '更新模型组接口未配置'),
+    deleteModelProvider: (id) => runModelConfigurationCommand(apiRef.current.deleteModelProvider === undefined ? undefined : () => apiRef.current.deleteModelProvider!(id), '删除模型 Provider 接口未配置'),
+    deleteModelEndpoint: (id) => runModelConfigurationCommand(apiRef.current.deleteModelEndpoint === undefined ? undefined : () => apiRef.current.deleteModelEndpoint!(id), '删除模型端点接口未配置'),
+    deleteModelGroup: (id) => runModelConfigurationCommand(apiRef.current.deleteModelGroup === undefined ? undefined : () => apiRef.current.deleteModelGroup!(id), '删除模型组接口未配置'),
     modelConfiguration,
   }
 }

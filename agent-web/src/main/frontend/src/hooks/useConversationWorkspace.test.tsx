@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { Actor, Conversation, ConversationTurn, Workspace } from '../api/contracts'
+import type { Actor, Conversation, ConversationTurn, ModelConfigurationSnapshot, Workspace } from '../api/contracts'
 import { useConversationWorkspace } from './useConversationWorkspace'
 
 const actor: Actor = { userId: 'user-1', displayName: 'Alice' }
@@ -26,6 +26,55 @@ const turn: ConversationTurn = {
 }
 
 describe('useConversationWorkspace', () => {
+  it('透传六个模型配置命令并用返回快照更新状态', async () => {
+    const initialSnapshot: ModelConfigurationSnapshot = { providers: [], endpoints: [], groups: [] }
+    const updatedSnapshot: ModelConfigurationSnapshot = {
+      providers: [], endpoints: [], groups: [{ groupId: 'group-1', ownerUserId: 'user-1', displayName: '模型组', taskType: 'CODE', endpointIds: [], createdAt: '2026-08-07T01:00:00Z', updatedAt: '2026-08-07T01:00:00Z' }],
+    }
+    const api = {
+      getIdentity: vi.fn(async () => actor), listWorkspaces: vi.fn(async () => [workspace]),
+      listConversations: vi.fn(async () => []), listConversationTurns: vi.fn(async () => []),
+      searchConversations: vi.fn(async () => []), createConversation: vi.fn(async () => conversation),
+      createWorkspace: vi.fn(), submitConversationTurn: vi.fn(), archiveConversation: vi.fn(),
+      listModelConfiguration: vi.fn(async () => initialSnapshot),
+      updateModelProvider: vi.fn(async () => updatedSnapshot), updateModelEndpoint: vi.fn(async () => updatedSnapshot),
+      updateModelGroup: vi.fn(async () => updatedSnapshot), deleteModelProvider: vi.fn(async () => updatedSnapshot),
+      deleteModelEndpoint: vi.fn(async () => updatedSnapshot), deleteModelGroup: vi.fn(async () => updatedSnapshot),
+    }
+    const { result } = renderHook(() => useConversationWorkspace({ api }))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    await act(() => result.current.updateModelProvider('provider-1', { displayName: '网关', baseUrl: 'https://example.com', chatCompletionsPath: '/chat' }))
+    await act(() => result.current.updateModelEndpoint('endpoint-1', { displayName: '端点', modelId: 'model', capabilities: ['CHAT_COMPLETIONS'], priority: 0, weight: 1, enabled: true }))
+    await act(() => result.current.updateModelGroup('group-1', { displayName: '模型组', taskType: 'CODE', endpointIds: ['endpoint-1'] }))
+    await act(() => result.current.deleteModelProvider('provider-1'))
+    await act(() => result.current.deleteModelEndpoint('endpoint-1'))
+    await act(() => result.current.deleteModelGroup('group-1'))
+
+    expect(api.updateModelProvider).toHaveBeenCalledWith('provider-1', { displayName: '网关', baseUrl: 'https://example.com', chatCompletionsPath: '/chat' })
+    expect(api.updateModelEndpoint).toHaveBeenCalledWith('endpoint-1', { displayName: '端点', modelId: 'model', capabilities: ['CHAT_COMPLETIONS'], priority: 0, weight: 1, enabled: true })
+    expect(api.updateModelGroup).toHaveBeenCalledWith('group-1', { displayName: '模型组', taskType: 'CODE', endpointIds: ['endpoint-1'] })
+    expect(api.deleteModelProvider).toHaveBeenCalledWith('provider-1')
+    expect(api.deleteModelEndpoint).toHaveBeenCalledWith('endpoint-1')
+    expect(api.deleteModelGroup).toHaveBeenCalledWith('group-1')
+    expect(api.listModelConfiguration).toHaveBeenCalledTimes(1)
+    expect(result.current.modelConfiguration).toEqual(updatedSnapshot)
+  })
+
+  it('模型配置命令接口未配置时写入明确错误状态', async () => {
+    const api = {
+      getIdentity: vi.fn(async () => actor), listWorkspaces: vi.fn(async () => [workspace]),
+      listConversations: vi.fn(async () => []), listConversationTurns: vi.fn(async () => []),
+      searchConversations: vi.fn(async () => []), createConversation: vi.fn(async () => conversation),
+      createWorkspace: vi.fn(), submitConversationTurn: vi.fn(), archiveConversation: vi.fn(),
+    }
+    const { result } = renderHook(() => useConversationWorkspace({ api }))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    await expect(result.current.deleteModelGroup('group-1')).rejects.toThrow('删除模型组接口未配置')
+    await waitFor(() => expect(result.current.error?.message).toBe('删除模型组接口未配置'))
+  })
+
   it('初始化身份、工作区和 URL 指定会话的服务端轮次', async () => {
     const api = {
       getIdentity: vi.fn(async () => actor),
