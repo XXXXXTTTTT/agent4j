@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.Set;
 import java.util.UUID;
 import java.util.List;
+import java.util.Properties;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -256,12 +257,25 @@ class JdbcModelConfigurationRepositoryIntegrationTest {
             try (PreparedStatement membership = connection.prepareStatement("insert into agent_model_group_endpoints (group_id, endpoint_id, position) values (?, ?, 0)")) {
                 membership.setObject(1, group); membership.setObject(2, endpoint); membership.executeUpdate();
             }
+            DataSource raceDataSource = dataSource("endpoint-delete-race");
+            JdbcModelConfigurationRepository raceRepository = new JdbcModelConfigurationRepository(
+                    JdbcClient.create(raceDataSource), new TransactionTemplate(new DataSourceTransactionManager(raceDataSource)));
             Future<Throwable> deletion = executor.submit(() -> {
-                try { repository.deleteEndpoint(endpoint, owner.userId()); return null; }
+                try { raceRepository.deleteEndpoint(endpoint, owner.userId()); return null; }
                 catch (Throwable failure) { return failure; }
             });
-            Thread.sleep(200);
-            assertThat(deletion.isDone()).isFalse();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            boolean waiting = false;
+            while (System.nanoTime() < deadline) {
+                long count = jdbc.sql("""
+                        select count(*) from pg_stat_activity
+                        where application_name = 'endpoint-delete-race'
+                          and state = 'active' and wait_event_type = 'Lock'
+                        """).query(Long.class).single();
+                if (count > 0) { waiting = true; break; }
+                Thread.sleep(20);
+            }
+            assertThat(waiting).isTrue();
             connection.commit();
             Throwable failure = deletion.get(5, TimeUnit.SECONDS);
             assertThat(failure)
@@ -280,11 +294,20 @@ class JdbcModelConfigurationRepositoryIntegrationTest {
     }
 
     private DataSource dataSource() {
+        return dataSource(null);
+    }
+
+    private DataSource dataSource(String applicationName) {
         DriverManagerDataSource dataSource = new DriverManagerDataSource();
         dataSource.setDriverClassName(POSTGRES.getDriverClassName());
         dataSource.setUrl(POSTGRES.getJdbcUrl());
         dataSource.setUsername(POSTGRES.getUsername());
         dataSource.setPassword(POSTGRES.getPassword());
+        if (applicationName != null) {
+            Properties properties = new Properties();
+            properties.setProperty("ApplicationName", applicationName);
+            dataSource.setConnectionProperties(properties);
+        }
         return dataSource;
     }
 }
