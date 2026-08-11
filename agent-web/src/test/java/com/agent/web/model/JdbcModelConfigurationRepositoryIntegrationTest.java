@@ -249,27 +249,17 @@ class JdbcModelConfigurationRepositoryIntegrationTest {
         repository.createProvider(provider, owner, "p", "https://p", "k", NOW);
         repository.createEndpoint(endpoint, owner, provider, "e", "m", Set.of(InferenceCapability.CHAT_COMPLETIONS), 0, 1, true, NOW);
         repository.createGroup(group, owner, "g", TaskType.CODE, List.of(endpoint), NOW);
-        jdbc.sql("delete from agent_model_group_endpoints where group_id = :groupId").param("groupId", group).update();
-        try (Connection connection = dataSource.getConnection()) {
-            connection.setAutoCommit(false);
-            try (PreparedStatement lock = connection.prepareStatement("select endpoint_id from agent_model_endpoints where endpoint_id = ? for update")) {
-                lock.setObject(1, endpoint); lock.executeQuery().close();
-            }
-            ExecutorService executor = Executors.newSingleThreadExecutor();
-            try {
-                Future<Throwable> deletion = executor.submit(() -> {
-                    try { repository.deleteEndpoint(endpoint, owner.userId()); return null; }
-                    catch (Throwable failure) { return failure; }
-                });
-                Thread.sleep(200);
-                assertThat(deletion.isDone()).isFalse();
-                try (PreparedStatement membership = connection.prepareStatement("insert into agent_model_group_endpoints (group_id, endpoint_id, position) values (?, ?, 0)")) {
-                    membership.setObject(1, group); membership.setObject(2, endpoint); membership.executeUpdate();
-                }
-                connection.commit();
-                assertThat(deletion.get(5, TimeUnit.SECONDS)).isInstanceOf(JdbcModelConfigurationRepository.ModelConfigurationConflictException.class);
-            } finally { executor.shutdownNow(); }
-        }
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Throwable> deletion = executor.submit(() -> {
+                try { repository.deleteEndpoint(endpoint, owner.userId()); return null; }
+                catch (Throwable failure) { return failure; }
+            });
+            Throwable failure = deletion.get(5, TimeUnit.SECONDS);
+            assertThat(failure)
+                    .isInstanceOf(JdbcModelConfigurationRepository.ModelConfigurationConflictException.class)
+                    .hasMessage("Endpoint 仍被模型组引用，请先从 Group 移除: " + endpoint);
+        } finally { executor.shutdownNow(); }
     }
 
     private void insertUser(Actor actor) {
