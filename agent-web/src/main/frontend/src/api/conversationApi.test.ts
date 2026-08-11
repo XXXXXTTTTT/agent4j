@@ -60,8 +60,10 @@ function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
-function noContentResponse(): Response {
-  return new Response(null, { status: 204 })
+function noContentResponse(): { response: Response; textSpy: ReturnType<typeof vi.spyOn> } {
+  const response = new Response(null, { status: 204 })
+  const textSpy = vi.spyOn(response, 'text')
+  return { response, textSpy }
 }
 
 describe('Conversation API 协议解码', () => {
@@ -188,6 +190,8 @@ describe('模型配置命令', () => {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ displayName: '网关', baseUrl: 'https://example.com', chatCompletionsPath: '/chat', apiKey: 'sk-new' }),
     })
+    expect(fetcher).toHaveBeenNthCalledWith(2, '/api/model-config', { method: 'GET' })
+    expect(fetcher).toHaveBeenNthCalledWith(4, '/api/model-config', { method: 'GET' })
   })
 
   it('精确更新端点和模型组，并在成功后读取权威快照', async () => {
@@ -208,15 +212,20 @@ describe('模型配置命令', () => {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ displayName: '模型组', taskType: 'CODE', endpointIds: ['endpoint-1'] }),
     })
+    expect(fetcher).toHaveBeenNthCalledWith(2, '/api/model-config', { method: 'GET' })
+    expect(fetcher).toHaveBeenNthCalledWith(4, '/api/model-config', { method: 'GET' })
   })
 
   it('删除 204 后不读取响应正文，并读取权威快照', async () => {
+    const providerDelete = noContentResponse()
+    const endpointDelete = noContentResponse()
+    const groupDelete = noContentResponse()
     const fetcher = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(noContentResponse())
+      .mockResolvedValueOnce(providerDelete.response)
       .mockResolvedValueOnce(response({ providers: [], endpoints: [], groups: [] }))
-      .mockResolvedValueOnce(noContentResponse())
+      .mockResolvedValueOnce(endpointDelete.response)
       .mockResolvedValueOnce(response({ providers: [], endpoints: [], groups: [] }))
-      .mockResolvedValueOnce(noContentResponse())
+      .mockResolvedValueOnce(groupDelete.response)
       .mockResolvedValueOnce(response({ providers: [], endpoints: [], groups: [] }))
 
     await deleteModelProvider('provider-1', fetcher)
@@ -226,14 +235,23 @@ describe('模型配置命令', () => {
     expect(fetcher).toHaveBeenNthCalledWith(1, '/api/model-config/providers/provider-1', { method: 'DELETE' })
     expect(fetcher).toHaveBeenNthCalledWith(3, '/api/model-config/endpoints/endpoint-1', { method: 'DELETE' })
     expect(fetcher).toHaveBeenNthCalledWith(5, '/api/model-config/groups/group-1', { method: 'DELETE' })
+    expect(fetcher).toHaveBeenNthCalledWith(2, '/api/model-config', { method: 'GET' })
+    expect(fetcher).toHaveBeenNthCalledWith(4, '/api/model-config', { method: 'GET' })
+    expect(fetcher).toHaveBeenNthCalledWith(6, '/api/model-config', { method: 'GET' })
+    expect(providerDelete.textSpy).not.toHaveBeenCalled()
+    expect(endpointDelete.textSpy).not.toHaveBeenCalled()
+    expect(groupDelete.textSpy).not.toHaveBeenCalled()
   })
 
   it('保留 409 ProblemDetail 原文并拒绝空 ID', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({ detail: '端点仍被模型组引用' }, 409))
 
-    await expect(deleteModelEndpoint('endpoint-1', fetcher)).rejects.toMatchObject({ message: '端点仍被模型组引用', status: 409 })
+    await expect(deleteModelEndpoint('endpoint-1', fetcher)).rejects.toMatchObject({ message: '端点仍被模型组引用', status: 409, responseBody: JSON.stringify({ detail: '端点仍被模型组引用' }) })
     await expect(updateModelProvider(' ', { displayName: '网关', baseUrl: 'https://example.com', chatCompletionsPath: '/chat' }, fetcher)).rejects.toThrow('不能为空')
     await expect(updateModelEndpoint('', { displayName: '端点', modelId: 'model', capabilities: [], priority: 0, weight: 1, enabled: true }, fetcher)).rejects.toThrow('不能为空')
     await expect(updateModelGroup('\t', { displayName: '组', taskType: 'CODE', endpointIds: [] }, fetcher)).rejects.toThrow('不能为空')
+    await expect(deleteModelProvider('', fetcher)).rejects.toThrow('不能为空')
+    await expect(deleteModelEndpoint(' ', fetcher)).rejects.toThrow('不能为空')
+    await expect(deleteModelGroup('\t', fetcher)).rejects.toThrow('不能为空')
   })
 })
