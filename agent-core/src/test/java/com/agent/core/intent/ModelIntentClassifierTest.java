@@ -127,6 +127,21 @@ class ModelIntentClassifierTest {
     }
 
     @Test
+    void routesUserImageRequestToToolOperationFastPath() {
+        ModelIntentClassifier classifier = classifier(messages -> {
+            throw new AssertionError("明确图片生成动作不应调用语义模型");
+        });
+
+        TaskDecision decision = classifier.classify(
+                List.of(), "请你帮我生成一张 尸兄 小鹿的图片");
+
+        assertThat(decision.route()).isEqualTo(TaskRoute.AGENT);
+        assertThat(decision.taskKind()).isEqualTo(TaskKind.TOOL_OPERATION);
+        assertThat(decision.requiredCapabilities())
+                .containsExactly(RequiredCapability.TOOL);
+    }
+
+    @Test
     void parsesExactSemanticDecisionJson() {
         ModelIntentClassifier classifier = classifier(messages -> """
                 {"route":"CHAT","taskKind":"CHAT","complexity":"SIMPLE",

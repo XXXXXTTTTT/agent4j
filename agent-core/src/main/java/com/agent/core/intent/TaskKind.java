@@ -7,5 +7,6 @@ public enum TaskKind {
     CODE_CHANGE,
     COMMAND_EXECUTION,
     BROWSER_OPERATION,
+    TOOL_OPERATION,
     MIXED
 }

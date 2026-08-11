@@ -598,6 +598,37 @@ class PlannerNodeTest {
     }
 
     @Test
+    void preparesToolOperationWithoutLoadingProjectKnowledge() {
+        PlannerNode node = fullNode(
+                routerWithoutRequests(),
+                request -> {
+                    throw new AssertionError("工具任务不应召回记忆");
+                },
+                request -> {
+                    throw new AssertionError("工具任务不应加载项目知识");
+                },
+                (history, task) -> new TaskDecision(
+                        TaskRoute.AGENT,
+                        TaskKind.TOOL_OPERATION,
+                        TaskComplexity.STANDARD,
+                        Set.of(RequiredCapability.TOOL),
+                        "检测到工具动作"));
+
+        AgentState result = node.execute(AgentState.empty()
+                .withVariable(PlannerNode.REPOSITORY_ID_KEY, "repo")
+                .withVariable(PlannerNode.USER_ID_KEY, "user")
+                .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString())
+                .withVariable(PlannerNode.TASK_KEY, "生成图片"));
+
+        assertThat(result.variables())
+                .containsEntry(PlannerNode.ROUTE_KEY, PlannerNode.AGENT_ROUTE)
+                .containsEntry(PlannerNode.PLAN_KEY,
+                        "识别为工具任务，将调用已注册并受治理的工具完成请求。")
+                .doesNotContainKey(PlannerNode.ERROR_KEY);
+        assertThat(result.trace()).containsExactly("planner");
+    }
+
+    @Test
     void keepsHistoricalPlanPromptAndAddsVersionedKnowledgePrompts() {
         var catalog = PlannerPromptTemplates.catalog();
 

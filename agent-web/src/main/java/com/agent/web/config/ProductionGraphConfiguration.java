@@ -12,6 +12,7 @@ import com.agent.core.cli.WorkspaceTerminalTargetResolver;
 import com.agent.core.intent.RequiredCapability;
 import com.agent.core.intent.TaskKind;
 import com.agent.core.llm.ModelRouter;
+import com.agent.core.llm.ImageGenerationClient;
 import com.agent.core.llm.TaskType;
 import com.agent.core.profile.AgentProfile;
 import com.agent.core.knowledge.KnowledgeContextProvider;
@@ -23,6 +24,7 @@ import com.agent.core.nodes.OpsNode;
 import com.agent.core.nodes.PlannerNode;
 import com.agent.core.nodes.PlannerPromptTemplates;
 import com.agent.core.nodes.ReviewerNode;
+import com.agent.core.nodes.ToolAgentNode;
 import com.agent.core.security.DefaultOutputRedactor;
 import com.agent.core.security.DefaultPromptInjectionDetector;
 import com.agent.core.security.DefaultToolParameterPolicy;
@@ -38,6 +40,9 @@ import com.agent.core.tool.ToolAuditSink;
 import com.agent.core.tool.ToolRegistry;
 import com.agent.core.tool.builtin.CodePatchTool;
 import com.agent.core.tool.builtin.BrowserToolDefinitions;
+import com.agent.core.tool.builtin.ImageGenerationTool;
+import com.agent.core.skill.SkillCatalog;
+import com.agent.core.skill.SkillDefinition;
 import com.agent.sandbox.ast.AstService;
 import com.agent.sandbox.ast.WorkspaceSnapshotService;
 import com.agent.sandbox.browser.BrowserAutomation;
@@ -82,6 +87,7 @@ public class ProductionGraphConfiguration {
     private static final String REPAIR_ROUTE = "repair";
     private static final String FINISH_ROUTE = "finish";
     private static final String FAILURE_ROUTE = "failure";
+    private static final String TOOL_ROUTE = "tool";
     private static final String REVIEWER_FAILURE_NODE = "reviewer-failure";
 
     /** 创建 JavaParser/JGit 服务。 */
@@ -98,7 +104,8 @@ public class ProductionGraphConfiguration {
             BrowserSessionRegistry browserSessions,
             ProductionAgentProperties properties,
             ToolAuditSink auditSink,
-            SecurityViolationSink securityViolationSink) {
+            SecurityViolationSink securityViolationSink,
+            ImageGenerationClient imageGenerationClient) {
         DefaultToolRegistry registry = new DefaultToolRegistry(
                 new JacksonToolSchemaValidator(),
                 new DefaultToolAuthorizer(),
@@ -111,7 +118,28 @@ public class ProductionGraphConfiguration {
         registry.register(CodePatchTool.definition(astService, objectMapper));
         registry.registerAll(BrowserToolDefinitions.definitions(
                 browserSessions, objectMapper, properties.browserTimeout()));
+        if (imageGenerationClient != null) {
+            registry.register(ImageGenerationTool.definition(
+                    imageGenerationClient, objectMapper, properties.browserTimeout()));
+        }
         return registry;
+    }
+
+    ToolRegistry productionToolRegistry(
+            AstService astService,
+            ObjectMapper objectMapper,
+            BrowserSessionRegistry browserSessions,
+            ProductionAgentProperties properties,
+            ToolAuditSink auditSink,
+            SecurityViolationSink securityViolationSink) {
+        return productionToolRegistry(
+                astService,
+                objectMapper,
+                browserSessions,
+                properties,
+                auditSink,
+                securityViolationSink,
+                null);
     }
 
     /** 为直接构造生产图的兼容入口提供无外部副作用的审计端口。 */
@@ -499,6 +527,9 @@ public class ProductionGraphConfiguration {
                 toolRegistry,
                 properties.browserTimeout(),
                 properties.maxSteps());
+        SkillCatalog skillCatalog = productionSkillCatalog(toolRegistry, objectMapper);
+        ToolAgentNode toolAgent = new ToolAgentNode(
+                modelRouter, toolRegistry, objectMapper, skillCatalog, properties.maxSteps());
         return new StateGraph(
                 properties.executionBudget(), approvalPolicy, harness)
                 .addNode("planner", planner)
@@ -508,6 +539,7 @@ public class ProductionGraphConfiguration {
                 .addNode(REVIEWER_FAILURE_NODE, state -> state.withVariable(
                         ReviewerNode.ERROR_KEY, reviewerFailure(state)))
                 .addNode("gui", gui)
+                .addNode(TOOL_ROUTE, toolAgent)
                 .setEntryPoint("planner")
                 .addConditionalEdges(
                         "planner",
@@ -516,8 +548,10 @@ public class ProductionGraphConfiguration {
                                 PlannerNode.CHAT_ROUTE, StateGraph.END,
                                 PlannerNode.KNOWLEDGE_ROUTE, StateGraph.END,
                                 GUI_ROUTE, "gui",
+                                TOOL_ROUTE, TOOL_ROUTE,
                                 CODER_ROUTE, "coder",
                                 PlannerNode.FAILED_ROUTE, StateGraph.END))
+                .addEdge(TOOL_ROUTE, StateGraph.END)
                 .addConditionalEdges(
                         "coder",
                         state -> state.variables().containsKey(CoderNode.ERROR_KEY)
@@ -533,6 +567,23 @@ public class ProductionGraphConfiguration {
                                 FINISH_ROUTE, StateGraph.END,
                                 FAILURE_ROUTE, REVIEWER_FAILURE_NODE))
                 .addEdge(REVIEWER_FAILURE_NODE, StateGraph.END);
+    }
+
+    private SkillCatalog productionSkillCatalog(
+            ToolRegistry toolRegistry,
+            ObjectMapper objectMapper) {
+        if (toolRegistry.find(ImageGenerationTool.NAME).isEmpty()) {
+            return null;
+        }
+        return new SkillCatalog(List.of(new SkillDefinition(
+                "image-generation",
+                "1.0.0",
+                "通过 Images API 生成图片并返回图片工件",
+                List.of("生成图片", "生成一张", "生图", "画一张", "绘制图片"),
+                List.of(ImageGenerationTool.NAME),
+                "先调用 image.generate，确认工具返回图片工件后再向用户说明生成结果")),
+                toolRegistry,
+                objectMapper);
     }
 
     private ToolRegistry standaloneToolRegistry(
@@ -589,7 +640,11 @@ public class ProductionGraphConfiguration {
         } catch (IllegalArgumentException exception) {
             throw new IllegalStateException("未知任务类别: " + taskKindValue, exception);
         }
-        return taskKind == TaskKind.BROWSER_OPERATION ? GUI_ROUTE : CODER_ROUTE;
+        return switch (taskKind) {
+            case BROWSER_OPERATION -> GUI_ROUTE;
+            case TOOL_OPERATION -> TOOL_ROUTE;
+            default -> CODER_ROUTE;
+        };
     }
 
     String reviewerRoute(

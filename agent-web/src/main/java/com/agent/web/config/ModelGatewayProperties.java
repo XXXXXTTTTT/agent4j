@@ -16,8 +16,10 @@ public record ModelGatewayProperties(
         String baseUrl,
         String apiKey,
         String chatCompletionsPath,
+        String imageGenerationPath,
         String codeModel,
         String visionModel,
+        String imageModel,
         String quickClassificationModel,
         String fallbackModel,
         int maxConcurrentRequests,
@@ -43,8 +45,10 @@ public record ModelGatewayProperties(
                 baseUrl,
                 apiKey,
                 chatCompletionsPath,
+                "/v1/images/generations",
                 codeModel,
                 visionModel,
+                "",
                 quickClassificationModel,
                 fallbackModel,
                 8,
@@ -64,6 +68,43 @@ public record ModelGatewayProperties(
                 Set.of(InferenceCapability.CHAT_COMPLETIONS));
     }
 
+    /** 保留显式预算调用方在新增 Images API 路径后的构造兼容性。 */
+    public ModelGatewayProperties(
+            boolean enabled,
+            String baseUrl,
+            String apiKey,
+            String chatCompletionsPath,
+            String codeModel,
+            String visionModel,
+            String quickClassificationModel,
+            String fallbackModel,
+            int maxConcurrentRequests,
+            int maxRequestsPerMinute,
+            Duration queueTimeout,
+            Set<InferenceCapability> codeCapabilities,
+            Set<InferenceCapability> visionCapabilities,
+            Set<InferenceCapability> quickClassificationCapabilities,
+            Set<InferenceCapability> fallbackCapabilities) {
+        this(
+                enabled,
+                baseUrl,
+                apiKey,
+                chatCompletionsPath,
+                "/v1/images/generations",
+                codeModel,
+                visionModel,
+                "",
+                quickClassificationModel,
+                fallbackModel,
+                maxConcurrentRequests,
+                maxRequestsPerMinute,
+                queueTimeout,
+                codeCapabilities,
+                visionCapabilities,
+                quickClassificationCapabilities,
+                fallbackCapabilities);
+    }
+
     /** 冻结文本配置，禁用网关时允许留空凭据。 */
     @ConstructorBinding
     public ModelGatewayProperties {
@@ -71,8 +112,14 @@ public record ModelGatewayProperties(
         apiKey = textOrEmpty(apiKey);
         chatCompletionsPath = textOrDefault(
                 chatCompletionsPath, "/v1/chat/completions");
+        imageGenerationPath = textOrDefault(
+                imageGenerationPath, "/v1/images/generations");
         codeModel = textOrEmpty(codeModel);
         visionModel = textOrEmpty(visionModel);
+        imageModel = textOrEmpty(imageModel);
+        if (imageModel.isBlank()) {
+            imageModel = visionModel;
+        }
         quickClassificationModel = textOrEmpty(quickClassificationModel);
         fallbackModel = textOrEmpty(fallbackModel);
         if (maxConcurrentRequests <= 0) {
@@ -121,8 +168,13 @@ public record ModelGatewayProperties(
             throw new IllegalArgumentException(
                     "agent.llm.chat-completions-path 必须以 / 开头");
         }
+        if (!imageGenerationPath.startsWith("/")) {
+            throw new IllegalArgumentException(
+                    "agent.llm.image-generation-path 必须以 / 开头");
+        }
         requireText(codeModel, "agent.llm.code-model");
         requireText(visionModel, "agent.llm.vision-model");
+        requireText(imageModel, "agent.llm.image-model");
         requireText(quickClassificationModel, "agent.llm.quick-classification-model");
         requireText(fallbackModel, "agent.llm.fallback-model");
     }

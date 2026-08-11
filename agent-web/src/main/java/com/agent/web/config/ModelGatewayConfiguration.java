@@ -1,6 +1,7 @@
 package com.agent.web.config;
 
 import com.agent.core.llm.LlmClient;
+import com.agent.core.llm.ImageGenerationClient;
 import com.agent.core.llm.OpenAiEndpoint;
 import com.agent.core.llm.InferenceAdmissionController;
 import com.agent.core.llm.InferenceBudget;
@@ -72,6 +73,28 @@ public class ModelGatewayConfiguration {
                 objectMapper,
                 endpoint.requestPath(),
                 endpoint.requestUrl());
+    }
+
+    /** 创建独立 Images API 客户端，避免把图片生成模型误当作聊天模型。 */
+    @Bean(destroyMethod = "close")
+    ImageGenerationClient imageGenerationClient(
+            ModelGatewayProperties properties,
+            ObjectMapper objectMapper,
+            CloseableHttpClient httpClient) {
+        properties.validate();
+        ResolvedEndpoint endpoint = resolveEndpoint(
+                properties.baseUrl(), properties.imageGenerationPath());
+        RestClient restClient = RestClient.builder()
+                .baseUrl(endpoint.transportBaseUrl())
+                .requestFactory(new HttpComponentsClientHttpRequestFactory(httpClient))
+                .defaultHeader(
+                        HttpHeaders.AUTHORIZATION, "Bearer " + properties.apiKey())
+                .build();
+        return new ImageGenerationClient(
+                restClient,
+                objectMapper,
+                endpoint.requestPath(),
+                properties.imageModel());
     }
 
     /**

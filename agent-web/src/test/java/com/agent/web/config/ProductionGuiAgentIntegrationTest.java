@@ -57,11 +57,15 @@ class ProductionGuiAgentIntegrationTest {
         AgentState code = AgentState.empty()
                 .withVariable(PlannerNode.ROUTE_KEY, PlannerNode.AGENT_ROUTE)
                 .withVariable(PlannerNode.TASK_KIND_KEY, TaskKind.CODE_CHANGE.name());
+        AgentState tool = AgentState.empty()
+                .withVariable(PlannerNode.ROUTE_KEY, PlannerNode.AGENT_ROUTE)
+                .withVariable(PlannerNode.TASK_KIND_KEY, TaskKind.TOOL_OPERATION.name());
         AgentState chat = AgentState.empty()
                 .withVariable(PlannerNode.ROUTE_KEY, PlannerNode.CHAT_ROUTE);
 
         assertThat(configuration.plannerGraphRoute(browser)).isEqualTo("gui");
         assertThat(configuration.plannerGraphRoute(code)).isEqualTo("coder");
+        assertThat(configuration.plannerGraphRoute(tool)).isEqualTo("tool");
         assertThat(configuration.plannerGraphRoute(chat)).isEqualTo(PlannerNode.CHAT_ROUTE);
     }
 

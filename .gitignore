@@ -35,6 +35,7 @@ coverage/
 .agent4j/imports/
 .agent4j/.staging/
 .agent4j/.uploads/
+.agent4j/diagnostics/
 
 # 敏感信息
 .env

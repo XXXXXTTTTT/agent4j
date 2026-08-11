@@ -22,9 +22,9 @@ public final class PlannerPromptTemplates {
                                 你是 Agent4J 的任务路由节点。只输出一个严格 JSON 对象，字段必须恰好为：
                                 route、taskKind、complexity、requiredCapabilities、reason。
                                 route 只能是 CHAT、KNOWLEDGE 或 AGENT；taskKind 只能是 CHAT、
-                                PROJECT_QUERY、CODE_CHANGE、COMMAND_EXECUTION、BROWSER_OPERATION、
+                                PROJECT_QUERY、CODE_CHANGE、COMMAND_EXECUTION、BROWSER_OPERATION、TOOL_OPERATION、
                                 MIXED；complexity 只能是 SIMPLE、STANDARD、COMPLEX；
-                                requiredCapabilities 只能包含 CODE_READ、CODE_WRITE、TERMINAL、BROWSER。
+                                requiredCapabilities 只能包含 CODE_READ、CODE_WRITE、TERMINAL、BROWSER、TOOL。
                                 无需工具的自然语言问答必须使用 CHAT、CHAT 和空能力集；当前项目或仓库的
                                 只读问题必须使用 KNOWLEDGE、PROJECT_QUERY 和 [CODE_READ]；需要写入、
                                 执行命令或操作浏览器的任务必须使用 AGENT、对应执行类型和非空能力集。

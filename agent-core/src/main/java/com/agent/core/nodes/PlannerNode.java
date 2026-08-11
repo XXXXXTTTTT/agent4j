@@ -265,6 +265,11 @@ public final class PlannerNode implements Node {
                 return answerChat(output, task);
             }
 
+            if (decision.route() == TaskRoute.AGENT
+                    && decision.taskKind() == TaskKind.TOOL_OPERATION) {
+                return prepareToolExecution(output, task);
+            }
+
             String repositoryId = requireVariable(output, REPOSITORY_ID_KEY);
             String userId = requireVariable(output, USER_ID_KEY);
             Path workspace = Path.of(requireVariable(output, CoderNode.WORKSPACE_PATH_KEY))
@@ -388,6 +393,18 @@ public final class PlannerNode implements Node {
                 .withVariable(CONTEXT_SUMMARIZED_KEY,
                         Boolean.toString(contextWindow.summarized()))
                 .withVariable(ROUTE_KEY, CHAT_ROUTE)
+                .withTraceEntry("planner");
+    }
+
+    /** 工具任务不依赖项目知识，直接把控制权交给受治理 ToolAgent。 */
+    private AgentState prepareToolExecution(AgentState state, String task) {
+        String plan = "识别为工具任务，将调用已注册并受治理的工具完成请求。";
+        NodeExecutionContext.progress("工具任务已就绪，跳过项目知识加载");
+        return state
+                .withMessage(ChatMessage.user(task))
+                .withVariable(PLAN_KEY, plan)
+                .withVariable(RESPONSE_KEY, plan)
+                .withVariable(ROUTE_KEY, AGENT_ROUTE)
                 .withTraceEntry("planner");
     }
 

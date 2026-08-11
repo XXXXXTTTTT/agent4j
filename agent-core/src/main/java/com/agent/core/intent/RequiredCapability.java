@@ -5,5 +5,6 @@ public enum RequiredCapability {
     CODE_READ,
     CODE_WRITE,
     TERMINAL,
-    BROWSER
+    BROWSER,
+    TOOL
 }

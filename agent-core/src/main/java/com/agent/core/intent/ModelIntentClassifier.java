@@ -30,6 +30,9 @@ public final class ModelIntentClassifier implements IntentClassifier {
     private static final List<String> BROWSER_ACTION_MARKERS = List.of(
             "点击页面", "点击按钮", "打开网页", "导航到", "截取页面", "页面截图", "操作浏览器",
             "click page", "click button", "open page", "navigate to", "take screenshot");
+    private static final List<String> TOOL_ACTION_MARKERS = List.of(
+            "生成图片", "生成一张", "生图", "画一张", "绘制图片", "调用 MCP", "调用工具",
+            "generate image", "create image", "draw an image", "调用 mcp", "call mcp", "use tool");
     private static final List<String> PROJECT_REFERENCE_MARKERS = List.of(
             "当前项目", "这个项目", "本项目", "当前仓库", "这个仓库", "本仓库",
             "当前代码库", "这个代码库", "本代码库", "this project", "this repository",
@@ -86,7 +89,8 @@ public final class ModelIntentClassifier implements IntentClassifier {
         boolean code = containsAny(normalized, CODE_ACTION_MARKERS);
         boolean command = containsAny(normalized, COMMAND_ACTION_MARKERS);
         boolean browser = containsAny(normalized, BROWSER_ACTION_MARKERS);
-        if (!code && !command && !browser) {
+        boolean tool = containsAny(normalized, TOOL_ACTION_MARKERS);
+        if (!code && !command && !browser && !tool) {
             return null;
         }
         EnumSet<RequiredCapability> capabilities = EnumSet.noneOf(RequiredCapability.class);
@@ -101,13 +105,17 @@ public final class ModelIntentClassifier implements IntentClassifier {
         if (browser) {
             capabilities.add(RequiredCapability.BROWSER);
         }
-        int actionKinds = (code ? 1 : 0) + (command ? 1 : 0) + (browser ? 1 : 0);
+        if (tool) {
+            capabilities.add(RequiredCapability.TOOL);
+        }
+        int actionKinds = (code ? 1 : 0) + (command ? 1 : 0) + (browser ? 1 : 0) + (tool ? 1 : 0);
         boolean mixed = actionKinds > 1 || containsAny(normalized, EXPLANATION_MARKERS);
         TaskKind kind = mixed
                 ? TaskKind.MIXED
                 : code
                         ? TaskKind.CODE_CHANGE
-                        : command ? TaskKind.COMMAND_EXECUTION : TaskKind.BROWSER_OPERATION;
+                        : command ? TaskKind.COMMAND_EXECUTION
+                        : browser ? TaskKind.BROWSER_OPERATION : TaskKind.TOOL_OPERATION;
         TaskComplexity complexity = mixed
                 ? TaskComplexity.COMPLEX : TaskComplexity.STANDARD;
         return new TaskDecision(
