@@ -14,6 +14,7 @@
 
 **Files:**
 - Create: `.agent4j/acceptance/run-conversation-continuity.ps1`
+- Modify: `.gitignore`
 
 - [x] **Step 1: Run the missing-script red gate**
 
@@ -26,20 +27,21 @@ if (-not (Test-Path '.agent4j\acceptance\run-conversation-continuity.ps1')) {
 
 Expected: exit code `1` with `RED: continuity EDD script is not present`.
 
-- [ ] **Step 2: Implement strict configuration and API helpers**
+- [x] **Step 2: Implement strict configuration and API helpers**
 
 Read `.env` with ordinal key matching, require `AGENT_LLM_ENABLED=true`, load the exact `workspaceId`
 from `.agent4j/acceptance/evidence/workspace.json`, and define bounded `Invoke-AgentJson` and
 `Wait-ConversationTurn` functions. A terminal `FAILED` Turn or a 180-second deadline throws with the
-exact Turn status.
+exact Turn status. Add only `!.agent4j/acceptance/run-conversation-continuity.ps1` to `.gitignore`;
+all generated evidence remains ignored.
 
-- [ ] **Step 3: Execute and validate two turns**
+- [x] **Step 3: Execute and validate two turns**
 
 Create one Conversation. The first turn establishes `新余高新区` and `电瓶车`; the second turn asks
 the model to restate both facts before answering. Require two ordered Turn records, distinct non-null
 Run IDs, `COMPLETED` Run states, and second-answer containment of both exact facts.
 
-- [ ] **Step 4: Persist ignored evidence**
+- [x] **Step 4: Persist ignored evidence**
 
 Write `conversation-continuity.json`, `conversation-continuity-turns.json`, and two Run JSON files under
 `.agent4j/acceptance/evidence/`. Verify the audit log contains both Turn IDs and Run IDs without printing
@@ -51,7 +53,7 @@ the API key.
 - Modify: `README.md`
 - Modify: `docs/ENGINEERING_PITFALLS.md`
 
-- [ ] **Step 1: Document the command**
+- [x] **Step 1: Document the command**
 
 Add the exact command after the imported-project acceptance command:
 
@@ -59,7 +61,7 @@ Add the exact command after the imported-project acceptance command:
 pwsh .agent4j/acceptance/run-conversation-continuity.ps1
 ```
 
-- [ ] **Step 2: Run syntax and real black-box verification**
+- [x] **Step 2: Run syntax and real black-box verification**
 
 ```powershell
 $errors = $null
@@ -74,7 +76,7 @@ pwsh .agent4j/acceptance/run-conversation-continuity.ps1
 Expected: parser errors `0`; both Turns and Runs are `COMPLETED`; output contains Conversation, Turn,
 and Run IDs plus the evidence directory.
 
-- [ ] **Step 3: Run repository gates**
+- [x] **Step 3: Run repository gates**
 
 ```powershell
 git diff --check
@@ -83,9 +85,9 @@ git status --short
 
 Expected: no whitespace errors; only the script and documentation files are modified.
 
-- [ ] **Step 4: Commit atomically**
+- [x] **Step 4: Commit atomically**
 
 ```powershell
-git add .agent4j/acceptance/run-conversation-continuity.ps1 README.md docs/ENGINEERING_PITFALLS.md
+git add .gitignore .agent4j/acceptance/run-conversation-continuity.ps1 README.md docs/ENGINEERING_PITFALLS.md
 git commit -m "test(eval): verify real conversation continuity"
 ```

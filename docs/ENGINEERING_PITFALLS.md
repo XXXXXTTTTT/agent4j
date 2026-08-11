@@ -2843,3 +2843,45 @@ Coder，预算耗尽拒绝进入 `reviewer-failure` 节点。该节点把审查�
   Trace SSE 为 `215909` 字节，终端 SSE 为 `100330` 字节；
 - `logs/agent4j-current.log` 以北京时间 `+08:00` 记录用户原文、模型、HTTP 200、Token、耗时、工具审计
   和会话终态。该成功路径证明新增失败节点没有误伤一次通过的正常代码闭环。
+
+## 本轮补充：单元测试证明有历史，不等于真实模型连续对话不会回归
+
+### 【问题现象】持久化会话测试通过，但真实验收只覆盖一次提交
+
+`ConversationFlowIntegrationTest` 已验证应用重启后能把第一轮消息注入第二轮，不过该测试使用固定
+`StateGraph` 和确定性回答，不访问生产 Planner 与模型网关。外部项目 EDD 也只提交一个代码轮次。
+因此 Conversation、Context Provider、Planner Prompt、真实模型和 Turn 投影之间的任一接线回归，
+仍可能让用户再次遇到“第二次输入后忘记上一轮”，而默认测试全部为绿。
+
+### 【根因分析】能力验证停在组件契约，没有锁定生产黑盒语义
+
+多轮记忆是跨数据库、运行状态和模型请求的端到端属性，不能由 Repository 有数据或 mock 图收到
+`ChatMessage` 单独证明。首次编写真实脚本时还遇到两个 PowerShell 7 证据误判：
+`Invoke-WebRequest.Content` 返回 `System.Byte[]`，直接交给 `ConvertFrom-Json` 会得到空 `status`；
+`Invoke-RestMethod` 对 JSON 数组采用 no-enumerate 行为，外层再次使用 `@(...)` 会把两个 Turn 当成
+一个数组对象，导致 `.Contains()` 按数组元素比较完整回答，而不是检查回答字符串中的事实。
+
+### 【解决方案/代码级实现】独立真实两轮 EDD 与严格权威终态门禁
+
+新增 `.agent4j/acceptance/run-conversation-continuity.ps1`。脚本复用导入项目 EDD 生成的精确
+`workspaceId`，在一个新 Conversation 中提交两轮真实问答：第一轮建立“新余高新区”和“电瓶车”
+两个事实，第二轮必须逐字复述后再给建议。脚本要求两个升序 Turn、两个非空且不同的 Run ID、
+两轮 Turn/Run 均为 `COMPLETED`、第二轮回答包含两个事实，并检查审计日志中的 Conversation、Turn、
+Run ID。readiness 字节使用 UTF-8 显式解码；REST 数组直接赋值并按对象枚举，不再做二次数组包装。
+回答、Run 快照和摘要写入被忽略的 `.agent4j/acceptance/evidence/`，API Key 不输出也不提交。
+
+### 【证据】真实模型、PostgreSQL 与审计日志共同通过
+
+2026-08-11 真实运行结果为：
+
+- `conversationId=48a1f8fb-9909-4d10-8651-a246c9e2c312`；
+- 第一轮 `turnId=f400005c-a841-46e7-ba97-48c3223815c6`、
+  `runId=41cadb50-09ee-4079-890a-296e210d4fd8`；
+- 第二轮 `turnId=e5a50e64-aac3-4dea-8cc9-db0959d1aa28`、
+  `runId=952b9710-fbd9-4703-b0e1-80dae631c515`；
+- 两轮路由均为 `chat` 且 Turn/Run 均为 `COMPLETED`，Run ID 互不相同；
+- `planner.contextEstimatedTokens` 从 `88` 增至 `148`，第二轮
+  `planner.contextDroppedMessages=0`、`planner.contextSummarized=false`；
+- 第二轮回答精确包含“新余高新区”和“电瓶车”，五个 ID 均存在于 `agent4j-current.log`。
+
+这条门禁直接调用已配置模型，不以 mock、HTTP 200 或日志中出现模型名替代真实连续对话结果。

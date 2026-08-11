@@ -305,6 +305,25 @@ mvn clean verify
 The full build runs Java tests, the frontend build, Vitest, and real Docker/PTY/Chromium/PostgreSQL/pgvector integration tests when those services are available.
 
 <details>
+<summary>Real LLM black-box acceptance</summary>
+
+With Docker Compose running and `AGENT_LLM_ENABLED=true` configured in the ignored `.env`, run the
+imported-project repair gate first, then the persisted two-turn conversation gate:
+
+```powershell
+pwsh .agent4j/acceptance/run-real-agent.ps1
+pwsh .agent4j/acceptance/run-conversation-continuity.ps1
+```
+
+The first command imports a failing Maven project and requires the Agent to modify it and pass its
+test. The second command creates one Conversation with two independent Runs and requires the second
+answer to retain exact facts from the first turn. Generated responses, Run snapshots and IDs are
+written under the ignored `.agent4j/acceptance/evidence/` directory; neither command prints or commits
+the API key.
+
+</details>
+
+<details>
 <summary>Frontend-only checks</summary>
 
 ```powershell
