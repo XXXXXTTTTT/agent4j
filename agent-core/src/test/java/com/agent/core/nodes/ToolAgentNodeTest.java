@@ -3,6 +3,7 @@ package com.agent.core.nodes;
 import com.agent.core.engine.AgentState;
 import com.agent.core.llm.ChatMessage;
 import com.agent.core.llm.LlmClient;
+import com.agent.core.llm.ModelRequest;
 import com.agent.core.llm.RoutedCompletion;
 import com.agent.core.skill.SkillCatalog;
 import com.agent.core.skill.SkillDefinition;
@@ -16,10 +17,37 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ToolAgentNodeTest {
+
+    @Test
+    void doesNotForceStrictToolSchemasForGatewayRequests() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        AtomicReference<ModelRequest> captured = new AtomicReference<>();
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            registry.register(new ToolDefinition(
+                    "artifact.create",
+                    "生成工件",
+                    mapper.readTree("{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\"}},\"required\":[\"prompt\"],\"additionalProperties\":false}"),
+                    Set.of(com.agent.core.intent.RequiredCapability.TOOL),
+                    ToolRiskLevel.LOW,
+                    Duration.ofSeconds(2),
+                    (call, context) -> mapper.createObjectNode().put("ok", true)));
+            ToolAgentNode node = new ToolAgentNode(request -> {
+                captured.set(request);
+                return completion(ChatMessage.assistant("已完成"), "tool-model");
+            }, registry, mapper, null, 1);
+
+            node.execute(AgentState.empty().withVariable(PlannerNode.TASK_KEY, "生成工件"));
+
+            assertThat(captured.get().tools()).singleElement()
+                    .extracting(tool -> tool.function().strict())
+                    .isNull();
+        }
+    }
 
     @Test
     void executesToolCallThenPersistsFinalResponse() throws Exception {

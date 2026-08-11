@@ -97,7 +97,7 @@ public final class ToolAgentNode implements Node {
             }
             List<LlmClient.Tool> tools = definitions.stream()
                     .map(definition -> LlmClient.Tool.function(
-                            definition.name(), definition.description(), definition.inputSchema(), true))
+                            definition.name(), definition.description(), definition.inputSchema()))
                     .toList();
             List<ChatMessage> messages = new ArrayList<>();
             messages.add(ChatMessage.system(systemPrompt(skills, definitions)));
