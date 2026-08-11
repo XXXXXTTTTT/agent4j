@@ -17,7 +17,13 @@ import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.time.Instant;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.Set;
 import java.util.UUID;
 
@@ -29,6 +35,7 @@ class JdbcModelConfigurationRepositoryIntegrationTest {
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
 
     private JdbcClient jdbc;
+    private DataSource dataSource;
     private JdbcModelConfigurationRepository repository;
 
     @BeforeAll
@@ -51,7 +58,7 @@ class JdbcModelConfigurationRepositoryIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        DataSource dataSource = dataSource();
+        dataSource = dataSource();
         Flyway.configure().dataSource(dataSource).load().migrate();
         jdbc = JdbcClient.create(dataSource);
         jdbc.sql("truncate table agent_model_group_endpoints, agent_model_groups, agent_model_endpoints, agent_model_providers, agent_users cascade").update();
@@ -101,7 +108,64 @@ class JdbcModelConfigurationRepositoryIntegrationTest {
 
         assertThatThrownBy(() -> repository.deleteProvider(providerId, owner.userId()))
                 .isInstanceOf(JdbcModelConfigurationRepository.ModelConfigurationConflictException.class)
-                .hasMessageContaining("先删除 Endpoint");
+                .hasMessage("Provider 仍有 Endpoint，请先删除 Endpoint: " + providerId);
+    }
+
+    @Test
+    void serializesDeletionAfterProviderLockAndRejectsEndpointCreatedBeforeUnlock() throws Exception {
+        Actor owner = new Actor("provider-lock-owner", "Provider Lock Owner");
+        insertUser(owner);
+        UUID providerId = UUID.fromString("95e56aa2-56c3-4325-a76f-97eb8c315a51");
+        UUID endpointId = UUID.fromString("96e56aa2-56c3-4325-a76f-97eb8c315a51");
+        repository.createProvider(providerId, owner, "锁定网关", "https://locked.example", "sk-existing", NOW);
+
+        try (Connection connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement lock = connection.prepareStatement(
+                    "select provider_id from agent_model_providers where provider_id = ? for update")) {
+                lock.setObject(1, providerId);
+                lock.executeQuery().close();
+            }
+            try (PreparedStatement endpoint = connection.prepareStatement("""
+                    insert into agent_model_endpoints (
+                        endpoint_id, provider_id, display_name, model_id, capabilities,
+                        priority, weight, enabled, created_at, updated_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """)) {
+                endpoint.setObject(1, endpointId);
+                endpoint.setObject(2, providerId);
+                endpoint.setString(3, "锁定端点");
+                endpoint.setString(4, "model");
+                endpoint.setArray(5, connection.createArrayOf("text", new String[]{"CHAT_COMPLETIONS"}));
+                endpoint.setInt(6, 0);
+                endpoint.setInt(7, 1);
+                endpoint.setBoolean(8, true);
+                endpoint.setTimestamp(9, java.sql.Timestamp.from(NOW));
+                endpoint.setTimestamp(10, java.sql.Timestamp.from(NOW));
+                endpoint.executeUpdate();
+            }
+
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            try {
+                Future<Throwable> deletion = executor.submit(() -> {
+                    try {
+                        repository.deleteProvider(providerId, owner.userId());
+                        return null;
+                    } catch (Throwable failure) {
+                        return failure;
+                    }
+                });
+                Thread.sleep(200);
+                assertThat(deletion.isDone()).isFalse();
+                connection.commit();
+                Throwable failure = deletion.get(5, TimeUnit.SECONDS);
+                assertThat(failure)
+                        .isInstanceOf(JdbcModelConfigurationRepository.ModelConfigurationConflictException.class)
+                        .hasMessage("Provider 仍有 Endpoint，请先删除 Endpoint: " + providerId);
+            } finally {
+                executor.shutdownNow();
+            }
+        }
     }
 
     private void insertUser(Actor actor) {

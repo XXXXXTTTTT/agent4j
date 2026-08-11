@@ -200,16 +200,20 @@ public final class JdbcModelConfigurationRepository implements ModelConfiguratio
 
     @Override
     public void deleteProvider(UUID providerId, String userId) {
-        requireOwnedProvider(providerId, userId);
-        Long references = jdbc.sql("""
-                select count(*) from agent_model_endpoints
-                where provider_id = :providerId
-                """).param("providerId", providerId).query(Long.class).single();
-        if (references != 0) {
-            throw new ModelConfigurationConflictException("Provider 存在 Endpoint，请先删除 Endpoint: " + providerId);
-        }
-        jdbc.sql("delete from agent_model_providers where provider_id = :providerId")
-                .param("providerId", providerId).update();
+        transactions.executeWithoutResult(status -> {
+            requireOwnedProvider(providerId, userId);
+            jdbc.sql("select provider_id from agent_model_providers where provider_id = :providerId for update")
+                    .param("providerId", providerId).query(UUID.class).single();
+            Long references = jdbc.sql("""
+                    select count(*) from agent_model_endpoints
+                    where provider_id = :providerId
+                    """).param("providerId", providerId).query(Long.class).single();
+            if (references != 0) {
+                throw new ModelConfigurationConflictException("Provider 仍有 Endpoint，请先删除 Endpoint: " + providerId);
+            }
+            jdbc.sql("delete from agent_model_providers where provider_id = :providerId and owner_user_id = :userId")
+                    .param("providerId", providerId).param("userId", userId).update();
+        });
     }
 
     @Override
