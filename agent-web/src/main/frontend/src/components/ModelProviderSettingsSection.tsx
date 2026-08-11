@@ -1,7 +1,8 @@
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import type { ModelConfigurationSnapshot } from '../api/contracts'
-type Props = { snapshot: ModelConfigurationSnapshot; busy: boolean; onRun: (r: string, op: () => Promise<unknown>) => Promise<void>; create?: (c: any) => Promise<any>; update: (id: string, c: any) => Promise<any>; remove: (id: string) => Promise<any> }
+import type { CreateModelProviderCommand, UpdateModelProviderCommand } from '../api/conversationApi'
+type Props = { snapshot: ModelConfigurationSnapshot; busy: boolean; onRun: (r: string, op: () => Promise<unknown>) => Promise<void>; create?: (command: CreateModelProviderCommand) => Promise<ModelConfigurationSnapshot>; update: (id: string, command: UpdateModelProviderCommand) => Promise<ModelConfigurationSnapshot>; remove: (id: string) => Promise<ModelConfigurationSnapshot> }
 export function ModelProviderSettingsSection({ snapshot, busy, onRun, create, update, remove }: Props) {
   const empty = { displayName: '', baseUrl: '', chatCompletionsPath: '/v1/chat/completions', apiKey: '' }; const [form, setForm] = useState(empty); const [editing, setEditing] = useState<string | null>(null); const [pending, setPending] = useState(false); const disabled = busy || pending
   const save = (e: FormEvent) => { e.preventDefault(); if (disabled) return; setPending(true); void onRun('provider', async () => { if (editing) { const { apiKey, ...base } = form; await update(editing, { ...base, ...(apiKey.trim() ? { apiKey } : {}) }) } else { if (!create) throw new Error('模型 Provider 接口未配置'); await create(form) }; setEditing(null); setForm(empty) }).finally(() => setPending(false)) }
