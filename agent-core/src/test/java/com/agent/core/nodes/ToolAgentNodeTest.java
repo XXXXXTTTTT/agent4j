@@ -50,6 +50,58 @@ class ToolAgentNodeTest {
     }
 
     @Test
+    void normalizesToolNamesForGatewayAndKeepsCollisionsUnique() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        AtomicReference<ModelRequest> captured = new AtomicReference<>();
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            for (String name : List.of("artifact.create", "artifact_create", "code.apply-diff")) {
+                registry.register(new ToolDefinition(name, name,
+                        mapper.readTree("{\"type\":\"object\"}"),
+                        Set.of(com.agent.core.intent.RequiredCapability.TOOL), ToolRiskLevel.LOW,
+                        Duration.ofSeconds(2), (call, context) -> mapper.createObjectNode().put("ok", true)));
+            }
+            ToolAgentNode node = new ToolAgentNode(request -> {
+                captured.set(request);
+                return completion(ChatMessage.assistant("已完成"), "tool-model");
+            }, registry, mapper, null, 1);
+
+            node.execute(AgentState.empty().withVariable(PlannerNode.TASK_KEY, "调用工具"));
+
+            assertThat(captured.get().tools()).extracting(tool -> tool.function().name())
+                    .containsExactly("artifact_create", "artifact_create_2", "code_apply_diff")
+                    .allMatch(name -> name.matches("[A-Za-z0-9_-]+"));
+        }
+    }
+
+    @Test
+    void executesOriginalToolWhenModelReturnsNormalizedName() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        AtomicInteger calls = new AtomicInteger();
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            registry.register(new ToolDefinition("artifact.create", "生成工件",
+                    mapper.readTree("{\"type\":\"object\"}"),
+                    Set.of(com.agent.core.intent.RequiredCapability.TOOL), ToolRiskLevel.LOW,
+                    Duration.ofSeconds(2), (call, context) -> {
+                        calls.incrementAndGet();
+                        return mapper.createObjectNode().put("ok", true);
+                    }));
+            ToolAgentNode node = new ToolAgentNode(request -> {
+                if (calls.get() == 0) {
+                    ChatMessage.ToolCall call = new ChatMessage.ToolCall("call-1", "function",
+                            new ChatMessage.FunctionCall("artifact_create", "{}"));
+                    return completion(ChatMessage.assistantToolCalls(List.of(call)), "tool-model");
+                }
+                return completion(ChatMessage.assistant("完成"), "tool-model");
+            }, registry, mapper, null, 2);
+
+            AgentState result = node.execute(AgentState.empty().withVariable(PlannerNode.TASK_KEY, "调用工具"));
+
+            assertThat(calls).hasValue(1);
+            assertThat(result.variables()).doesNotContainKey(ToolAgentNode.ERROR_KEY);
+        }
+    }
+
+    @Test
     void executesToolCallThenPersistsFinalResponse() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         AtomicInteger calls = new AtomicInteger();
@@ -71,7 +123,7 @@ class ToolAgentNodeTest {
                     ChatMessage.ToolCall call = new ChatMessage.ToolCall(
                             "image-call-1", "function",
                             new ChatMessage.FunctionCall(
-                                    "artifact.create", "{\"prompt\":\"蓝色方块\"}"));
+                                    "artifact_create", "{\"prompt\":\"蓝色方块\"}"));
                     return completion(ChatMessage.assistantToolCalls(List.of(call)), "tool-model");
                 }
                 return completion(ChatMessage.assistant("图片已生成。\n\n![生成结果](data:image/png;base64,AA==)"), "tool-model");

@@ -27,7 +27,9 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -95,9 +97,11 @@ public final class ToolAgentNode implements Node {
             if (isDirectImageSkill(skills, definitions)) {
                 return executeDirectImage(output, task, definitions.getFirst());
             }
+            Map<String, String> protocolToRegistryName = toolNameMapping(definitions);
             List<LlmClient.Tool> tools = definitions.stream()
                     .map(definition -> LlmClient.Tool.function(
-                            definition.name(), definition.description(), definition.inputSchema()))
+                            protocolName(definition.name(), protocolToRegistryName),
+                            definition.description(), definition.inputSchema()))
                     .toList();
             List<ChatMessage> messages = new ArrayList<>();
             messages.add(ChatMessage.system(systemPrompt(skills, definitions)));
@@ -124,8 +128,12 @@ public final class ToolAgentNode implements Node {
                 }
                 messages.add(message);
                 for (ChatMessage.ToolCall call : message.toolCalls()) {
+                    String registryName = protocolToRegistryName.get(call.function().name());
+                    if (registryName == null) {
+                        throw new IllegalArgumentException("模型返回了未声明的工具: " + call.function().name());
+                    }
                     ToolCall toolCall = new ToolCall(
-                            call.id(), call.function().name(), objectMapper.readTree(call.function().arguments()));
+                            call.id(), registryName, objectMapper.readTree(call.function().arguments()));
                     ToolResult result = executeTool(output, toolCall);
                     String resultText = objectMapper.writeValueAsString(result.output());
                     output = output.withVariable(RESULT_KEY, resultText);
@@ -261,6 +269,38 @@ public final class ToolAgentNode implements Node {
             prompt.append("\n\n已激活 Skill：\n").append(skills.activationSection());
         }
         return prompt.toString();
+    }
+
+    private Map<String, String> toolNameMapping(List<ToolDefinition> definitions) {
+        Map<String, String> mapping = new HashMap<>();
+        Map<String, String> used = new HashMap<>();
+        for (ToolDefinition definition : definitions) {
+            String base = definition.name().replaceAll("[^A-Za-z0-9]", "_");
+            if (base.isBlank()) {
+                base = "tool";
+            }
+            base = base.length() > 64 ? base.substring(0, 64) : base;
+            String protocolName = base;
+            int suffix = 2;
+            while (used.containsKey(protocolName)) {
+                String suffixText = "_" + suffix++;
+                int prefixLength = Math.max(1, 64 - suffixText.length());
+                protocolName = base.substring(0, Math.min(base.length(), prefixLength)) + suffixText;
+            }
+            used.put(protocolName, definition.name());
+            mapping.put(definition.name(), protocolName);
+        }
+        Map<String, String> reverse = new HashMap<>();
+        mapping.forEach((registryName, protocolName) -> reverse.put(protocolName, registryName));
+        return reverse;
+    }
+
+    private String protocolName(String registryName, Map<String, String> protocolToRegistryName) {
+        return protocolToRegistryName.entrySet().stream()
+                .filter(entry -> entry.getValue().equals(registryName))
+                .map(Map.Entry::getKey)
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("工具名称映射缺失: " + registryName));
     }
 
     private String messageText(ChatMessage message) {
