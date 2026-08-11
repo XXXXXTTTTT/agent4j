@@ -155,12 +155,12 @@ public final class DynamicModelGroupRouteResolver implements ModelGroupRouteReso
         if (cached != null && cached.configuration().equals(configuration)) {
             return cached.client();
         }
-        if (cached != null) {
-            cached.client().close();
-        }
         com.agent.core.llm.LlmClient client = Objects.requireNonNull(
                 clientFactory.apply(runtime), "clientFactory 返回的 LlmClient 不能为空");
         clients.put(key, new CachedClient(configuration, client));
+        if (cached != null && cached.client() != client) {
+            cached.client().close();
+        }
         return client;
     }
 

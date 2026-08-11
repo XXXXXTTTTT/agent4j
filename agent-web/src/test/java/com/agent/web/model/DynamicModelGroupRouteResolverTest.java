@@ -20,7 +20,9 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
@@ -147,6 +149,43 @@ class DynamicModelGroupRouteResolverTest {
 
         resolver.close();
         verify(fourth, times(1)).close();
+    }
+
+    @Test
+    void keepsOldClientCachedWhenReplacementFactoryFails() {
+        UUID groupId = UUID.randomUUID();
+        UUID endpointId = UUID.randomUUID();
+        UUID providerId = UUID.randomUUID();
+        FakeRepository repository = new FakeRepository(new ModelConfigurationSnapshot(
+                List.of(),
+                List.of(new ModelEndpointRecord(endpointId, providerId, "端点", "model-a",
+                        Set.of(InferenceCapability.CHAT_COMPLETIONS), 1, 1, true, Instant.EPOCH, Instant.EPOCH)),
+                List.of(new ModelGroupRecord(groupId, "user-a", "代码组", TaskType.CODE,
+                        List.of(endpointId), Instant.EPOCH, Instant.EPOCH))));
+        LlmClient oldClient = mock(LlmClient.class);
+        LlmClient newClient = mock(LlmClient.class);
+        java.util.concurrent.atomic.AtomicInteger attempts = new java.util.concurrent.atomic.AtomicInteger();
+        repository.providers.put(providerId, runtime(providerId, "https://gateway.test", "/v1/chat", "old"));
+        DynamicModelGroupRouteResolver resolver = new DynamicModelGroupRouteResolver(repository, runtime -> {
+            int attempt = attempts.incrementAndGet();
+            if (attempt == 2) {
+                throw new IllegalStateException("factory unavailable");
+            }
+            return attempt == 1 ? oldClient : newClient;
+        });
+        resolver.resolveForUser("user-a", groupId.toString(), TaskType.CODE);
+        repository.providers.put(providerId, runtime(providerId, "https://gateway.test", "/v1/chat", "new"));
+
+        assertThatThrownBy(() -> resolver.resolveForUser("user-a", groupId.toString(), TaskType.CODE))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("factory unavailable");
+        verify(oldClient, never()).close();
+
+        assertThat(resolver.resolveForUser("user-a", groupId.toString(), TaskType.CODE))
+                .singleElement().extracting(com.agent.core.llm.ModelEndpoint::client).isSameAs(newClient);
+        verify(oldClient, times(1)).close();
+        resolver.close();
+        verify(newClient, times(1)).close();
     }
 
     private ModelProviderRuntime runtime(UUID providerId, String baseUrl, String path, String apiKey) {
