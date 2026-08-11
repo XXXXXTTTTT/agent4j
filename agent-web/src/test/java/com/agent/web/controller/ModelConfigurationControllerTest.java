@@ -32,6 +32,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @WebFluxTest(controllers = ModelConfigurationController.class,
@@ -95,7 +96,7 @@ class ModelConfigurationControllerTest {
                 .jsonPath("$.apiKey").doesNotExist();
 
         var captor = forClass(String.class);
-        verify(service).updateProvider(any(), captor.capture(), captor.capture(), captor.capture(), isNull());
+        verify(service).updateProvider(eq(id), captor.capture(), captor.capture(), captor.capture(), isNull());
         assertThat(captor.getAllValues()).containsExactly("网关", "https://example.com", "/chat");
     }
 
@@ -108,7 +109,20 @@ class ModelConfigurationControllerTest {
         client.put().uri("/api/model-config/endpoints/{id}", id).header("Content-Type", "application/json").bodyValue("""
                 {"displayName":"端点","modelId":"model","capabilities":["CHAT_COMPLETIONS"],"priority":2,"weight":3,"enabled":true}
                 """).exchange().expectStatus().isOk().expectBody().jsonPath("$.modelId").isEqualTo("model");
-        verify(service).updateEndpoint(any(), anyString(), anyString(), anySet(), anyInt(), anyInt(), anyBoolean());
+        var endpointText = forClass(String.class);
+        var modelText = forClass(String.class);
+        @SuppressWarnings("rawtypes") var capabilitySet = forClass(Set.class);
+        var priority = forClass(Integer.class);
+        var weight = forClass(Integer.class);
+        var enabled = forClass(Boolean.class);
+        verify(service).updateEndpoint(eq(id), endpointText.capture(), modelText.capture(), capabilitySet.capture(),
+                priority.capture(), weight.capture(), enabled.capture());
+        assertThat(endpointText.getValue()).isEqualTo("端点");
+        assertThat(modelText.getValue()).isEqualTo("model");
+        assertThat(capabilitySet.getValue()).isEqualTo(Set.of(InferenceCapability.CHAT_COMPLETIONS));
+        assertThat(priority.getValue()).isEqualTo(2);
+        assertThat(weight.getValue()).isEqualTo(3);
+        assertThat(enabled.getValue()).isTrue();
     }
 
     @Test
@@ -121,7 +135,13 @@ class ModelConfigurationControllerTest {
         client.put().uri("/api/model-config/groups/{id}", id).header("Content-Type", "application/json").bodyValue("""
                 {"displayName":"组","taskType":"CODE","endpointIds":["%s"]}
                 """.formatted(endpointId)).exchange().expectStatus().isOk().expectBody().jsonPath("$.displayName").isEqualTo("组");
-        verify(service).updateGroup(any(), anyString(), any(), any());
+        var groupText = forClass(String.class);
+        var taskType = forClass(TaskType.class);
+        @SuppressWarnings("rawtypes") var endpointList = forClass(List.class);
+        verify(service).updateGroup(eq(id), groupText.capture(), taskType.capture(), endpointList.capture());
+        assertThat(groupText.getValue()).isEqualTo("组");
+        assertThat(taskType.getValue()).isEqualTo(TaskType.CODE);
+        assertThat(endpointList.getValue()).isEqualTo(List.of(endpointId));
     }
 
     @Test
@@ -148,6 +168,21 @@ class ModelConfigurationControllerTest {
         client.put().uri("/api/model-config/endpoints/{id}", UUID.randomUUID()).header("Content-Type", "application/json").bodyValue("""
                 {"displayName":"","modelId":"","capabilities":[],"priority":-1,"weight":0,"enabled":true}
                 """).exchange().expectStatus().isBadRequest();
+        verify(service, never()).updateEndpoint(any(), anyString(), anyString(), anySet(), anyInt(), anyInt(), anyBoolean());
+    }
+
+    @Test
+    void rejectsNullCapabilityForCreateAndUpdateWith400() {
+        String createBody = """
+                {"providerId":"7910a57a-a6c8-47be-a577-d2cf9336daec","displayName":"端点","modelId":"model","capabilities":[null],"priority":0,"weight":1,"enabled":true}
+                """;
+        client.post().uri("/api/model-config/endpoints").header("Content-Type", "application/json")
+                .bodyValue(createBody).exchange().expectStatus().isBadRequest();
+        client.put().uri("/api/model-config/endpoints/{id}", UUID.randomUUID())
+                .header("Content-Type", "application/json").bodyValue("""
+                        {"displayName":"端点","modelId":"model","capabilities":[null],"priority":0,"weight":1,"enabled":true}
+                        """).exchange().expectStatus().isBadRequest();
+        verify(service, never()).createEndpoint(any(), anyString(), anyString(), anySet(), anyInt(), anyInt(), anyBoolean());
         verify(service, never()).updateEndpoint(any(), anyString(), anyString(), anySet(), anyInt(), anyInt(), anyBoolean());
     }
 }

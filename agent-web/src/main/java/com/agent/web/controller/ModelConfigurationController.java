@@ -126,7 +126,7 @@ public final class ModelConfigurationController {
             @NotNull UUID providerId,
             @NotBlank String displayName,
             @NotBlank String modelId,
-            @NotEmpty Set<InferenceCapability> capabilities,
+            @NotEmpty Set<@NotNull InferenceCapability> capabilities,
             @PositiveOrZero int priority,
             @Positive int weight,
             boolean enabled) {
@@ -148,7 +148,7 @@ public final class ModelConfigurationController {
     public record UpdateEndpointRequest(
             @NotBlank String displayName,
             @NotBlank String modelId,
-            @NotEmpty Set<InferenceCapability> capabilities,
+            @NotEmpty Set<@NotNull InferenceCapability> capabilities,
             @PositiveOrZero int priority,
             @Positive int weight,
             boolean enabled) {
