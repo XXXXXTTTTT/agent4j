@@ -60,10 +60,13 @@ class ToolAgentNodeTest {
                         Set.of(com.agent.core.intent.RequiredCapability.TOOL), ToolRiskLevel.LOW,
                         Duration.ofSeconds(2), (call, context) -> mapper.createObjectNode().put("ok", true)));
             }
+            SkillCatalog skills = new SkillCatalog(List.of(new SkillDefinition(
+                    "artifact-skill", "1.0.0", "工件 Skill", List.of("调用工具"),
+                    List.of("artifact.create", "artifact_create", "code.apply-diff"), "保留知识")), registry, mapper);
             ToolAgentNode node = new ToolAgentNode(request -> {
                 captured.set(request);
                 return completion(ChatMessage.assistant("已完成"), "tool-model");
-            }, registry, mapper, null, 1);
+            }, registry, mapper, skills, 1);
 
             node.execute(AgentState.empty().withVariable(PlannerNode.TASK_KEY, "调用工具"));
 

@@ -12,6 +12,7 @@ import com.agent.core.llm.RoutedCompletion;
 import com.agent.core.llm.TaskType;
 import com.agent.core.skill.SkillCatalog;
 import com.agent.core.skill.SkillPromptContext;
+import com.agent.core.skill.SkillToolMetadata;
 import com.agent.core.tool.HarnessToolExecutor;
 import com.agent.core.tool.ToolCall;
 import com.agent.core.tool.ToolDefinition;
@@ -271,9 +272,24 @@ public final class ToolAgentNode implements Node {
                 .append(protocolName(tool.name(), protocolToRegistryName))
                 .append(": ").append(tool.description()));
         if (skills != null && !skills.activationSection().isBlank()) {
-            prompt.append("\n\n已激活 Skill：\n").append(skills.activationSection());
+            prompt.append("\n\n已激活 Skill：\n")
+                    .append(normalizedActivationSection(skills, protocolToRegistryName));
         }
         return prompt.toString();
+    }
+
+    private String normalizedActivationSection(
+            SkillPromptContext skills,
+            Map<String, String> protocolToRegistryName) {
+        String section = skills.activationSection();
+        for (var skill : skills.activatedSkills()) {
+            for (SkillToolMetadata tool : skill.tools()) {
+                String original = "- " + tool.name() + ":";
+                String normalized = "- " + protocolName(tool.name(), protocolToRegistryName) + ":";
+                section = section.replace(original, normalized);
+            }
+        }
+        return section;
     }
 
     private Map<String, String> toolNameMapping(List<ToolDefinition> definitions) {
