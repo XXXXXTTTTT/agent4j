@@ -30,6 +30,7 @@ import com.agent.web.mcp.installation.McpInstallationRepository;
 import com.agent.web.mcp.installation.McpInstallationService;
 import com.agent.web.persistence.JdbcMcpInstallationRepository;
 import com.agent.web.persistence.JdbcSkillInstallationRepository;
+import com.agent.web.persistence.JdbcCapabilityManagementAuditSink;
 import com.agent.web.skill.GitHubSkillCatalogClient;
 import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.skill.SkillInstallationRepository;
@@ -157,11 +158,19 @@ public class HarnessConfiguration {
 
     @Bean
     @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    CapabilityManagementAuditSink capabilityManagementAuditSink(
+            JdbcClient jdbcClient, PlatformTransactionManager transactionManager) {
+        return new JdbcCapabilityManagementAuditSink(
+                jdbcClient, new TransactionTemplate(transactionManager), UUID::randomUUID);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
     McpInstallationService mcpInstallationService(
             ActorResolver actorResolver, WorkspaceAccessService workspaceAccess,
-            McpInstallationRepository repository, Clock harnessClock) {
+            McpInstallationRepository repository, CapabilityManagementAuditSink auditSink, Clock harnessClock) {
         return new McpInstallationService(actorResolver, workspaceAccess, repository,
-                CapabilityManagementAuditSink.noop(), harnessClock, Duration.ofMinutes(5), UUID::randomUUID);
+                auditSink, harnessClock, Duration.ofMinutes(5), UUID::randomUUID);
     }
 
     @Bean
@@ -169,9 +178,10 @@ public class HarnessConfiguration {
     @ConditionalOnBean(ToolRegistry.class)
     GitHubSkillInstallationService gitHubSkillInstallationService(
             GitHubSkillCatalogClient client, ToolRegistry toolRegistry, ActorResolver actorResolver,
-            WorkspaceAccessService workspaceAccess, SkillInstallationRepository repository, Clock harnessClock) {
+            WorkspaceAccessService workspaceAccess, SkillInstallationRepository repository,
+            CapabilityManagementAuditSink auditSink, Clock harnessClock) {
         return new GitHubSkillInstallationService(client, toolRegistry, actorResolver, workspaceAccess,
-                repository, CapabilityManagementAuditSink.noop(), harnessClock, Duration.ofMinutes(5), UUID::randomUUID);
+                repository, auditSink, harnessClock, Duration.ofMinutes(5), UUID::randomUUID);
     }
 
     /** 将 PostgreSQL 完成轮次组装为核心短期上下文。 */

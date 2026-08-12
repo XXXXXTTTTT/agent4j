@@ -53,6 +53,11 @@ public final class CapabilityManagementController {
         return CatalogView.from(mcpCatalog.fetchCatalogResult());
     }
 
+    @PostMapping("/api/mcp/catalog/refresh")
+    public CatalogView refreshMcpCatalog() {
+        return CatalogView.from(mcpCatalog.refreshCatalogResult());
+    }
+
     @PostMapping("/api/workspaces/{workspaceId}/mcp/installations/preview")
     public McpInstallationPreviewView previewMcp(@PathVariable UUID workspaceId,
                                                   @Valid @RequestBody McpPreviewRequest request) {

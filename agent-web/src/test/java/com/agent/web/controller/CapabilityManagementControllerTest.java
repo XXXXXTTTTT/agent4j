@@ -85,6 +85,41 @@ class CapabilityManagementControllerTest {
     }
 
     @Test
+    void refreshesOfficialMcpCatalogWithoutUsingCachedCatalogMethod() {
+        when(mcpCatalog.refreshCatalogResult()).thenReturn(new OfficialMcpCatalogClient.CatalogResult(
+                "modelcontextprotocol/servers", "76d64c822f5125032f89eb71dbdb94e42b434821", NOW,
+                NOW.plusSeconds(300), "etag-refresh", "FRESH", List.of(server()), Map.of()));
+
+        client.post().uri("/api/mcp/catalog/refresh")
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.etag").isEqualTo("etag-refresh")
+                .jsonPath("$.servers[0].serviceId").isEqualTo("everything");
+
+        verify(mcpCatalog).refreshCatalogResult();
+    }
+
+    @Test
+    void mapsCapabilityInstallationErrorsToStableClientResponses() {
+        when(mcpInstallations.confirm(eq(WORKSPACE_ID), eq(PREVIEW_ID), eq("expired"),
+                eq(InstallationScope.WORKSPACE), eq(WORKSPACE_ID)))
+                .thenThrow(new McpInstallationService.InvalidConfirmationException());
+        when(skillInstallations.uninstall(WORKSPACE_ID, INSTALLATION_ID))
+                .thenThrow(new GitHubSkillInstallationService.InstallationNotFoundException(INSTALLATION_ID));
+
+        client.post().uri("/api/workspaces/{workspaceId}/mcp/installations", WORKSPACE_ID)
+                .header("Content-Type", "application/json")
+                .bodyValue("""
+                        {"previewId":"%s","confirmationToken":"expired","scope":"WORKSPACE","targetWorkspaceId":"%s"}
+                        """.formatted(PREVIEW_ID, WORKSPACE_ID))
+                .exchange().expectStatus().isBadRequest().expectBody()
+                .jsonPath("$.detail").isEqualTo("MCP 安装确认无效或已过期");
+
+        client.delete().uri("/api/workspaces/{workspaceId}/skills/{installationId}", WORKSPACE_ID, INSTALLATION_ID)
+                .exchange().expectStatus().isNotFound().expectBody()
+                .jsonPath("$.detail").isEqualTo("Skill 安装不存在或当前用户无权访问: " + INSTALLATION_ID);
+    }
+
+    @Test
     void confirmsListsAndUninstallsMcpWithoutExposingTokenDigest() {
         McpInstallationRecord installation = mcpInstallation();
         when(mcpInstallations.confirm(eq(WORKSPACE_ID), eq(PREVIEW_ID), eq("confirm-mcp"),

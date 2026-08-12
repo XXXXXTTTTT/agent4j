@@ -9,6 +9,8 @@ import com.agent.web.persistence.JdbcModelConfigurationRepository;
 import com.agent.web.conversation.ConversationService;
 import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspaceImportService;
+import com.agent.web.mcp.installation.McpInstallationService;
+import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.audit.AuditTextRedactor;
 import org.springframework.core.codec.DecodingException;
 import org.springframework.dao.DuplicateKeyException;
@@ -60,6 +62,24 @@ public final class RunExceptionHandler {
             Exception exception,
             ServerWebExchange exchange) {
         return problem(HttpStatus.BAD_REQUEST, detail(exception), exchange);
+    }
+
+    @ExceptionHandler({
+            McpInstallationService.InvalidConfirmationException.class,
+            GitHubSkillInstallationService.InvalidConfirmationException.class
+    })
+    public ResponseEntity<ProblemDetail> invalidCapabilityConfirmation(
+            RuntimeException exception, ServerWebExchange exchange) {
+        return problem(HttpStatus.BAD_REQUEST, exception.getMessage(), exchange);
+    }
+
+    @ExceptionHandler({
+            McpInstallationService.InstallationNotFoundException.class,
+            GitHubSkillInstallationService.InstallationNotFoundException.class
+    })
+    public ResponseEntity<ProblemDetail> capabilityNotFound(
+            RuntimeException exception, ServerWebExchange exchange) {
+        return problem(HttpStatus.NOT_FOUND, exception.getMessage(), exchange);
     }
 
     /** 映射 ZIP 格式、条目路径和压缩内容错误。 */

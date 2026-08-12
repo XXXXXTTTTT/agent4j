@@ -79,6 +79,19 @@ public final class OfficialMcpCatalogClient {
         }
     }
 
+    /** 绕过 TTL 强制刷新官方目录；失败时沿用旧快照并标记为过期。 */
+    public CatalogResult refreshCatalogResult() {
+        Snapshot cached = snapshot;
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Snapshot refreshed = executor.submit((Callable<Snapshot>) () -> refresh(cached)).get();
+            if (refreshed != null) snapshot = refreshed;
+            return refreshed == null ? (cached == null ? unavailableResult() : cached.result().withStatus(STALE_STATUS)) : refreshed.result();
+        } catch (Exception failure) {
+            if (cached != null) return cached.result().withStatus(STALE_STATUS);
+            throw new IllegalStateException("CATALOG_UNAVAILABLE", failure);
+        }
+    }
+
     private Snapshot refresh(Snapshot cached) throws Exception {
         String commit = resolveCommit();
         HttpResponse rootResponse = request("/contents?ref=" + commit, cached == null ? null : cached.rootEtag());

@@ -61,7 +61,7 @@ public final class McpInstallationService {
         ScopeTarget target = resolveTarget(actor, requestWorkspaceId, requestedScope, targetWorkspaceId);
         Instant now = clock.instant();
         UUID previewId = uuidSupplier.get();
-        String confirmationToken = UUID.randomUUID().toString();
+        String confirmationToken = uuidSupplier.get().toString();
         PendingPreview pending = new PendingPreview(actor.userId(), target, server, confirmationToken, now.plus(previewTtl));
         previews.put(previewId, pending);
         return new McpInstallationPreview(previewId, confirmationToken, target.scope(), target.workspaceId(),

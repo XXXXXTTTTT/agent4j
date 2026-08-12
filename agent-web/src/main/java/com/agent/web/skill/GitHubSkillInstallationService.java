@@ -72,7 +72,7 @@ public final class GitHubSkillInstallationService {
         GitHubSkillSnapshot snapshot = client.readSkill(repositoryName, registeredTools);
         Instant now = clock.instant();
         UUID previewId = uuidSupplier.get();
-        String token = UUID.randomUUID().toString();
+        String token = uuidSupplier.get().toString();
         PendingPreview pending = new PendingPreview(actor.userId(), target, snapshot, token, now.plus(previewTtl));
         previews.put(previewId, pending);
         return new SkillInstallationPreview(previewId, token, snapshot.repositoryUrl(), snapshot.repository(),
