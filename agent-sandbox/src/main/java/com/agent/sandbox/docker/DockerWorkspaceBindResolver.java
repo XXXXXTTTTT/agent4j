@@ -20,4 +20,15 @@ public final class DockerWorkspaceBindResolver {
     }
     public static String resolveWorkspaceBindSource(String bindRoot, DockerTarget.ContainerWorkspaceSource source) { Objects.requireNonNull(source,"source 不能为空"); if(bindRoot==null||bindRoot.isBlank()) throw new IllegalArgumentException("Docker bind root 不能为空"); if(source.relativePath().isEmpty()) return bindRoot; char separator=bindRoot.indexOf('\\')>=0?'\\':'/'; String suffix=source.relativePath().replace('/',separator); return bindRoot.endsWith("/")||bindRoot.endsWith("\\")?bindRoot+suffix:bindRoot+separator+suffix; }
     public static String resolveContainerBindSource(DockerTarget.ContainerWorkspaceSource source, List<InspectContainerResponse.Mount> mounts) { Objects.requireNonNull(source,"source 不能为空"); Objects.requireNonNull(mounts,"mounts 不能为空"); List<InspectContainerResponse.Mount> matches=mounts.stream().filter(Objects::nonNull).filter(m->m.getDestination()!=null&&source.containerPath().equals(m.getDestination().getPath())).toList(); if(matches.isEmpty()) throw new IllegalArgumentException("源容器未找到工作区 mount: "+source.containerPath()); if(matches.size()!=1) throw new IllegalArgumentException("源容器工作区 mount 必须唯一: "+source.containerPath()); var mount=matches.getFirst(); if(!Boolean.TRUE.equals(mount.getRW())) throw new IllegalArgumentException("源容器工作区 mount 必须可读写"); if(mount.getName()!=null&&!mount.getName().isBlank()) throw new IllegalArgumentException("源容器工作区 mount 必须是 bind"); if(mount.getSource()==null||mount.getSource().isBlank()) throw new IllegalArgumentException("源容器工作区 bind source 不能为空"); return mount.getSource(); }
+    /** 统一解析宿主或源容器工作区在 Docker Engine 中可见的 bind source。 */
+    public static String resolveBindSource(
+            DockerTarget target, List<InspectContainerResponse.Mount> containerMounts) {
+        Objects.requireNonNull(target, "target 不能为空");
+        Objects.requireNonNull(containerMounts, "containerMounts 不能为空");
+        return switch (target.workspaceSource()) {
+            case DockerTarget.HostWorkspaceSource ignored -> target.hostWorkspace().toString();
+            case DockerTarget.ContainerWorkspaceSource source -> resolveWorkspaceBindSource(
+                    resolveContainerBindSource(source, containerMounts), source);
+        };
+    }
 }

@@ -104,16 +104,11 @@ public final class DockerCommandExecutor implements AutoCloseable {
     }
 
     private String bindSource(DockerTarget target) {
-        return switch (target.workspaceSource()) {
-            case DockerTarget.HostWorkspaceSource ignored ->
-                    target.hostWorkspace().toString();
-            case DockerTarget.ContainerWorkspaceSource source -> {
-                String bindRoot = resolveContainerBindSource(
-                        source,
-                        inspectContainerMounts(source.containerName()));
-                yield resolveWorkspaceBindSource(bindRoot, source);
-            }
+        List<InspectContainerResponse.Mount> mounts = switch (target.workspaceSource()) {
+            case DockerTarget.HostWorkspaceSource ignored -> List.of();
+            case DockerTarget.ContainerWorkspaceSource source -> inspectContainerMounts(source.containerName());
         };
+        return DockerWorkspaceBindResolver.resolveBindSource(target, mounts);
     }
 
     private List<InspectContainerResponse.Mount> inspectContainerMounts(

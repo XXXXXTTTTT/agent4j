@@ -1,6 +1,7 @@
 package com.agent.web.mcp.runtime;
 
 import com.agent.web.mcp.installation.WorkspaceMountMode;
+import com.agent.sandbox.pty.DockerTarget;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.AttachContainerCmd;
 import com.github.dockerjava.api.command.CreateContainerCmd;
@@ -31,6 +32,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -98,6 +100,53 @@ class DockerMcpStdioRunnerContractTest {
         }
         verify(stop, times(1)).exec();
         verify(remove, times(1)).exec();
+    }
+
+    @Test
+    void removesContainerAndPropagatesSynchronousStartFailure() {
+        StartedRunner started = startableRunner(spec(Set.of()));
+        when(started.start().exec()).thenThrow(new IllegalStateException("start failed"));
+        try (DockerMcpStdioRunner runner = started.runner()) {
+            assertThatThrownBy(() -> runner.start(spec(Set.of()), Map.of(), Path.of("D:/agent4j"), event -> { }))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("start failed");
+        }
+        verify(started.stop(), times(1)).exec();
+        verify(started.remove(), times(1)).exec();
+    }
+
+    @Test
+    void attachesBeforeStartingContainerSoStartupOutputCannotBeMissed() {
+        StartedRunner started = startableRunner(spec(Set.of()));
+        try (DockerMcpStdioRunner runner = started.runner()) {
+            runner.start(spec(Set.of()), Map.of(), Path.of("D:/agent4j"), event -> { });
+            var order = inOrder(started.attach(), started.start());
+            order.verify(started.attach()).exec(any());
+            order.verify(started.start()).exec();
+        }
+    }
+
+    @Test
+    void resolvesContainerWorkspaceBindSourceThroughDockerWorkspaceResolver() {
+        McpDockerLaunchSpec mounted = mountedSpec(WorkspaceMountMode.READ_WRITE);
+        StartedRunner started = startableRunner(mounted);
+        InspectContainerCmd inspect = mock(InspectContainerCmd.class);
+        InspectContainerResponse response = mock(InspectContainerResponse.class);
+        InspectContainerResponse.Mount mount = new InspectContainerResponse.Mount()
+                .withDestination(new com.github.dockerjava.api.model.Volume("/code"))
+                .withSource("/engine/workspace").withRw(true);
+        when(started.docker().inspectContainerCmd("source-container")).thenReturn(inspect);
+        when(inspect.exec()).thenReturn(response);
+        when(response.getMounts()).thenReturn(List.of(mount));
+        DockerTarget target = new DockerTarget("alpine:3.20", Path.of("D:/agent4j"), "/workspace",
+                new DockerTarget.ContainerWorkspaceSource("source-container", "/code", "nested/module"));
+        try (DockerMcpStdioRunner runner = started.runner()) {
+            runner.start(mounted, Map.of(), target, event -> { });
+            var hostConfig = forClass(HostConfig.class);
+            verify(started.create()).withHostConfig(hostConfig.capture());
+            assertThat(hostConfig.getValue().getBinds()).singleElement().satisfies(bind ->
+                    assertThat(bind.getPath()).isEqualTo("/engine/workspace/nested/module"));
+        }
     }
 
     @Test
@@ -213,6 +262,8 @@ class DockerMcpStdioRunnerContractTest {
                     .containsExactly(UUID.fromString("00000000-0000-0000-0000-000000000001"),
                             UUID.fromString("00000000-0000-0000-0000-000000000002"), "container-1",
                             McpRuntimeFailureListener.Reason.STDOUT_FRAME_LIMIT_EXCEEDED);
+            assertThat(event.get().cause()).isInstanceOf(IOException.class)
+                    .hasMessage("MCP stdout frame 超过上限");
             assertThat(process.stdout().read()).isEqualTo(-1);
             assertThat(notified.getCount()).isZero();
         }
@@ -223,11 +274,25 @@ class DockerMcpStdioRunnerContractTest {
         McpDockerLaunchSpec stdoutLimited = spec(Set.of(), 8, 3, 8);
         StartedRunner stdoutStarted = startableRunner(stdoutLimited);
         CountDownLatch stdoutNotified = new CountDownLatch(1);
+        AtomicReference<McpRuntimeFailureListener.Event> stdoutEvent = new AtomicReference<>();
         try (DockerMcpStdioRunner runner = stdoutStarted.runner()) {
-            var process = runner.start(stdoutLimited, Map.of(), Path.of("D:/agent4j"), event -> stdoutNotified.countDown());
+            var process = runner.start(stdoutLimited, Map.of(), Path.of("D:/agent4j"), event -> {
+                stdoutEvent.set(event);
+                stdoutNotified.countDown();
+            });
             stdoutStarted.callback().get().onNext(new Frame(StreamType.STDOUT, new byte[] {'a', 'b', 'c'}));
             stdoutStarted.callback().get().onNext(new Frame(StreamType.STDOUT, new byte[] {'d'}));
             assertThat(stdoutNotified.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(stdoutEvent.get()).extracting(
+                    McpRuntimeFailureListener.Event::installationId,
+                    McpRuntimeFailureListener.Event::snapshotId,
+                    McpRuntimeFailureListener.Event::containerId,
+                    McpRuntimeFailureListener.Event::reason)
+                    .containsExactly(UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                            UUID.fromString("00000000-0000-0000-0000-000000000002"), "container-1",
+                            McpRuntimeFailureListener.Reason.STDOUT_BUFFER_LIMIT_EXCEEDED);
+            assertThat(stdoutEvent.get().cause()).isInstanceOf(IOException.class)
+                    .hasMessage("MCP stdout 缓冲超过上限");
             assertThat(process.stdout().read()).isEqualTo(-1);
         }
 
@@ -244,7 +309,16 @@ class DockerMcpStdioRunnerContractTest {
             assertThat(process.stderr().readNBytes(2)).containsExactly('a', 'b');
             stderrStarted.callback().get().onNext(new Frame(StreamType.STDERR, new byte[] {'c', 'd'}));
             assertThat(stderrNotified.await(2, TimeUnit.SECONDS)).isTrue();
-            assertThat(stderrEvent.get().reason()).isEqualTo(McpRuntimeFailureListener.Reason.STDERR_LIMIT_EXCEEDED);
+            assertThat(stderrEvent.get()).extracting(
+                    McpRuntimeFailureListener.Event::installationId,
+                    McpRuntimeFailureListener.Event::snapshotId,
+                    McpRuntimeFailureListener.Event::containerId,
+                    McpRuntimeFailureListener.Event::reason)
+                    .containsExactly(UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                            UUID.fromString("00000000-0000-0000-0000-000000000002"), "container-1",
+                            McpRuntimeFailureListener.Reason.STDERR_LIMIT_EXCEEDED);
+            assertThat(stderrEvent.get().cause()).isInstanceOf(IOException.class)
+                    .hasMessage("MCP stderr 超过上限");
             assertThat(process.stderr().read()).isEqualTo(-1);
         }
     }
@@ -290,6 +364,76 @@ class DockerMcpStdioRunnerContractTest {
             assertThat(event.get().reason()).isEqualTo(McpRuntimeFailureListener.Reason.ATTACH_DISCONNECTED);
             releaseListener.countDown();
             assertThat(listenerFinished.await(2, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    @Test
+    void failureListenerCanCloseRunnerAfterCleanupWithoutDeadlock() throws Exception {
+        StartedRunner started = startableRunner(spec(Set.of()));
+        AtomicReference<DockerMcpStdioRunner> runnerRef = new AtomicReference<>();
+        CountDownLatch closed = new CountDownLatch(1);
+        AtomicInteger notifications = new AtomicInteger();
+        DockerMcpStdioRunner runner = started.runner();
+        runnerRef.set(runner);
+        runner.start(spec(Set.of()), Map.of(), Path.of("D:/agent4j"), event -> {
+            notifications.incrementAndGet();
+            runnerRef.get().close();
+            closed.countDown();
+        });
+        started.callback().get().onError(new IOException("attach closed"));
+        assertThat(closed.await(2, TimeUnit.SECONDS)).isTrue();
+        assertThat(notifications).hasValue(1);
+    }
+
+    @Test
+    void rejectsStartAfterCloseWithoutCreatingContainer() {
+        StartedRunner started = startableRunner(spec(Set.of()));
+        DockerMcpStdioRunner runner = started.runner();
+        runner.close();
+        assertThatThrownBy(() -> runner.start(spec(Set.of()), Map.of(), Path.of("D:/agent4j"), event -> { }))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Docker MCP runner 已关闭");
+        verify(started.create(), times(0)).exec();
+    }
+
+    @Test
+    void concurrentCloseWaitsForStartThenCleansUpCreatedContainer() throws Exception {
+        StartedRunner started = startableRunner(spec(Set.of()));
+        CountDownLatch createEntered = new CountDownLatch(1);
+        CountDownLatch releaseCreate = new CountDownLatch(1);
+        when(started.create().exec()).thenAnswer(invocation -> {
+            createEntered.countDown();
+            assertThat(releaseCreate.await(2, TimeUnit.SECONDS)).isTrue();
+            CreateContainerResponse response = new CreateContainerResponse();
+            response.setId("container-1");
+            return response;
+        });
+        ExecutorService callers = Executors.newVirtualThreadPerTaskExecutor();
+        try {
+            DockerMcpStdioRunner runner = started.runner();
+            var startResult = callers.submit(() -> {
+                try {
+                    runner.start(spec(Set.of()), Map.of(), Path.of("D:/agent4j"), event -> { });
+                    return null;
+                } catch (RuntimeException exception) {
+                    return exception;
+                }
+            });
+            assertThat(createEntered.await(2, TimeUnit.SECONDS)).isTrue();
+            var closeResult = callers.submit(() -> {
+                runner.close();
+                return null;
+            });
+            releaseCreate.countDown();
+            assertThat(startResult.get(2, TimeUnit.SECONDS)).isNull();
+            assertThat(closeResult.get(2, TimeUnit.SECONDS)).isNull();
+            verify(started.stop(), times(1)).exec();
+            verify(started.remove(), times(1)).exec();
+            assertThatThrownBy(() -> runner.start(spec(Set.of()), Map.of(), Path.of("D:/agent4j"), event -> { }))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("Docker MCP runner 已关闭");
+        } finally {
+            callers.shutdownNow();
         }
     }
 
@@ -344,11 +488,7 @@ class DockerMcpStdioRunnerContractTest {
     }
 
     private static void assertWorkspaceMount(WorkspaceMountMode mode, AccessMode accessMode) {
-        McpDockerLaunchSpec mounted = new McpDockerLaunchSpec(
-                UUID.fromString("00000000-0000-0000-0000-000000000001"),
-                UUID.fromString("00000000-0000-0000-0000-000000000002"), "alpine:3.20", "sh",
-                List.of("-c", "printf ready"), "/workspace", mode, "none",
-                128L * 1024 * 1024, 100_000_000L, 64L, 4096, 8192, 4096, Set.of());
+        McpDockerLaunchSpec mounted = mountedSpec(mode);
         StartedRunner started = startableRunner(mounted);
         try (DockerMcpStdioRunner runner = started.runner()) {
             runner.start(mounted, Map.of(), Path.of("D:/agent4j"), event -> { });
@@ -360,6 +500,14 @@ class DockerMcpStdioRunnerContractTest {
                 assertThat(bind.getAccessMode()).isEqualTo(accessMode);
             });
         }
+    }
+
+    private static McpDockerLaunchSpec mountedSpec(WorkspaceMountMode mode) {
+        return new McpDockerLaunchSpec(
+                UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                UUID.fromString("00000000-0000-0000-0000-000000000002"), "alpine:3.20", "sh",
+                List.of("-c", "printf ready"), "/workspace", mode, "none",
+                128L * 1024 * 1024, 100_000_000L, 64L, 4096, 8192, 4096, Set.of());
     }
 
     private static StartedRunner startableRunner(McpDockerLaunchSpec ignored) {
@@ -389,13 +537,15 @@ class DockerMcpStdioRunnerContractTest {
             return value;
         });
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-        return new StartedRunner(docker, new DockerMcpStdioRunner(docker, executor), create, stop, remove, callback, attachInput);
+        return new StartedRunner(docker, new DockerMcpStdioRunner(docker, executor), create, start, attach, stop, remove, callback, attachInput);
     }
 
     private record StartedRunner(
             DockerClient docker,
             DockerMcpStdioRunner runner,
             CreateContainerCmd create,
+            StartContainerCmd start,
+            AttachContainerCmd attach,
             StopContainerCmd stop,
             RemoveContainerCmd remove,
             AtomicReference<ResultCallback<Frame>> callback,
