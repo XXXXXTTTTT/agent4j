@@ -91,7 +91,7 @@ public final class GitHubSkillInstallationService {
         Objects.requireNonNull(previewId, "previewId 不能为空");
         Actor actor = actorResolver.current();
         ScopeTarget target = resolveTarget(actor, requestWorkspaceId, requestedScope, targetWorkspaceId);
-        PendingPreview pending = previews.remove(previewId);
+        PendingPreview pending = previews.get(previewId);
         if (pending == null || !pending.actorUserId().equals(actor.userId())
                 || !pending.target().equals(target)
                 || !pending.confirmationToken().equals(confirmationToken)
@@ -110,6 +110,7 @@ public final class GitHubSkillInstallationService {
         auditSink.record(new CapabilityManagementAuditEvent("SKILL_INSTALLATION_CONFIRMED", actor.userId(),
                 requestWorkspaceId, null, installation.skillInstallationId(), null,
                 snapshot.commitSha(), "SUCCESS", now));
+        previews.remove(previewId, pending);
         return installation;
     }
 

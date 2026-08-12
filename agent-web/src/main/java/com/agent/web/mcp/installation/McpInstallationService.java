@@ -79,7 +79,7 @@ public final class McpInstallationService {
         Objects.requireNonNull(previewId, "previewId 不能为空");
         Actor actor = actorResolver.current();
         ScopeTarget target = resolveTarget(actor, requestWorkspaceId, requestedScope, targetWorkspaceId);
-        PendingPreview pending = previews.remove(previewId);
+        PendingPreview pending = previews.get(previewId);
         if (pending == null || !pending.actorUserId().equals(actor.userId()) || !pending.target().equals(target)
                 || !pending.confirmationToken().equals(confirmationToken) || clock.instant().isAfter(pending.expiresAt())) {
             throw new InvalidConfirmationException();
@@ -92,6 +92,7 @@ public final class McpInstallationService {
                 McpInstallationStatus.STOPPED, sha256(confirmationToken), now, now, now));
         auditSink.record(new CapabilityManagementAuditEvent("MCP_INSTALLATION_CONFIRMED", actor.userId(),
                 requestWorkspaceId, installation.installationId(), null, null, snapshot.commitSha(), "SUCCESS", now));
+        previews.remove(previewId, pending);
         return installation;
     }
 
