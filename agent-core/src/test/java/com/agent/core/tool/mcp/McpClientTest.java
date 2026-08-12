@@ -101,6 +101,46 @@ class McpClientTest {
     }
 
     @Test
+    void acceptsObservedToolsListMetadataAndToolWithoutDescription() {
+        FakeTransport transport = initializedTransport("""
+                {"tools":[{"name":"echo","inputSchema":{"type":"object"}}],
+                 "_meta":{"cursorSource":"official-server"}}
+                """);
+        McpClient client = client(transport);
+        client.initialize();
+
+        List<McpRemoteTool> tools = client.listTools();
+
+        assertThat(tools).singleElement().satisfies(tool -> {
+            assertThat(tool.name()).isEqualTo("echo");
+            assertThat(tool.description()).isEmpty();
+        });
+    }
+
+    @Test
+    void rejectsUnknownToolsListAndToolDefinitionFields() {
+        FakeTransport resultTransport = initializedTransport("""
+                {"tools":[],"unexpected":true}
+                """);
+        McpClient resultClient = client(resultTransport);
+        resultClient.initialize();
+
+        assertThatThrownBy(resultClient::listTools)
+                .isInstanceOf(McpProtocolException.class)
+                .hasMessageContaining("未知字段");
+
+        FakeTransport toolTransport = initializedTransport("""
+                {"tools":[{"name":"echo","inputSchema":{"type":"object"},"unexpected":true}]}
+                """);
+        McpClient toolClient = client(toolTransport);
+        toolClient.initialize();
+
+        assertThatThrownBy(toolClient::listTools)
+                .isInstanceOf(McpProtocolException.class)
+                .hasMessageContaining("未知字段");
+    }
+
+    @Test
     void preservesRemoteIsErrorResultAndRejectsNonObjectArguments() {
         FakeTransport transport = initializedTransport("{\"tools\":[]}");
         transport.responses.add(success("3", """

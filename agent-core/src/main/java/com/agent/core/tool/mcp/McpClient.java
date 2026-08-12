@@ -76,7 +76,7 @@ public final class McpClient implements AutoCloseable {
             }
             Set<String> fields = new HashSet<>();
             result.fieldNames().forEachRemaining(fields::add);
-            if (!fields.stream().allMatch(field -> Set.of("tools", "nextCursor").contains(field))) {
+            if (!fields.stream().allMatch(field -> Set.of("tools", "nextCursor", "_meta").contains(field))) {
                 throw new McpProtocolException("MCP tools/list result 包含未知字段");
             }
             JsonNode toolsNode = result.get("tools");
@@ -132,7 +132,7 @@ public final class McpClient implements AutoCloseable {
 
     private McpRemoteTool parseTool(JsonNode node) {
         if (node == null || !node.isObject()
-                || !node.has("name") || !node.has("description") || !node.has("inputSchema")) {
+                || !node.has("name") || !node.has("inputSchema")) {
             throw new McpProtocolException("MCP tool 定义字段不完整");
         }
         Set<String> fields = new HashSet<>();
@@ -144,7 +144,7 @@ public final class McpClient implements AutoCloseable {
         try {
             return new McpRemoteTool(
                     text(node.get("name"), "tool name"),
-                    text(node.get("description"), "tool description"),
+                    optionalText(node.get("description")),
                     node.get("inputSchema"));
         } catch (IllegalArgumentException exception) {
             throw new McpProtocolException("MCP tool 定义不合法", exception);
@@ -191,6 +191,12 @@ public final class McpClient implements AutoCloseable {
         if (node == null || !node.isTextual() || node.textValue().isBlank()) {
             throw new McpProtocolException(field + " 必须是非空字符串");
         }
+        return node.textValue();
+    }
+
+    private static String optionalText(JsonNode node) {
+        if (node == null || node.isNull()) return "";
+        if (!node.isTextual()) throw new McpProtocolException("tool description 必须是字符串");
         return node.textValue();
     }
 

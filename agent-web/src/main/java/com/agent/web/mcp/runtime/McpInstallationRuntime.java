@@ -81,12 +81,21 @@ public final class McpInstallationRuntime implements AutoCloseable {
     }
 
     /** 应用重启后接管已处于 RUNNING 的受管容器。 */
-    public void recoverRunning(McpInstallationAggregate aggregate, DockerMcpContainer container) {
+    public void recoverRunning(McpInstallationAggregate aggregate, List<DockerMcpContainer> containers) {
         Objects.requireNonNull(aggregate, "aggregate 不能为空");
-        Objects.requireNonNull(container, "container 不能为空");
+        List<DockerMcpContainer> recoveredContainers = List.copyOf(
+                Objects.requireNonNull(containers, "containers 不能为空"));
         McpInstallationRecord installation = aggregate.installation();
         within(installation.installationId(), () -> {
+            List<DockerMcpContainer> matching = recoveredContainers.stream()
+                    .filter(DockerMcpContainer::running)
+                    .filter(container -> installation.containerId() != null && installation.containerId().equals(container.containerId()))
+                    .toList();
+            recoveredContainers.stream().filter(container -> !matching.contains(container))
+                    .forEach(container -> destroyRecoveryContainer(installation, aggregate, container));
+            DockerMcpContainer container = matching.size() == 1 ? matching.getFirst() : null;
             if (installation.status() != McpInstallationStatus.RUNNING
+                    || container == null
                     || !installation.snapshotId().equals(container.snapshotId())
                     || !installation.installationId().equals(container.installationId())
                     || installation.runtimeWorkspaceId() == null || installation.containerId() == null
@@ -128,15 +137,11 @@ public final class McpInstallationRuntime implements AutoCloseable {
     }
 
     /** 清理被中断的 INSTALLING 残留，并仅在没有密钥需求时以空环境重新启动。 */
-    public void recoverInstalling(McpInstallationAggregate aggregate, DockerMcpContainer container) {
+    public void recoverInstalling(McpInstallationAggregate aggregate, List<DockerMcpContainer> containers) {
         McpInstallationRecord installation = aggregate.installation();
         within(installation.installationId(), () -> {
             try {
-                if (container != null) {
-                    McpRuntimeMaterialProvider.PreparedMaterial material = materialProvider.requirePrepared(aggregate.snapshot());
-                    runner.destroyManagedContainer(configuration.launchSpec(installation, aggregate.snapshot(), material),
-                            container.containerId());
-                }
+                containers.forEach(container -> destroyRecoveryContainer(installation, aggregate, container));
                 if (!aggregate.snapshot().environmentVariableNames().isEmpty()) {
                     failSynchronously(installation, aggregate, installation.runtimeWorkspaceId(),
                             "RECOVERY_INSTALLING_SECRETS_UNAVAILABLE");
@@ -203,10 +208,14 @@ public final class McpInstallationRuntime implements AutoCloseable {
     }
 
     /** 恢复 STOPPING 状态时继续已开始的 drain、容器销毁与状态收敛。 */
-    public void recoverStopping(McpInstallationAggregate aggregate, DockerMcpContainer container) {
+    public void recoverStopping(McpInstallationAggregate aggregate, List<DockerMcpContainer> containers) {
         McpInstallationRecord installation = aggregate.installation();
         within(installation.installationId(), () -> {
             try {
+                DockerMcpContainer container = containers.stream().filter(DockerMcpContainer::running).findFirst().orElse(null);
+                containers.stream().filter(value -> container == null
+                                || !container.containerId().equals(value.containerId()))
+                        .forEach(value -> destroyRecoveryContainer(installation, aggregate, value));
                 if (container == null || !container.running()) {
                     completeStoppedRecovery(installation, aggregate);
                     return null;
@@ -232,6 +241,12 @@ public final class McpInstallationRuntime implements AutoCloseable {
             }
             return null;
         });
+    }
+
+    private void destroyRecoveryContainer(McpInstallationRecord installation, McpInstallationAggregate aggregate,
+                                          DockerMcpContainer container) {
+        McpRuntimeMaterialProvider.PreparedMaterial material = materialProvider.requirePrepared(aggregate.snapshot());
+        runner.destroyManagedContainer(configuration.launchSpec(installation, aggregate.snapshot(), material), container.containerId());
     }
 
     /** STOPPING 的容器已经退出时，继续完成幂等停止而非将预期状态误记为失败。 */

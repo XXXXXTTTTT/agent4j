@@ -11,6 +11,10 @@ import com.agent.web.workspace.WorkspacePermission;
 import com.agent.web.workspace.WorkspaceRecord;
 import com.agent.core.intent.RequiredCapability;
 import com.agent.core.tool.ToolRiskLevel;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -27,6 +31,7 @@ import java.util.function.Supplier;
 
 /** 创建无副作用预览，并在明确确认后保存 MCP 安装。 */
 public final class McpInstallationService {
+    private static final ObjectMapper CONFIRMATION_MAPPER = new ObjectMapper();
     private final ActorResolver actorResolver;
     private final WorkspaceAccessService workspaceAccess;
     private final McpInstallationRepository repository;
@@ -93,7 +98,7 @@ public final class McpInstallationService {
         if (runtimeImage.isBlank()) throw new IllegalStateException("MCP 运行镜像未配置");
         Instant now = clock.instant();
         UUID previewId = uuidSupplier.get();
-        String confirmationToken = uuidSupplier.get() + "." + confirmationSummary(server, governance);
+        String confirmationToken = uuidSupplier.get() + "." + confirmationSummary(server, governance, runtimeImage);
         PendingPreview pending = new PendingPreview(actor.userId(), target, server, governance, confirmationToken, now.plus(previewTtl));
         previews.put(previewId, pending);
         return new McpInstallationPreview(previewId, confirmationToken, target.scope(), target.workspaceId(),
@@ -223,13 +228,33 @@ public final class McpInstallationService {
         }
     }
 
-    /** 确认令牌的不可变摘要覆盖固定来源、启动参数与治理策略。 */
-    private static String confirmationSummary(OfficialMcpServerRecord server, Governance governance) {
-        String canonical = String.join("\n", server.commitSha(), server.metadataSha256(), server.command(),
-                String.join("\u0000", server.arguments()), governance.riskLevel().name(),
-                governance.requiredCapabilities().stream().map(Enum::name).sorted().collect(java.util.stream.Collectors.joining(",")),
-                governance.workspaceMountMode().name(), McpNetworkMode.NONE.name());
-        return sha256(canonical);
+    /** 确认令牌使用固定字段顺序的 JSON，覆盖全部不可变来源、运行时和治理输入。 */
+    private static String confirmationSummary(OfficialMcpServerRecord server, Governance governance, String runtimeImage) {
+        ObjectNode root = CONFIRMATION_MAPPER.createObjectNode();
+        ObjectNode snapshot = root.putObject("snapshot");
+        snapshot.put("commitSha", server.commitSha());
+        ObjectNode blobShas = snapshot.putObject("blobShas");
+        new java.util.TreeMap<>(server.blobShas()).forEach(blobShas::put);
+        root.put("metadataSha256", server.metadataSha256());
+        root.put("command", server.command());
+        array(root, "arguments", server.arguments());
+        root.put("launchBin", server.launchBin());
+        array(root, "environmentVariableNames", server.environmentVariableNames());
+        root.put("runtimeImage", runtimeImage);
+        root.put("riskLevel", governance.riskLevel().name());
+        array(root, "capabilities", governance.requiredCapabilities().stream().map(Enum::name).sorted().toList());
+        root.put("workspaceMountMode", governance.workspaceMountMode().name());
+        root.put("networkMode", McpNetworkMode.NONE.name());
+        try {
+            return sha256(CONFIRMATION_MAPPER.writeValueAsString(root));
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("无法序列化确认令牌摘要", exception);
+        }
+    }
+
+    private static void array(ObjectNode target, String field, List<String> values) {
+        ArrayNode array = target.putArray(field);
+        values.forEach(array::add);
     }
 
     private record ScopeTarget(InstallationScope scope, UUID workspaceId) { }

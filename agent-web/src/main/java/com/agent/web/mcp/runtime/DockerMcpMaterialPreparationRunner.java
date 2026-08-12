@@ -338,6 +338,9 @@ public final class DockerMcpMaterialPreparationRunner implements McpMaterialPrep
     }
 
     private void removeContainer(String containerId) {
+        try { docker.stopContainerCmd(containerId).withTimeout(0).exec(); }
+        catch (com.github.dockerjava.api.exception.NotModifiedException ignored) { }
+        catch (RuntimeException ignored) { }
         try { docker.removeContainerCmd(containerId).withForce(true).exec(); }
         catch (RuntimeException ignored) { }
     }

@@ -33,18 +33,17 @@ public final class McpRuntimeRecovery implements ApplicationListener<Application
     /** 幂等执行一次恢复扫描。 */
     public void recover() {
         if (!recovered.compareAndSet(false, true)) return;
-        java.util.Map<ContainerKey, DockerMcpContainer> containers = runner.findManagedContainers().stream()
-                .collect(java.util.stream.Collectors.toMap(value -> new ContainerKey(value.installationId(), value.snapshotId()), value -> value,
-                        (first, ignored) -> first));
+        java.util.Map<ContainerKey, List<DockerMcpContainer>> containers = runner.findManagedContainers().stream()
+                .collect(java.util.stream.Collectors.groupingBy(value -> new ContainerKey(value.installationId(), value.snapshotId())));
         for (McpInstallationAggregate aggregate : repository.findRecoverableInstallations()) {
-            DockerMcpContainer container = containers.get(new ContainerKey(aggregate.installation().installationId(),
-                    aggregate.installation().snapshotId()));
+            List<DockerMcpContainer> matching = containers.getOrDefault(new ContainerKey(aggregate.installation().installationId(),
+                    aggregate.installation().snapshotId()), List.of());
             if (aggregate.installation().status() == McpInstallationStatus.RUNNING) {
-                runtime.recoverRunning(aggregate, container);
+                runtime.recoverRunning(aggregate, matching);
             } else if (aggregate.installation().status() == McpInstallationStatus.STOPPING) {
-                runtime.recoverStopping(aggregate, container);
+                runtime.recoverStopping(aggregate, matching);
             } else if (aggregate.installation().status() == McpInstallationStatus.INSTALLING) {
-                runtime.recoverInstalling(aggregate, container);
+                runtime.recoverInstalling(aggregate, matching);
             }
         }
     }

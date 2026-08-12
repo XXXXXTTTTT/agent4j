@@ -144,12 +144,61 @@ class McpInstallationServiceTest {
                 .hasMessageContaining("用户自己的工作区");
     }
 
+    @Test
+    void confirmationTokenDigestCoversEveryFrozenRuntimeAndGovernanceInput() throws Exception {
+        OfficialMcpServerRecord source = server();
+        String baseline = confirmationDigest(source, ToolRiskLevel.HIGH, java.util.Set.of(RequiredCapability.TOOL),
+                WorkspaceMountMode.NONE, "node:22-alpine");
+
+        assertThat(confirmationDigest(copy(source, "different-commit", null, null, null, null, null, null),
+                ToolRiskLevel.HIGH, java.util.Set.of(RequiredCapability.TOOL), WorkspaceMountMode.NONE, "node:22-alpine"))
+                .isNotEqualTo(baseline);
+        assertThat(confirmationDigest(copy(source, null, Map.of("package.json", "different-blob"), null, null, null, null, null),
+                ToolRiskLevel.HIGH, java.util.Set.of(RequiredCapability.TOOL), WorkspaceMountMode.NONE, "node:22-alpine"))
+                .isNotEqualTo(baseline);
+        assertThat(confirmationDigest(copy(source, null, null, "b".repeat(64), null, null, null, null),
+                ToolRiskLevel.HIGH, java.util.Set.of(RequiredCapability.TOOL), WorkspaceMountMode.NONE, "node:22-alpine"))
+                .isNotEqualTo(baseline);
+        assertThat(confirmationDigest(copy(source, null, null, null, "node", null, null, null),
+                ToolRiskLevel.HIGH, java.util.Set.of(RequiredCapability.TOOL), WorkspaceMountMode.NONE, "node:22-alpine"))
+                .isNotEqualTo(baseline);
+        assertThat(confirmationDigest(copy(source, null, null, null, null, List.of("--different"), null, null),
+                ToolRiskLevel.HIGH, java.util.Set.of(RequiredCapability.TOOL), WorkspaceMountMode.NONE, "node:22-alpine"))
+                .isNotEqualTo(baseline);
+        assertThat(confirmationDigest(copy(source, null, null, null, null, null, "different-bin", null),
+                ToolRiskLevel.HIGH, java.util.Set.of(RequiredCapability.TOOL), WorkspaceMountMode.NONE, "node:22-alpine"))
+                .isNotEqualTo(baseline);
+        assertThat(confirmationDigest(copy(source, null, null, null, null, null, null, List.of("OTHER_TOKEN")),
+                ToolRiskLevel.HIGH, java.util.Set.of(RequiredCapability.TOOL), WorkspaceMountMode.NONE, "node:22-alpine"))
+                .isNotEqualTo(baseline);
+        assertThat(confirmationDigest(source, ToolRiskLevel.MEDIUM, java.util.Set.of(RequiredCapability.TOOL),
+                WorkspaceMountMode.NONE, "node:22-alpine")).isNotEqualTo(baseline);
+        assertThat(confirmationDigest(source, ToolRiskLevel.HIGH,
+                java.util.Set.of(RequiredCapability.TOOL, RequiredCapability.CODE_READ), WorkspaceMountMode.NONE,
+                "node:22-alpine")).isNotEqualTo(baseline);
+        assertThat(confirmationDigest(source, ToolRiskLevel.HIGH,
+                java.util.Set.of(RequiredCapability.TOOL, RequiredCapability.CODE_READ), WorkspaceMountMode.READ_ONLY,
+                "node:22-alpine")).isNotEqualTo(baseline);
+        assertThat(confirmationDigest(source, ToolRiskLevel.HIGH, java.util.Set.of(RequiredCapability.TOOL),
+                WorkspaceMountMode.NONE, "node:23-alpine")).isNotEqualTo(baseline);
+    }
+
     private McpInstallationService service(
             FakeRepository repository,
             CapturingAuditSink audit,
             Actor actor,
             UUID workspaceId,
             UUID otherWorkspaceId) throws Exception {
+        return service(repository, audit, actor, workspaceId, otherWorkspaceId, "node:22-alpine");
+    }
+
+    private McpInstallationService service(
+            FakeRepository repository,
+            CapturingAuditSink audit,
+            Actor actor,
+            UUID workspaceId,
+            UUID otherWorkspaceId,
+            String runtimeImage) throws Exception {
         Path root = Files.createTempDirectory("agent4j-mcp-installation");
         Path ownPath = Files.createDirectory(root.resolve("own"));
         Path otherPath = Files.createDirectory(root.resolve("other"));
@@ -166,7 +215,30 @@ class McpInstallationServiceTest {
                 audit,
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 Duration.ofMinutes(5),
-                () -> UUID.fromString("e2d2e8b6-9550-4ab5-b50e-6ef11bffaf6d"), "node:22-alpine");
+                () -> UUID.fromString("e2d2e8b6-9550-4ab5-b50e-6ef11bffaf6d"), runtimeImage);
+    }
+
+    private String confirmationDigest(OfficialMcpServerRecord source, ToolRiskLevel riskLevel,
+                                      java.util.Set<RequiredCapability> capabilities, WorkspaceMountMode mountMode,
+                                      String runtimeImage) throws Exception {
+        McpInstallationService service = service(new FakeRepository(), new CapturingAuditSink(), ACTOR,
+                WORKSPACE_ID, OTHER_WORKSPACE_ID, runtimeImage);
+        String token = service.preview(WORKSPACE_ID, source, InstallationScope.WORKSPACE, WORKSPACE_ID,
+                riskLevel, capabilities, mountMode).confirmationToken();
+        return token.substring(token.indexOf('.') + 1);
+    }
+
+    private OfficialMcpServerRecord copy(OfficialMcpServerRecord source, String commitSha, Map<String, String> blobShas,
+                                         String metadataSha256, String command, List<String> arguments, String launchBin,
+                                         List<String> environmentVariableNames) {
+        return new OfficialMcpServerRecord(source.serviceId(), source.sourcePath(), source.sourceUrl(),
+                commitSha == null ? source.commitSha() : commitSha,
+                blobShas == null ? source.blobShas() : blobShas,
+                metadataSha256 == null ? source.metadataSha256() : metadataSha256, source.version(),
+                source.description(), source.license(), command == null ? source.command() : command,
+                arguments == null ? source.arguments() : arguments, launchBin == null ? source.launchBin() : launchBin,
+                environmentVariableNames == null ? source.environmentVariableNames() : environmentVariableNames,
+                source.readmeSummary());
     }
 
     private OfficialMcpServerRecord server() {

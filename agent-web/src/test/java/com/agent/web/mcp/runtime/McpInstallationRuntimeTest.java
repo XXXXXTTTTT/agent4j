@@ -136,7 +136,7 @@ class McpInstallationRuntimeTest {
                 McpRuntimeSecretProvider.declaredNamesOnly(), mock(DockerMcpStdioRunner.class), mock(ToolRegistry.class),
                 new com.fasterxml.jackson.databind.ObjectMapper(), configuration(), java.time.Clock.systemUTC());
 
-        runtime.recoverStopping(aggregate, null);
+        runtime.recoverStopping(aggregate, List.of());
 
         verify(repository).completeStop(any(McpRuntimeStopCompletion.class));
         org.mockito.Mockito.verify(repository, org.mockito.Mockito.never()).completeFailure(any(McpRuntimeFailureCompletion.class));

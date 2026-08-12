@@ -7,8 +7,10 @@ import com.github.dockerjava.api.command.CreateContainerCmd;
 import com.github.dockerjava.api.command.CreateContainerResponse;
 import com.github.dockerjava.api.command.RemoveContainerCmd;
 import com.github.dockerjava.api.command.StartContainerCmd;
+import com.github.dockerjava.api.command.StopContainerCmd;
 import com.github.dockerjava.api.command.WaitContainerCmd;
 import com.github.dockerjava.api.command.WaitContainerResultCallback;
+import org.mockito.InOrder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Assumptions;
 import org.testcontainers.DockerClientFactory;
@@ -40,6 +42,7 @@ class DockerMcpMaterialPreparationRunnerTest {
         WaitContainerCmd wait = mock(WaitContainerCmd.class);
         WaitContainerResultCallback callback = mock(WaitContainerResultCallback.class);
         RemoveContainerCmd remove = mock(RemoveContainerCmd.class, RETURNS_SELF);
+        StopContainerCmd stop = mock(StopContainerCmd.class, RETURNS_SELF);
         CreateContainerResponse response = new CreateContainerResponse();
         response.setId("preparation-container");
         when(docker.createContainerCmd("node:22-alpine")).thenReturn(create);
@@ -49,6 +52,7 @@ class DockerMcpMaterialPreparationRunnerTest {
         when(wait.start()).thenReturn(callback);
         when(callback.awaitStatusCode(eq(1L), eq(java.util.concurrent.TimeUnit.SECONDS))).thenReturn(null);
         when(docker.removeContainerCmd("preparation-container")).thenReturn(remove);
+        when(docker.stopContainerCmd("preparation-container")).thenReturn(stop);
         Path root = Files.createTempDirectory("mcp-material-root");
         DockerMcpMaterialPreparationRunner runner = new DockerMcpMaterialPreparationRunner(docker, root,
                 "node:22-alpine", "", 1024, java.time.Duration.ofSeconds(1), new ObjectMapper(), Clock.systemUTC());
@@ -58,8 +62,11 @@ class DockerMcpMaterialPreparationRunnerTest {
                 .hasMessage("MATERIAL_PREPARATION_TIMEOUT");
 
         verify(start).exec();
-        verify(remove).withForce(true);
-        verify(remove).exec();
+        InOrder cleanup = org.mockito.Mockito.inOrder(stop, remove);
+        cleanup.verify(stop).withTimeout(0);
+        cleanup.verify(stop).exec();
+        cleanup.verify(remove).withForce(true);
+        cleanup.verify(remove).exec();
         try (var paths = Files.list(root)) {
             assertThat(paths).isEmpty();
         }

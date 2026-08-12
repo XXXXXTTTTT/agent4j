@@ -55,10 +55,10 @@ class McpRuntimeRecoveryTest {
 
         new McpRuntimeRecovery(repository, runner, runtime).recover();
 
-        verify(runtime).recoverRunning(running, container);
-        verify(runtime).recoverRunning(missing, null);
-        verify(runtime).recoverInstalling(installing, null);
-        verify(runtime).recoverStopping(stopping, stoppingContainer);
+        verify(runtime).recoverRunning(running, List.of(container));
+        verify(runtime).recoverRunning(missing, List.of());
+        verify(runtime).recoverInstalling(installing, List.of());
+        verify(runtime).recoverStopping(stopping, List.of(stoppingContainer));
     }
 
     @Test
@@ -75,7 +75,26 @@ class McpRuntimeRecoveryTest {
 
         new McpRuntimeRecovery(repository, runner, runtime).recover();
 
-        verify(runtime).recoverRunning(running, null);
+        verify(runtime).recoverRunning(running, List.of());
+    }
+
+    @Test
+    void retainsEverySameTupleContainerForRuntimeToConverge() {
+        McpInstallationRepository repository = mock(McpInstallationRepository.class);
+        DockerMcpStdioRunner runner = mock(DockerMcpStdioRunner.class);
+        McpInstallationRuntime runtime = mock(McpInstallationRuntime.class);
+        McpInstallationAggregate running = aggregate(McpInstallationStatus.RUNNING,
+                UUID.fromString("2894522d-7b7c-4c91-a7f8-8213ded5c2a3"));
+        DockerMcpContainer first = new DockerMcpContainer("container-first", running.installation().installationId(),
+                running.installation().snapshotId(), true);
+        DockerMcpContainer second = new DockerMcpContainer("container-second", running.installation().installationId(),
+                running.installation().snapshotId(), true);
+        when(runner.findManagedContainers()).thenReturn(List.of(first, second));
+        when(repository.findRecoverableInstallations()).thenReturn(List.of(running));
+
+        new McpRuntimeRecovery(repository, runner, runtime).recover();
+
+        verify(runtime).recoverRunning(running, List.of(first, second));
     }
 
     @Test

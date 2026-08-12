@@ -17,9 +17,7 @@ public record McpRemoteTool(
         if (name == null || !NAME_PATTERN.matcher(name).matches()) {
             throw new IllegalArgumentException("MCP 工具 name 格式不合法");
         }
-        if (description == null || description.isBlank()) {
-            throw new IllegalArgumentException("MCP 工具 description 不能为空");
-        }
+        description = description == null ? "" : description;
         inputSchema = Objects.requireNonNull(inputSchema, "MCP 工具 inputSchema 不能为空")
                 .deepCopy();
         if (!inputSchema.isObject()) {
