@@ -1,6 +1,7 @@
 package com.agent.web.mcp.runtime;
 
 import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.model.Volume;
 import com.github.dockerjava.core.DefaultDockerClientConfig;
 import com.github.dockerjava.core.DockerClientImpl;
 import com.github.dockerjava.httpclient5.ApacheDockerHttpClient;
@@ -13,11 +14,13 @@ import org.junit.jupiter.api.io.TempDir;
 import org.testcontainers.DockerClientFactory;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -66,19 +69,34 @@ class DockerMcpStdioRunnerTest {
             var inspected = verificationClient.inspectContainerCmd(id).exec();
             assertThat(inspected.getConfig().getTty()).isFalse();
             assertThat(inspected.getConfig().getStdinOpen()).isTrue();
+            assertThat(inspected.getConfig().getAttachStdin()).isTrue();
+            assertThat(inspected.getConfig().getAttachStdout()).isTrue();
+            assertThat(inspected.getConfig().getAttachStderr()).isTrue();
             assertThat(inspected.getHostConfig().getNetworkMode()).isEqualTo("none");
             assertThat(inspected.getHostConfig().getReadonlyRootfs()).isTrue();
             assertThat(inspected.getHostConfig().getPrivileged()).isFalse();
+            assertThat(inspected.getHostConfig().getMemory()).isEqualTo(128L * 1024 * 1024);
+            assertThat(inspected.getHostConfig().getNanoCPUs()).isEqualTo(100_000_000L);
+            assertThat(inspected.getHostConfig().getPidsLimit()).isEqualTo(64L);
             assertThat(inspected.getConfig().getLabels())
                     .containsEntry("com.agent.runtime.managed", "true")
                     .containsEntry("com.agent.runtime.kind", "mcp")
+                    .containsEntry("com.agent.runtime.installation-id", installationId.toString())
                     .containsEntry("com.agent.runtime.snapshot-id", snapshotId.toString());
             assertThat(inspected.getMounts()).anySatisfy(mount -> {
-                assertThat(mount.getDestination()).isEqualTo("/workspace");
+                assertThat(mount.getDestination()).isInstanceOf(Volume.class);
+                assertThat(mount.getDestination().getPath()).isEqualTo("/workspace");
                 assertThat(mount.getMode()).isEqualTo("ro");
+                assertThat(mount.getRW()).isFalse();
             });
+            assertThat(process.stdout().readAllBytes()).asString(StandardCharsets.UTF_8).isEqualTo("ready");
             process.destroy();
             process.destroy();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!verificationClient.listContainersCmd().withShowAll(true)
+                    .withIdFilter(Set.of(id)).exec().isEmpty() && System.nanoTime() < deadline) {
+                Thread.sleep(25);
+            }
             assertThat(verificationClient.listContainersCmd().withShowAll(true)
                     .withIdFilter(Set.of(id)).exec()).isEmpty();
         }
