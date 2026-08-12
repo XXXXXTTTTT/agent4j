@@ -6,9 +6,6 @@ import com.agent.sandbox.pty.DockerTarget;
 import com.agent.sandbox.pty.SandboxExecutionException;
 import com.agent.sandbox.pty.Stream;
 import com.agent.sandbox.pty.TerminalLog;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.async.ResultCallback;
 import com.github.dockerjava.api.command.CreateContainerResponse;
@@ -28,7 +25,6 @@ import com.github.dockerjava.transport.DockerHttpClient;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Map;
 import java.util.List;
 import java.util.Objects;
@@ -41,8 +37,6 @@ public final class DockerCommandExecutor implements AutoCloseable {
 
     private static final Map<String, String> MANAGED_LABEL =
             Map.of("com.agent.runtime.managed", "true");
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-
     private final DockerClient dockerClient;
     private final DockerHttpClient dockerHttpClient;
 
@@ -137,104 +131,26 @@ public final class DockerCommandExecutor implements AutoCloseable {
                         "读取源容器 mount 失败，Docker HTTP 响应码: " + statusCode
                                 + ", body: " + body);
             }
-            return parseMounts(body);
+            return DockerWorkspaceBindResolver.parseMounts(body);
         } catch (IOException exception) {
             throw new SandboxExecutionException("读取源容器 mount 响应失败", exception);
         }
     }
 
-    /**
-     * 只解析 Docker Inspect 响应中的 Mounts 数组，避免反序列化 HostConfig.Binds。
-     * Windows 驱动器路径包含冒号，docker-java 将其映射到 Binds 时会解析失败。
-     */
     static List<InspectContainerResponse.Mount> parseMounts(String inspectJson) {
-        Objects.requireNonNull(inspectJson, "inspectJson 不能为空");
-        try {
-            JsonNode root = OBJECT_MAPPER.readTree(inspectJson);
-            if (root == null || !root.isObject() || !root.path("Mounts").isArray()) {
-                return List.of();
-            }
-            List<InspectContainerResponse.Mount> mounts = new ArrayList<>();
-            for (JsonNode mountNode : root.path("Mounts")) {
-                if (!mountNode.isObject()) {
-                    continue;
-                }
-                InspectContainerResponse.Mount mount =
-                        new InspectContainerResponse.Mount();
-                JsonNode destination = mountNode.get("Destination");
-                if (destination != null && destination.isTextual()) {
-                    mount.withDestination(new Volume(destination.textValue()));
-                }
-                JsonNode source = mountNode.get("Source");
-                if (source != null && source.isTextual()) {
-                    mount.withSource(source.textValue());
-                }
-                JsonNode name = mountNode.get("Name");
-                if (name != null && name.isTextual()) {
-                    mount.withName(name.textValue());
-                }
-                JsonNode rw = mountNode.get("RW");
-                if (rw != null && rw.isBoolean()) {
-                    mount.withRw(rw.booleanValue());
-                }
-                mounts.add(mount);
-            }
-            return List.copyOf(mounts);
-        } catch (JsonProcessingException exception) {
-            throw new IllegalArgumentException("Docker Inspect 响应不是有效 JSON", exception);
-        }
+        return DockerWorkspaceBindResolver.parseMounts(inspectJson);
     }
 
     static String resolveWorkspaceBindSource(
             String bindRoot,
             DockerTarget.ContainerWorkspaceSource source) {
-        Objects.requireNonNull(source, "source 不能为空");
-        if (bindRoot == null || bindRoot.isBlank()) {
-            throw new IllegalArgumentException("Docker bind root 不能为空");
-        }
-        String relativePath = source.relativePath();
-        if (relativePath.isEmpty()) {
-            return bindRoot;
-        }
-        char separator = bindRoot.indexOf('\\') >= 0 ? '\\' : '/';
-        boolean hasTrailingSeparator = bindRoot.endsWith("/") || bindRoot.endsWith("\\");
-        String suffix = relativePath.replace('/', separator);
-        return hasTrailingSeparator
-                ? bindRoot + suffix
-                : bindRoot + separator + suffix;
+        return DockerWorkspaceBindResolver.resolveWorkspaceBindSource(bindRoot, source);
     }
 
     static String resolveContainerBindSource(
             DockerTarget.ContainerWorkspaceSource source,
             List<InspectContainerResponse.Mount> mounts) {
-        Objects.requireNonNull(source, "source 不能为空");
-        Objects.requireNonNull(mounts, "mounts 不能为空");
-        List<InspectContainerResponse.Mount> matches = mounts.stream()
-                .filter(Objects::nonNull)
-                .filter(mount -> mount.getDestination() != null)
-                .filter(mount -> source.containerPath().equals(
-                        mount.getDestination().getPath()))
-                .toList();
-        if (matches.isEmpty()) {
-            throw new IllegalArgumentException(
-                    "源容器未找到工作区 mount: " + source.containerPath());
-        }
-        if (matches.size() != 1) {
-            throw new IllegalArgumentException(
-                    "源容器工作区 mount 必须唯一: " + source.containerPath());
-        }
-        InspectContainerResponse.Mount mount = matches.getFirst();
-        if (!Boolean.TRUE.equals(mount.getRW())) {
-            throw new IllegalArgumentException("源容器工作区 mount 必须可读写");
-        }
-        if (mount.getName() != null && !mount.getName().isBlank()) {
-            throw new IllegalArgumentException("源容器工作区 mount 必须是 bind");
-        }
-        String bindSource = mount.getSource();
-        if (bindSource == null || bindSource.isBlank()) {
-            throw new IllegalArgumentException("源容器工作区 bind source 不能为空");
-        }
-        return bindSource;
+        return DockerWorkspaceBindResolver.resolveContainerBindSource(source, mounts);
     }
 
     private CommandResult runContainer(
