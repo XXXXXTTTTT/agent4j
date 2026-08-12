@@ -122,6 +122,26 @@ class McpInstallationRuntimeTest {
         verify(repository).completeFailure(any(McpRuntimeFailureCompletion.class));
     }
 
+    @Test
+    void completesStoppingRecoveryWhenManagedContainerIsAlreadyGone() {
+        McpInstallationRepository repository = mock(McpInstallationRepository.class);
+        McpInstallationRecord stopping = installing();
+        stopping = new McpInstallationRecord(stopping.installationId(), stopping.snapshotId(), stopping.scope(), stopping.workspaceId(),
+                stopping.actorUserId(), McpInstallationStatus.STOPPING, stopping.confirmationTokenSha256(), stopping.createdAt(),
+                stopping.confirmedAt(), stopping.updatedAt(), stopping.riskLevel(), stopping.requiredCapabilities(),
+                stopping.workspaceMountMode(), stopping.networkMode(), stopping.runtimeImage(), true, WORKSPACE_ID, "container-1", null, 5);
+        McpInstallationAggregate aggregate = new McpInstallationAggregate(stopping, snapshot(), null, List.of());
+        McpInstallationRuntime runtime = new McpInstallationRuntime(() -> new Actor("runtime-user", "Runtime"),
+                mock(WorkspaceAccessService.class), repository, snapshot -> { throw new AssertionError(); },
+                McpRuntimeSecretProvider.declaredNamesOnly(), mock(DockerMcpStdioRunner.class), mock(ToolRegistry.class),
+                new com.fasterxml.jackson.databind.ObjectMapper(), configuration(), java.time.Clock.systemUTC());
+
+        runtime.recoverStopping(aggregate, null);
+
+        verify(repository).completeStop(any(McpRuntimeStopCompletion.class));
+        org.mockito.Mockito.verify(repository, org.mockito.Mockito.never()).completeFailure(any(McpRuntimeFailureCompletion.class));
+    }
+
     private static McpInstallationAggregate aggregate() {
         return new McpInstallationAggregate(stopped(), snapshot(), null, List.of());
     }

@@ -36,13 +36,20 @@ public interface McpRuntimeMaterialProvider {
     /** 计算物料树的稳定 SHA-256，不跟随符号链接。 */
     static String sha256(Path directory) {
         try {
+            if (Files.isSymbolicLink(directory)) {
+                throw new McpMaterialNotPreparedException(null);
+            }
             Path root = directory.toRealPath();
             if (!Files.isDirectory(root)) {
                 throw new IOException("物料目录不存在");
             }
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             try (var paths = Files.walk(root)) {
-                paths.filter(path -> !Files.isSymbolicLink(path) && Files.isRegularFile(path))
+                List<Path> materialPaths = paths.toList();
+                if (materialPaths.stream().anyMatch(Files::isSymbolicLink)) {
+                    throw new McpMaterialNotPreparedException(null);
+                }
+                materialPaths.stream().filter(path -> Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS))
                         .sorted(Comparator.comparing(path -> root.relativize(path).toString().replace('\\', '/')))
                         .forEach(path -> updateDigest(digest, root, path));
             }

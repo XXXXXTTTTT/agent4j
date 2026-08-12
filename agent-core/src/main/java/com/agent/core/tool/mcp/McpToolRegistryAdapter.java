@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.nio.ByteBuffer;
 
 /** 将 MCP 远程工具转换为本地受治理工具定义。 */
 public final class McpToolRegistryAdapter {
@@ -73,7 +74,7 @@ public final class McpToolRegistryAdapter {
         List<ToolBinding> bindings = new ArrayList<>(remoteTools.size());
         Set<String> names = new HashSet<>();
         String ownerId = installationId.toString();
-        String namespace = "mcp." + ownerId.replace("-", "");
+        String namespace = "mcp.i" + base32Uuid(installationId);
         for (McpRemoteTool remoteTool : remoteTools) {
             String localName = namespace + "." + remoteTool.name();
             if (localName.length() > 64) {
@@ -132,5 +133,25 @@ public final class McpToolRegistryAdapter {
         if (!namespace.matches("[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)*")) {
             throw new IllegalArgumentException("namespace 格式不合法");
         }
+    }
+
+    /** 使用无 padding 的小写 RFC 4648 Base32 保留 UUID 全部 128 位，避免名称截断。 */
+    private static String base32Uuid(UUID value) {
+        byte[] source = ByteBuffer.allocate(16).putLong(value.getMostSignificantBits())
+                .putLong(value.getLeastSignificantBits()).array();
+        String alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+        StringBuilder encoded = new StringBuilder(26);
+        int buffer = 0;
+        int bits = 0;
+        for (byte current : source) {
+            buffer = (buffer << 8) | Byte.toUnsignedInt(current);
+            bits += 8;
+            while (bits >= 5) {
+                encoded.append(alphabet.charAt((buffer >>> (bits - 5)) & 31));
+                bits -= 5;
+            }
+        }
+        if (bits > 0) encoded.append(alphabet.charAt((buffer << (5 - bits)) & 31));
+        return encoded.toString();
     }
 }

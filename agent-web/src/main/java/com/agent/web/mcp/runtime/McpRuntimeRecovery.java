@@ -7,7 +7,6 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ApplicationListener;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -34,11 +33,12 @@ public final class McpRuntimeRecovery implements ApplicationListener<Application
     /** 幂等执行一次恢复扫描。 */
     public void recover() {
         if (!recovered.compareAndSet(false, true)) return;
-        Map<UUID, DockerMcpContainer> containers = runner.findManagedContainers().stream()
-                .collect(java.util.stream.Collectors.toMap(DockerMcpContainer::installationId, value -> value,
+        java.util.Map<ContainerKey, DockerMcpContainer> containers = runner.findManagedContainers().stream()
+                .collect(java.util.stream.Collectors.toMap(value -> new ContainerKey(value.installationId(), value.snapshotId()), value -> value,
                         (first, ignored) -> first));
         for (McpInstallationAggregate aggregate : repository.findRecoverableInstallations()) {
-            DockerMcpContainer container = containers.get(aggregate.installation().installationId());
+            DockerMcpContainer container = containers.get(new ContainerKey(aggregate.installation().installationId(),
+                    aggregate.installation().snapshotId()));
             if (aggregate.installation().status() == McpInstallationStatus.RUNNING) {
                 runtime.recoverRunning(aggregate, container);
             } else if (aggregate.installation().status() == McpInstallationStatus.STOPPING) {
@@ -54,4 +54,7 @@ public final class McpRuntimeRecovery implements ApplicationListener<Application
     public void close() {
         runtime.closeNormally();
     }
+
+    /** 受管容器只可由同一安装及固定快照共同标识。 */
+    private record ContainerKey(UUID installationId, UUID snapshotId) { }
 }

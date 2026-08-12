@@ -111,18 +111,18 @@ public final class McpClient implements AutoCloseable {
         params.set("arguments", arguments.deepCopy());
         JsonNode result = requireResult(transport.request(
                 McpJsonRpcRequest.request(nextId(), "tools/call", params)));
-        if (!result.isObject() || !result.has("content") || !result.has("isError")) {
+        if (!result.isObject() || !result.has("content")) {
             throw new McpProtocolException("MCP tools/call result 字段不完整");
         }
         Set<String> fields = new HashSet<>();
         result.fieldNames().forEachRemaining(fields::add);
-        if (!fields.equals(Set.of("content", "isError"))) {
+        if (!fields.stream().allMatch(field -> Set.of("content", "isError", "structuredContent", "_meta").contains(field))) {
             throw new McpProtocolException("MCP tools/call result 包含未知字段");
         }
-        if (!result.get("content").isArray() || !result.get("isError").isBoolean()) {
+        if (!result.get("content").isArray() || (result.has("isError") && !result.get("isError").isBoolean())) {
             throw new McpProtocolException("MCP tools/call result 类型不合法");
         }
-        return new McpToolCallResult(result.get("content"), result.get("isError").booleanValue());
+        return new McpToolCallResult(result.get("content"), result.has("isError") && result.get("isError").booleanValue());
     }
 
     @Override
@@ -137,7 +137,8 @@ public final class McpClient implements AutoCloseable {
         }
         Set<String> fields = new HashSet<>();
         node.fieldNames().forEachRemaining(fields::add);
-        if (!fields.equals(Set.of("name", "description", "inputSchema"))) {
+        if (!Set.of("name", "description", "inputSchema", "title", "outputSchema", "annotations", "execution", "_meta")
+                .containsAll(fields)) {
             throw new McpProtocolException("MCP tool 定义包含未知字段");
         }
         try {

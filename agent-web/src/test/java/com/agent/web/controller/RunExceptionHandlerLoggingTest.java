@@ -1,6 +1,7 @@
 package com.agent.web.controller;
 
 import com.agent.web.audit.AuditTextRedactor;
+import com.agent.web.mcp.runtime.McpMaterialPreparationTimeoutException;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -12,6 +13,16 @@ import org.springframework.mock.web.server.MockServerWebExchange;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class RunExceptionHandlerLoggingTest {
+
+    @Test
+    void mapsMaterialPreparationTimeoutToStableConflictCode() {
+        var response = new RunExceptionHandler(new AuditTextRedactor(java.util.List.of()))
+                .mcpMaterialPreparationTimeout(new McpMaterialPreparationTimeoutException(),
+                        MockServerWebExchange.from(MockServerHttpRequest.post("/api/workspaces/1/mcp/installations/2/material")));
+
+        assertThat(response.getStatusCode()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT);
+        assertThat(response.getBody().getDetail()).isEqualTo("MATERIAL_PREPARATION_TIMEOUT");
+    }
 
     @Test
     void logsUnhandledExceptionWithRequestMethodAndPath() {

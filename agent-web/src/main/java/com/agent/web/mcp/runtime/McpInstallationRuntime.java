@@ -207,8 +207,12 @@ public final class McpInstallationRuntime implements AutoCloseable {
         McpInstallationRecord installation = aggregate.installation();
         within(installation.installationId(), () -> {
             try {
-                if (installation.runtimeWorkspaceId() == null || container == null || !container.running()) {
-                    throw new IllegalStateException("停止恢复缺少受管运行容器");
+                if (container == null || !container.running()) {
+                    completeStoppedRecovery(installation, aggregate);
+                    return null;
+                }
+                if (installation.runtimeWorkspaceId() == null) {
+                    throw new IllegalStateException("停止恢复缺少运行工作区");
                 }
                 Path workspacePath = workspaceAccess.requireWorkspace(installation.runtimeWorkspaceId(),
                         installation.actorUserId(), WorkspacePermission.OPERATOR).workspacePath();
@@ -228,6 +232,19 @@ public final class McpInstallationRuntime implements AutoCloseable {
             }
             return null;
         });
+    }
+
+    /** STOPPING 的容器已经退出时，继续完成幂等停止而非将预期状态误记为失败。 */
+    private void completeStoppedRecovery(McpInstallationRecord installation, McpInstallationAggregate aggregate) {
+        try {
+            toolRegistry.beginDrain(installation.installationId().toString());
+            toolRegistry.unregisterOwned(installation.installationId().toString(), configuration.drainTimeout());
+        } catch (RuntimeException ignored) {
+            // 进程重启后工具目录可能已经为空；停止状态仍须收敛。
+        }
+        repository.completeStop(new McpRuntimeStopCompletion(installation.installationId(), installation.version(),
+                audit(aggregate, installation.runtimeWorkspaceId(), "MCP_INSTALLATION_STOPPED", "SUCCESS",
+                        McpInstallationStatus.STOPPING, McpInstallationStatus.STOPPED)));
     }
 
     private McpInstallationRecord startInternal(Actor actor, UUID requestWorkspaceId, UUID installationId, LifecycleRequest request) {

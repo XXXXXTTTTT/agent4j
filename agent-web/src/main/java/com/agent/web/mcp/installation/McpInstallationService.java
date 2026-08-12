@@ -9,6 +9,8 @@ import com.agent.web.mcp.catalog.OfficialMcpServerRecord;
 import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspacePermission;
 import com.agent.web.workspace.WorkspaceRecord;
+import com.agent.core.intent.RequiredCapability;
+import com.agent.core.tool.ToolRiskLevel;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -72,16 +74,33 @@ public final class McpInstallationService {
             OfficialMcpServerRecord server,
             InstallationScope requestedScope,
             UUID targetWorkspaceId) {
+        return preview(requestWorkspaceId, server, requestedScope, targetWorkspaceId, ToolRiskLevel.HIGH,
+                java.util.Set.of(RequiredCapability.TOOL), WorkspaceMountMode.NONE);
+    }
+
+    /** 预览明确冻结风险、能力、挂载、无网络和运行镜像治理策略。 */
+    public McpInstallationPreview preview(
+            UUID requestWorkspaceId,
+            OfficialMcpServerRecord server,
+            InstallationScope requestedScope,
+            UUID targetWorkspaceId,
+            ToolRiskLevel riskLevel,
+            java.util.Set<RequiredCapability> requiredCapabilities,
+            WorkspaceMountMode workspaceMountMode) {
         Actor actor = actorResolver.current();
         ScopeTarget target = resolveTarget(actor, requestWorkspaceId, requestedScope, targetWorkspaceId);
+        Governance governance = governance(riskLevel, requiredCapabilities, workspaceMountMode);
+        if (runtimeImage.isBlank()) throw new IllegalStateException("MCP 运行镜像未配置");
         Instant now = clock.instant();
         UUID previewId = uuidSupplier.get();
-        String confirmationToken = uuidSupplier.get().toString();
-        PendingPreview pending = new PendingPreview(actor.userId(), target, server, confirmationToken, now.plus(previewTtl));
+        String confirmationToken = uuidSupplier.get() + "." + confirmationSummary(server, governance);
+        PendingPreview pending = new PendingPreview(actor.userId(), target, server, governance, confirmationToken, now.plus(previewTtl));
         previews.put(previewId, pending);
         return new McpInstallationPreview(previewId, confirmationToken, target.scope(), target.workspaceId(),
                 server.sourceUrl(), server.commitSha(), server.metadataSha256(), server.command(), server.arguments(),
-                server.environmentVariableNames(), server.readmeSummary(), true, true, pending.expiresAt());
+                server.environmentVariableNames(), governance.riskLevel(), governance.requiredCapabilities(),
+                governance.workspaceMountMode(), McpNetworkMode.NONE, runtimeImage, server.readmeSummary(), true, true,
+                pending.expiresAt());
     }
 
     /** 只接受与未过期预览完全一致的一次性确认。 */
@@ -103,12 +122,9 @@ public final class McpInstallationService {
         McpSourceSnapshot snapshot = McpSourceSnapshot.from(uuidSupplier.get(), pending.server(), now);
         McpInstallationRecord installation = new McpInstallationRecord(
                 uuidSupplier.get(), snapshot.snapshotId(), target.scope(), target.workspaceId(), actor.userId(),
-                McpInstallationStatus.STOPPED, sha256(confirmationToken), now, now, now);
-        installation = new McpInstallationRecord(installation.installationId(), installation.snapshotId(), installation.scope(),
-                installation.workspaceId(), installation.actorUserId(), installation.status(), installation.confirmationTokenSha256(),
-                installation.createdAt(), installation.confirmedAt(), installation.updatedAt(), installation.riskLevel(),
-                installation.requiredCapabilities(), installation.workspaceMountMode(), installation.networkMode(), runtimeImage,
-                !runtimeImage.isBlank(), null, null, null, 0);
+                McpInstallationStatus.STOPPED, sha256(confirmationToken), now, now, now, pending.governance().riskLevel(),
+                pending.governance().requiredCapabilities(), pending.governance().workspaceMountMode(), McpNetworkMode.NONE,
+                runtimeImage, true, null, null, null, 0);
         repository.confirmInstallation(new McpInstallationCommand(snapshot, installation,
                 new CapabilityManagementAuditEvent("MCP_INSTALLATION_CONFIRMED", actor.userId(),
                         requestWorkspaceId, installation.installationId(), null, null, snapshot.commitSha(), "SUCCESS", now)));
@@ -180,6 +196,24 @@ public final class McpInstallationService {
         return value;
     }
 
+    private static Governance governance(ToolRiskLevel riskLevel, java.util.Set<RequiredCapability> requiredCapabilities,
+                                         WorkspaceMountMode workspaceMountMode) {
+        ToolRiskLevel resolvedRisk = Objects.requireNonNull(riskLevel, "riskLevel 不能为空");
+        java.util.Set<RequiredCapability> resolvedCapabilities = java.util.Set.copyOf(
+                Objects.requireNonNull(requiredCapabilities, "requiredCapabilities 不能为空"));
+        WorkspaceMountMode resolvedMount = Objects.requireNonNull(workspaceMountMode, "workspaceMountMode 不能为空");
+        if (!resolvedCapabilities.contains(RequiredCapability.TOOL)) {
+            throw new IllegalArgumentException("requiredCapabilities 必须包含 TOOL");
+        }
+        if (resolvedMount == WorkspaceMountMode.READ_ONLY && !resolvedCapabilities.contains(RequiredCapability.CODE_READ)) {
+            throw new IllegalArgumentException("READ_ONLY 挂载必须声明 CODE_READ 能力");
+        }
+        if (resolvedMount == WorkspaceMountMode.READ_WRITE && !resolvedCapabilities.contains(RequiredCapability.CODE_WRITE)) {
+            throw new IllegalArgumentException("READ_WRITE 挂载必须声明 CODE_WRITE 能力");
+        }
+        return new Governance(resolvedRisk, resolvedCapabilities, resolvedMount);
+    }
+
     private static String sha256(String value) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
@@ -189,9 +223,20 @@ public final class McpInstallationService {
         }
     }
 
+    /** 确认令牌的不可变摘要覆盖固定来源、启动参数与治理策略。 */
+    private static String confirmationSummary(OfficialMcpServerRecord server, Governance governance) {
+        String canonical = String.join("\n", server.commitSha(), server.metadataSha256(), server.command(),
+                String.join("\u0000", server.arguments()), governance.riskLevel().name(),
+                governance.requiredCapabilities().stream().map(Enum::name).sorted().collect(java.util.stream.Collectors.joining(",")),
+                governance.workspaceMountMode().name(), McpNetworkMode.NONE.name());
+        return sha256(canonical);
+    }
+
     private record ScopeTarget(InstallationScope scope, UUID workspaceId) { }
-    private record PendingPreview(String actorUserId, ScopeTarget target, OfficialMcpServerRecord server,
+    private record PendingPreview(String actorUserId, ScopeTarget target, OfficialMcpServerRecord server, Governance governance,
                                   String confirmationToken, Instant expiresAt) { }
+    private record Governance(ToolRiskLevel riskLevel, java.util.Set<RequiredCapability> requiredCapabilities,
+                              WorkspaceMountMode workspaceMountMode) { }
 
     /** 预览不存在、已过期、已使用或确认请求与预览不一致。 */
     public static final class InvalidConfirmationException extends RuntimeException {

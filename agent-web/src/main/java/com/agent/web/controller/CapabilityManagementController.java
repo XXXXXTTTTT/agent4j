@@ -74,7 +74,8 @@ public final class CapabilityManagementController {
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("MCP 服务不存在于官方目录: " + request.serverKey()));
         return McpInstallationPreviewView.from(mcpInstallations.preview(workspaceId, server,
-                request.scope(), request.targetWorkspaceId()));
+                request.scope(), request.targetWorkspaceId(), request.riskLevel(), request.requiredCapabilities(),
+                request.workspaceMountMode()));
     }
 
     @PostMapping("/api/workspaces/{workspaceId}/mcp/installations")
@@ -145,7 +146,10 @@ public final class CapabilityManagementController {
         return SkillInstallationView.from(skillInstallations.uninstall(workspaceId, skillId));
     }
 
-    public record McpPreviewRequest(@NotBlank String serverKey, InstallationScope scope, UUID targetWorkspaceId) { }
+    public record McpPreviewRequest(@NotBlank String serverKey, InstallationScope scope, UUID targetWorkspaceId,
+                                    @NotNull com.agent.core.tool.ToolRiskLevel riskLevel,
+                                    @NotNull java.util.Set<com.agent.core.intent.RequiredCapability> requiredCapabilities,
+                                    @NotNull com.agent.web.mcp.installation.WorkspaceMountMode workspaceMountMode) { }
     public record ConfirmInstallationRequest(@NotNull UUID previewId, @NotBlank String confirmationToken,
                                               @NotNull InstallationScope scope, UUID targetWorkspaceId) { }
     public record LifecycleRequest(long expectedVersion, @NotNull UUID targetWorkspaceId,
@@ -168,12 +172,18 @@ public final class CapabilityManagementController {
                                               String metadataSha256, String command, List<String> arguments,
                                               List<String> environmentNames, String summary,
                                               InstallationScope scope, UUID workspaceId,
+                                              com.agent.core.tool.ToolRiskLevel riskLevel,
+                                              java.util.Set<com.agent.core.intent.RequiredCapability> requiredCapabilities,
+                                              com.agent.web.mcp.installation.WorkspaceMountMode workspaceMountMode,
+                                              com.agent.web.mcp.installation.McpNetworkMode networkMode,
+                                              String runtimeImage,
                                               boolean requiresConfirmation, boolean sideEffectFree,
                                               java.time.Instant expiresAt) {
         static McpInstallationPreviewView from(McpInstallationPreview value) {
             return new McpInstallationPreviewView(value.previewId(), value.confirmationToken(), value.sourceUrl(), value.commitSha(),
                     value.metadataSha256(), value.command(), value.arguments(), value.environmentVariableNames(),
-                    value.summary(), value.scope(), value.workspaceId(), value.requiresConfirmation(),
+                    value.summary(), value.scope(), value.workspaceId(), value.riskLevel(), value.requiredCapabilities(),
+                    value.workspaceMountMode(), value.networkMode(), value.runtimeImage(), value.requiresConfirmation(),
                     value.sideEffectFree(), value.expiresAt());
         }
     }

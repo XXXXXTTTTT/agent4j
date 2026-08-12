@@ -49,7 +49,7 @@ class McpStdioTransportTest {
             process.error.write("warning\n".getBytes());
             process.error.flush();
             assertThat(response.id()).isEqualTo("1");
-            assertThat(transport.stderr()).contains("warning");
+            assertThat(awaitStderr(transport, "warning")).contains("warning");
         }
     }
 
@@ -93,6 +93,17 @@ class McpStdioTransportTest {
 
     private McpJsonRpcRequest request(String id) {
         return McpJsonRpcRequest.request(id, "ping", mapper.createObjectNode());
+    }
+
+    private static String awaitStderr(McpStdioTransport transport, String expected) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        String current;
+        do {
+            current = transport.stderr();
+            if (current.contains(expected)) return current;
+            Thread.sleep(5);
+        } while (System.nanoTime() < deadline);
+        return current;
     }
 
     private static final class FakeProcess implements McpStdioProcess {

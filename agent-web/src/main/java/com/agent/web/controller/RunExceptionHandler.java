@@ -13,6 +13,7 @@ import com.agent.web.mcp.installation.McpInstallationService;
 import com.agent.web.mcp.installation.McpInstallationConflictException;
 import com.agent.web.mcp.runtime.McpMaterialNotPreparedException;
 import com.agent.web.mcp.runtime.McpMaterialPreparationImageNotConfiguredException;
+import com.agent.web.mcp.runtime.McpMaterialPreparationTimeoutException;
 import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.skill.SkillInstallationConflictException;
 import com.agent.web.audit.AuditTextRedactor;
@@ -182,6 +183,14 @@ public final class RunExceptionHandler {
             McpMaterialPreparationImageNotConfiguredException exception,
             ServerWebExchange exchange) {
         return problem(HttpStatus.CONFLICT, "MATERIAL_PREPARATION_IMAGE_NOT_CONFIGURED", exchange);
+    }
+
+    /** 物料准备超时不会回显容器或包管理器细节。 */
+    @ExceptionHandler(McpMaterialPreparationTimeoutException.class)
+    public ResponseEntity<ProblemDetail> mcpMaterialPreparationTimeout(
+            McpMaterialPreparationTimeoutException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.CONFLICT, "MATERIAL_PREPARATION_TIMEOUT", exchange);
     }
 
     /** 将数据库唯一约束冲突转换为稳定的客户端错误。 */

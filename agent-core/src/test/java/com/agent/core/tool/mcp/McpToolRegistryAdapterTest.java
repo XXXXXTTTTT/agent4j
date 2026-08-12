@@ -42,10 +42,10 @@ class McpToolRegistryAdapterTest {
                     .registerDiscoveredTools(INSTALLATION_ID, ToolRiskLevel.LOW, Set.of(), Duration.ofSeconds(1));
 
             assertThat(bindings).containsExactly(new McpToolRegistryAdapter.ToolBinding(
-                    "mcp.00000000000000000000000000000002.echo", "echo"));
-            assertThat(registry.find("mcp.00000000000000000000000000000002.echo")).isPresent();
+                    "mcp.i" + "a".repeat(25) + "i.echo", "echo"));
+            assertThat(registry.find("mcp.i" + "a".repeat(25) + "i.echo")).isPresent();
             registry.beginDrain(INSTALLATION_ID.toString());
-            assertThat(registry.execute(new ToolCall("drained", "mcp.00000000000000000000000000000002.echo",
+            assertThat(registry.execute(new ToolCall("drained", "mcp.i" + "a".repeat(25) + "i.echo",
                     objectMapper.createObjectNode()), context(Set.of(), false)).status()).isEqualTo(ToolResultStatus.FAILED);
         }
     }
@@ -53,7 +53,7 @@ class McpToolRegistryAdapterTest {
     @Test
     void rejectsOverlongInstallationLocalNameBeforeRegisteringTools() {
         RecordingTransport transport = initializedTransport();
-        transport.toolList = "{\"tools\":[{\"name\":\"" + "a".repeat(28)
+        transport.toolList = "{\"tools\":[{\"name\":\"" + "a".repeat(33)
                 + "\",\"description\":\"Echo\",\"inputSchema\":{\"type\":\"object\"}}]}";
         try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
             McpToolRegistryAdapter adapter = new McpToolRegistryAdapter(client(transport), registry);
@@ -63,6 +63,19 @@ class McpToolRegistryAdapterTest {
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("64");
             assertThat(registry.list()).isEmpty();
+        }
+    }
+
+    @Test
+    void supportsOfficialLongRemoteToolNamesWithinLocalRegistryLimit() {
+        RecordingTransport transport = initializedTransport();
+        transport.toolList = "{\"tools\":[{\"name\":\"trigger-long-running-operation\",\"description\":\"Long\",\"inputSchema\":{\"type\":\"object\"}}]}";
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            List<McpToolRegistryAdapter.ToolBinding> bindings = new McpToolRegistryAdapter(client(transport), registry)
+                    .registerDiscoveredTools(INSTALLATION_ID, ToolRiskLevel.LOW, Set.of(), Duration.ofSeconds(1));
+
+            assertThat(bindings).containsExactly(new McpToolRegistryAdapter.ToolBinding(
+                    "mcp.i" + "a".repeat(25) + "i.trigger-long-running-operation", "trigger-long-running-operation"));
         }
     }
 

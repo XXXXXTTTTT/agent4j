@@ -43,6 +43,29 @@ class McpRuntimeMaterialProviderTest {
     }
 
     @Test
+    void rejectsAnySymbolicLinkInsidePreparedMaterialTree() throws Exception {
+        Path root = Files.createTempDirectory("agent4j-mcp-material-root");
+        Path material = Files.createDirectory(root.resolve("snapshot"));
+        Files.writeString(material.resolve("server.mjs"), "console.log('mcp');\n");
+        Path external = Files.createTempFile("agent4j-mcp-material-external", ".txt");
+        try {
+            Files.createSymbolicLink(material.resolve("linked.txt"), external);
+        } catch (UnsupportedOperationException | java.nio.file.FileSystemException exception) {
+            org.junit.jupiter.api.Assumptions.assumeTrue(false, "当前文件系统不支持符号链接测试");
+        }
+        McpRuntimeMaterialProvider.PreparedMaterial prepared = new McpRuntimeMaterialProvider.PreparedMaterial(
+                material, "a".repeat(64), "server.mjs", List.of());
+        McpRuntimeMaterialProvider provider = new FileSystemMcpRuntimeMaterialProvider(root, snapshot -> prepared);
+
+        assertThatThrownBy(() -> McpRuntimeMaterialProvider.sha256(material))
+                .isInstanceOf(McpMaterialNotPreparedException.class)
+                .hasMessage("MATERIAL_NOT_PREPARED");
+        assertThatThrownBy(() -> provider.requirePrepared(snapshot()))
+                .isInstanceOf(McpMaterialNotPreparedException.class)
+                .hasMessage("MATERIAL_NOT_PREPARED");
+    }
+
+    @Test
     void acceptsOnlyDeclaredEnvironmentNamesWithoutPersistingValues() {
         McpRuntimeSecretProvider provider = McpRuntimeSecretProvider.declaredNamesOnly();
 

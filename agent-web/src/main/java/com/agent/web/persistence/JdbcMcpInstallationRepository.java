@@ -238,9 +238,9 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
         return Objects.requireNonNull(transactions.execute(status -> {
             int updated = jdbc.sql("""
                     update agent_mcp_installations set status = 'RUNNING', container_id = :containerId,
-                           runtime_workspace_id = :runtimeWorkspaceId,
                            runtime_error = null, updated_at = current_timestamp, version = version + 1
                     where installation_id = :id and version = :expectedVersion and status = 'INSTALLING'
+                      and runtime_workspace_id = :runtimeWorkspaceId
                     """).param("id", completion.installationId()).param("expectedVersion", completion.expectedVersion())
                     .param("containerId", completion.containerId()).param("runtimeWorkspaceId", completion.runtimeWorkspaceId()).update();
             if (updated != 1) throw new McpInstallationConflictException(completion.installationId(), completion.expectedVersion());

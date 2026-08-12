@@ -21,6 +21,69 @@ class ToolSchemaValidatorTest {
     }
 
     @Test
+    void acceptsMcpDraftSevenSchemaDeclarationOnlyAtRoot() throws Exception {
+        JsonNode schema = objectMapper.readTree("""
+                {"$schema":"http://json-schema.org/draft-07/schema#","type":"object",
+                 "properties":{"message":{"type":"string"}}}
+                """);
+
+        assertThatCode(() -> validator.validateSchema(schema)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void rejectsUnsupportedSchemaDeclaration() throws Exception {
+        JsonNode schema = objectMapper.readTree("""
+                {"$schema":"https://example.invalid/schema","type":"object","properties":{}}
+                """);
+
+        assertThatThrownBy(() -> validator.validateSchema(schema))
+                .isInstanceOfSatisfying(ToolSchemaException.class, exception ->
+                        org.assertj.core.api.Assertions.assertThat(exception.jsonPointer()).isEqualTo("/$schema"));
+    }
+
+    @Test
+    void acceptsTypeCompatibleDefaultWithoutChangingArgumentValidation() throws Exception {
+        JsonNode schema = objectMapper.readTree("""
+                {"type":"object","properties":{"count":{"type":"integer","default":3}}}
+                """);
+
+        assertThatCode(() -> validator.validateSchema(schema)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> validator.validateArguments(schema, objectMapper.readTree("{" +
+                "\"count\":\"three\"}"))).isInstanceOf(ToolSchemaException.class);
+    }
+
+    @Test
+    void rejectsTypeIncompatibleDefault() throws Exception {
+        JsonNode schema = objectMapper.readTree("""
+                {"type":"object","properties":{"count":{"type":"integer","default":"three"}}}
+                """);
+
+        assertThatThrownBy(() -> validator.validateSchema(schema))
+                .isInstanceOfSatisfying(ToolSchemaException.class, exception ->
+                        org.assertj.core.api.Assertions.assertThat(exception.jsonPointer()).isEqualTo("/properties/count/default"));
+    }
+
+    @Test
+    void acceptsStringFormatAsNonExecutablePresentationMetadata() throws Exception {
+        JsonNode schema = objectMapper.readTree("""
+                {"type":"object","properties":{"endpoint":{"type":"string","format":"uri"}}}
+                """);
+
+        assertThatCode(() -> validator.validateSchema(schema)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void rejectsFormatOnNonStringSchema() throws Exception {
+        JsonNode schema = objectMapper.readTree("""
+                {"type":"object","properties":{"count":{"type":"integer","format":"int32"}}}
+                """);
+
+        assertThatThrownBy(() -> validator.validateSchema(schema))
+                .isInstanceOfSatisfying(ToolSchemaException.class, exception ->
+                        org.assertj.core.api.Assertions.assertThat(exception.jsonPointer()).isEqualTo("/properties/count/format"));
+    }
+
+    @Test
     void rejectsInvalidSchemaWithExactJsonPointers() throws Exception {
         assertSchemaFailure("[]", "/");
         assertSchemaFailure("{\"type\":\"string\"}", "/type");

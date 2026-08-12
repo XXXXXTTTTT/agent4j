@@ -82,6 +82,25 @@ class McpClientTest {
     }
 
     @Test
+    void retainsOnlyExecutableFieldsWhenServerAddsStandardToolPresentationMetadata() {
+        FakeTransport transport = initializedTransport("""
+                {"tools":[{"name":"echo","description":"Echo text","inputSchema":{"type":"object"},
+                  "title":"Echo Tool","outputSchema":{"type":"object"},
+                  "annotations":{"readOnlyHint":true},"execution":{"taskSupport":"forbidden"},
+                  "_meta":{"vendor":"example"}}]}
+                """);
+        McpClient client = client(transport);
+        client.initialize();
+
+        List<McpRemoteTool> tools = client.listTools();
+
+        assertThat(tools).singleElement().satisfies(tool -> {
+            assertThat(tool.name()).isEqualTo("echo");
+            assertThat(tool.inputSchema().get("type").textValue()).isEqualTo("object");
+        });
+    }
+
+    @Test
     void preservesRemoteIsErrorResultAndRejectsNonObjectArguments() {
         FakeTransport transport = initializedTransport("{\"tools\":[]}");
         transport.responses.add(success("3", """
@@ -100,6 +119,22 @@ class McpClientTest {
         assertThatThrownBy(() -> client.callTool("echo", objectMapper.createArrayNode()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("object");
+    }
+
+    @Test
+    void acceptsStandardToolCallResultWhenServerOmitsOptionalIsError() {
+        FakeTransport transport = initializedTransport("{\"tools\":[]}");
+        transport.responses.add(success("3", """
+                {"content":[{"type":"text","text":"hello"}]}
+                """));
+        McpClient client = client(transport);
+        client.initialize();
+        client.listTools();
+
+        McpToolCallResult result = client.callTool("echo", objectMapper.createObjectNode());
+
+        assertThat(result.isError()).isFalse();
+        assertThat(result.content()).isNotEmpty();
     }
 
     @Test

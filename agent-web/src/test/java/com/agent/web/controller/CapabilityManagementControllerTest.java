@@ -67,7 +67,10 @@ class CapabilityManagementControllerTest {
         when(mcpCatalog.fetchCatalogResult()).thenReturn(new OfficialMcpCatalogClient.CatalogResult(
                 "modelcontextprotocol/servers", "76d64c822f5125032f89eb71dbdb94e42b434821", NOW,
                 NOW.plusSeconds(300), "etag", "FRESH", List.of(server), Map.of()));
-        when(mcpInstallations.preview(eq(WORKSPACE_ID), eq(server), eq(InstallationScope.WORKSPACE), eq(WORKSPACE_ID)))
+        when(mcpInstallations.preview(eq(WORKSPACE_ID), eq(server), eq(InstallationScope.WORKSPACE), eq(WORKSPACE_ID),
+                eq(com.agent.core.tool.ToolRiskLevel.HIGH),
+                eq(java.util.Set.of(com.agent.core.intent.RequiredCapability.TOOL)),
+                eq(com.agent.web.mcp.installation.WorkspaceMountMode.NONE)))
                 .thenReturn(mcpPreview());
 
         client.get().uri("/api/mcp/catalog")
@@ -80,7 +83,8 @@ class CapabilityManagementControllerTest {
         client.post().uri("/api/workspaces/{workspaceId}/mcp/installations/preview", WORKSPACE_ID)
                 .header("Content-Type", "application/json")
                 .bodyValue("""
-                        {"serverKey":"everything","scope":"WORKSPACE","targetWorkspaceId":"%s"}
+                        {"serverKey":"everything","scope":"WORKSPACE","targetWorkspaceId":"%s",
+                         "riskLevel":"HIGH","requiredCapabilities":["TOOL"],"workspaceMountMode":"NONE"}
                         """.formatted(WORKSPACE_ID))
                 .exchange().expectStatus().isOk().expectBody()
                 .jsonPath("$.previewId").isEqualTo(PREVIEW_ID.toString())
@@ -225,7 +229,10 @@ class CapabilityManagementControllerTest {
         return new McpInstallationPreview(PREVIEW_ID, "confirm-mcp", InstallationScope.WORKSPACE, WORKSPACE_ID,
                 URI.create("https://github.com/modelcontextprotocol/servers/tree/commit/src/everything"),
                 "76d64c822f5125032f89eb71dbdb94e42b434821", "a".repeat(64), "npx", List.of("-y", "server"),
-                List.of("MCP_TOKEN"), "官方说明", true, true, NOW.plusSeconds(300));
+                List.of("MCP_TOKEN"), com.agent.core.tool.ToolRiskLevel.HIGH,
+                java.util.Set.of(com.agent.core.intent.RequiredCapability.TOOL),
+                com.agent.web.mcp.installation.WorkspaceMountMode.NONE, com.agent.web.mcp.installation.McpNetworkMode.NONE,
+                "node:22-alpine", "官方说明", true, true, NOW.plusSeconds(300));
     }
 
     private static McpInstallationRecord mcpInstallation() {

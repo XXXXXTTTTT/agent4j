@@ -204,7 +204,7 @@ class DockerMcpStdioRunnerContractTest {
             });
             var command = forClass(String[].class);
             verify(started.create()).withCmd(command.capture());
-            assertThat(command.getValue()).containsExactly("/mcp-material/server.mjs", "--stdio");
+            assertThat(command.getValue()).containsExactly("node", "/mcp-material/server.mjs", "--stdio");
         }
     }
 

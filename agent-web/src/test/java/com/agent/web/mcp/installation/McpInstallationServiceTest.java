@@ -8,6 +8,8 @@ import com.agent.web.mcp.catalog.OfficialMcpServerRecord;
 import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspacePermission;
 import com.agent.web.workspace.WorkspaceRecord;
+import com.agent.core.intent.RequiredCapability;
+import com.agent.core.tool.ToolRiskLevel;
 import org.junit.jupiter.api.Test;
 
 import java.net.URI;
@@ -49,6 +51,35 @@ class McpInstallationServiceTest {
         assertThat(repository.savedSnapshots).isEmpty();
         assertThat(repository.savedInstallations).isEmpty();
         assertThat(audit.events).isEmpty();
+    }
+
+    @Test
+    void freezesExplicitGovernanceFieldsIntoConfirmedInstallation() throws Exception {
+        FakeRepository repository = new FakeRepository();
+        McpInstallationService service = service(repository, new CapturingAuditSink(), ACTOR, WORKSPACE_ID, OTHER_WORKSPACE_ID);
+
+        McpInstallationPreview preview = service.preview(WORKSPACE_ID, server(), InstallationScope.WORKSPACE, WORKSPACE_ID,
+                ToolRiskLevel.MEDIUM, java.util.Set.of(RequiredCapability.TOOL, RequiredCapability.CODE_READ),
+                WorkspaceMountMode.READ_ONLY);
+        McpInstallationRecord installation = service.confirm(WORKSPACE_ID, preview.previewId(), preview.confirmationToken(),
+                InstallationScope.WORKSPACE, WORKSPACE_ID);
+
+        assertThat(preview.riskLevel()).isEqualTo(ToolRiskLevel.MEDIUM);
+        assertThat(preview.requiredCapabilities()).containsExactlyInAnyOrder(RequiredCapability.TOOL, RequiredCapability.CODE_READ);
+        assertThat(preview.workspaceMountMode()).isEqualTo(WorkspaceMountMode.READ_ONLY);
+        assertThat(installation.riskLevel()).isEqualTo(ToolRiskLevel.MEDIUM);
+        assertThat(installation.requiredCapabilities()).containsExactlyInAnyOrder(RequiredCapability.TOOL, RequiredCapability.CODE_READ);
+        assertThat(installation.workspaceMountMode()).isEqualTo(WorkspaceMountMode.READ_ONLY);
+    }
+
+    @Test
+    void rejectsMissingMountCapabilityFromExplicitPreviewPolicy() throws Exception {
+        McpInstallationService service = service(new FakeRepository(), new CapturingAuditSink(), ACTOR, WORKSPACE_ID, OTHER_WORKSPACE_ID);
+
+        assertThatThrownBy(() -> service.preview(WORKSPACE_ID, server(), InstallationScope.WORKSPACE, WORKSPACE_ID,
+                ToolRiskLevel.HIGH, java.util.Set.of(RequiredCapability.TOOL), WorkspaceMountMode.READ_WRITE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("READ_WRITE 挂载必须声明 CODE_WRITE 能力");
     }
 
     @Test
@@ -135,7 +166,7 @@ class McpInstallationServiceTest {
                 audit,
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 Duration.ofMinutes(5),
-                () -> UUID.fromString("e2d2e8b6-9550-4ab5-b50e-6ef11bffaf6d"));
+                () -> UUID.fromString("e2d2e8b6-9550-4ab5-b50e-6ef11bffaf6d"), "node:22-alpine");
     }
 
     private OfficialMcpServerRecord server() {

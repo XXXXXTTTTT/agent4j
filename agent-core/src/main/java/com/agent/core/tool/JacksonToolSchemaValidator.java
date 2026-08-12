@@ -14,10 +14,11 @@ public final class JacksonToolSchemaValidator implements ToolSchemaValidator {
     private static final Set<String> TYPES = Set.of(
             "object", "string", "integer", "number", "boolean", "array");
     private static final Set<String> COMMON = Set.of(
-            "type", "enum", "title", "description");
+            "type", "enum", "title", "description", "default");
+    private static final String MCP_DRAFT_SEVEN_SCHEMA = "http://json-schema.org/draft-07/schema#";
     private static final Map<String, Set<String>> TYPE_KEYWORDS = Map.of(
             "object", Set.of("properties", "required", "additionalProperties"),
-            "string", Set.of("minLength", "maxLength"),
+            "string", Set.of("minLength", "maxLength", "format"),
             "integer", Set.of("minimum", "maximum"),
             "number", Set.of("minimum", "maximum"),
             "boolean", Set.of(),
@@ -56,6 +57,7 @@ public final class JacksonToolSchemaValidator implements ToolSchemaValidator {
         }
         Set<String> allowed = new HashSet<>(COMMON);
         allowed.addAll(TYPE_KEYWORDS.get(type));
+        if (root) allowed.add("$schema");
         schema.fieldNames().forEachRemaining(field -> {
             if (!allowed.contains(field)) {
                 throw failure(child(pointer, field), "Schema 关键字不受支持: " + field);
@@ -63,7 +65,9 @@ public final class JacksonToolSchemaValidator implements ToolSchemaValidator {
         });
         validateTextAnnotation(schema, "title", pointer);
         validateTextAnnotation(schema, "description", pointer);
+        validateSchemaDeclaration(schema, pointer, root);
         validateEnum(schema, pointer, type);
+        validateDefault(schema, pointer, type);
 
         switch (type) {
             case "object" -> validateObjectSchema(schema, pointer);
@@ -124,6 +128,10 @@ public final class JacksonToolSchemaValidator implements ToolSchemaValidator {
         if (minimum != null && maximum != null && minimum > maximum) {
             throw failure(child(pointer, "minLength"), "minLength 不能大于 maxLength");
         }
+        JsonNode format = schema.get("format");
+        if (format != null && (!format.isTextual() || format.textValue().isBlank())) {
+            throw failure(child(pointer, "format"), "format 必须是非空字符串");
+        }
     }
 
     private void validateNumberSchema(JsonNode schema, String pointer) {
@@ -155,6 +163,19 @@ public final class JacksonToolSchemaValidator implements ToolSchemaValidator {
                 throw failure(child(child(pointer, "enum"), String.valueOf(index)),
                         "enum 元素与 type 不一致");
             }
+        }
+    }
+
+    /** default 仅是展示提示，必须满足同一受控类型和 enum，不能改变调用时的必填校验。 */
+    private void validateDefault(JsonNode schema, String pointer, String type) {
+        JsonNode value = schema.get("default");
+        if (value == null) return;
+        if (!matchesType(type, value) || isNonFinite(value)) {
+            throw failure(child(pointer, "default"), "default 与 type 不一致");
+        }
+        JsonNode enumValues = schema.get("enum");
+        if (enumValues != null && !contains(enumValues, value)) {
+            throw failure(child(pointer, "default"), "default 不在 enum 中");
         }
     }
 
@@ -236,6 +257,15 @@ public final class JacksonToolSchemaValidator implements ToolSchemaValidator {
         JsonNode value = schema.get(field);
         if (value != null && (!value.isTextual() || value.textValue().isBlank())) {
             throw failure(child(pointer, field), field + " 必须是非空字符串");
+        }
+    }
+
+    /** MCP 工具声明可标注其唯一接受的 Draft-07 元 schema，不扩展可执行子集。 */
+    private void validateSchemaDeclaration(JsonNode schema, String pointer, boolean root) {
+        JsonNode declaration = schema.get("$schema");
+        if (declaration == null) return;
+        if (!root || !declaration.isTextual() || !MCP_DRAFT_SEVEN_SCHEMA.equals(declaration.textValue())) {
+            throw failure(child(pointer, "$schema"), "$schema 不受支持");
         }
     }
 

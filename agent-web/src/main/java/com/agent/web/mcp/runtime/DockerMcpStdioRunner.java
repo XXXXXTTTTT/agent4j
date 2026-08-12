@@ -459,7 +459,11 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
 
     private static String[] command(McpDockerLaunchSpec spec) {
         ArrayList<String> command = new ArrayList<>();
-        command.add(spec.materialContainerDirectory() + "/" + spec.command()); command.addAll(spec.arguments());
+        String entry = spec.materialContainerDirectory() + "/" + spec.command();
+        if (spec.command().endsWith(".js") || spec.command().endsWith(".mjs") || spec.command().endsWith(".cjs")) {
+            command.add("node");
+        }
+        command.add(entry); command.addAll(spec.arguments());
         return command.toArray(String[]::new);
     }
 

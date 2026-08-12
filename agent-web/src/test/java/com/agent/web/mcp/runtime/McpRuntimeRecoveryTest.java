@@ -62,6 +62,23 @@ class McpRuntimeRecoveryTest {
     }
 
     @Test
+    void doesNotAttachContainerWithSameInstallationButDifferentSnapshot() {
+        McpInstallationRepository repository = mock(McpInstallationRepository.class);
+        DockerMcpStdioRunner runner = mock(DockerMcpStdioRunner.class);
+        McpInstallationRuntime runtime = mock(McpInstallationRuntime.class);
+        McpInstallationAggregate running = aggregate(McpInstallationStatus.RUNNING,
+                UUID.fromString("2894522d-7b7c-4c91-a7f8-8213ded5c2a3"));
+        DockerMcpContainer staleSnapshot = new DockerMcpContainer("container-stale",
+                running.installation().installationId(), UUID.fromString("e8b9dfe7-1147-4dd1-93cb-e09e6e15d5c5"), true);
+        when(runner.findManagedContainers()).thenReturn(List.of(staleSnapshot));
+        when(repository.findRecoverableInstallations()).thenReturn(List.of(running));
+
+        new McpRuntimeRecovery(repository, runner, runtime).recover();
+
+        verify(runtime).recoverRunning(running, null);
+    }
+
+    @Test
     void normalApplicationCloseDoesNotRecordFailure() {
         McpInstallationRepository repository = mock(McpInstallationRepository.class);
         DockerMcpStdioRunner runner = mock(DockerMcpStdioRunner.class);

@@ -91,15 +91,15 @@ public final class DockerMcpMaterialPreparationRunner implements McpMaterialPrep
         try {
             containerId = docker.createContainerCmd(nodeImage)
                     .withCmd("npm", "install", "--prefix", CONTAINER_DIRECTORY, "--omit=dev", "--ignore-scripts",
-                            "--no-audit", "--no-fund", nodePackage.coordinate())
+                            "--no-audit", "--no-fund", "--no-bin-links", nodePackage.coordinate())
                     .withHostConfig(HostConfig.newHostConfig().withNetworkMode("bridge").withReadonlyRootfs(true)
                             .withPrivileged(false).withBinds(new Bind(staging.toString(), new Volume(CONTAINER_DIRECTORY), AccessMode.rw))
                             .withTmpFs(Map.of("/tmp", "rw,nosuid,exec,size=512m")))
                     .withEnv("npm_config_cache=/tmp/npm-cache")
                     .exec().getId();
             docker.startContainerCmd(containerId).exec();
-            Integer exitCode = docker.waitContainerCmd(containerId).start().awaitStatusCode();
-            if (exitCode == null || exitCode != 0) throw new IllegalStateException("MATERIAL_PREPARATION_FAILED");
+            waitForPreparation(containerId);
+            rejectSymbolicLinks(staging);
             String command = materialCommand(staging, nodePackage, snapshot.launchBin());
             Path finalDirectory = materialRoot.resolve(snapshot.snapshotId().toString());
             if (Files.exists(finalDirectory, LinkOption.NOFOLLOW_LINKS)) deleteDirectory(finalDirectory);
@@ -151,13 +151,20 @@ public final class DockerMcpMaterialPreparationRunner implements McpMaterialPrep
                 subprocess.run([str(temporary / 'bin' / 'python'), '-m', 'pip', 'install',
                                 '--disable-pip-version-check', '--no-input', sys.argv[1]], check=True)
                 shutil.copytree(temporary, destination, symlinks=False)
+                for entry in (destination / 'bin').iterdir():
+                    if not entry.is_file():
+                        continue
+                    try:
+                        content = entry.read_text(encoding='utf-8')
+                    except UnicodeDecodeError:
+                        continue
+                    rewritten = content.replace('/tmp/mcp-venv/', '/mcp-material/venv/')
+                    if rewritten != content:
+                        entry.write_text(rewritten, encoding='utf-8')
                 entry = destination / 'bin' / sys.argv[2]
                 content = entry.read_text(encoding='utf-8')
-                old_shebang = '#!/tmp/mcp-venv/bin/python\\n'
-                new_shebang = '#!/mcp-material/venv/bin/python\\n'
-                if not content.startswith(old_shebang):
+                if not content.startswith('#!/mcp-material/venv/bin/python\\n'):
                     raise RuntimeError('MATERIAL_PREPARATION_FAILED')
-                entry.write_text(new_shebang + content[len(old_shebang):], encoding='utf-8')
                 subprocess.run(['tar', '--format=posix', '-cf', '/mcp-staging/material.tar',
                                 '-C', '/tmp/mcp-material', '.'], check=True)
                 """;
