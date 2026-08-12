@@ -67,11 +67,14 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
         }
 
         String containerId = null;
+        PipedOutputStream stdin = null;
+        BoundedPipe stdout = null;
+        BoundedPipe stderr = null;
         try {
             PipedInputStream attachInput = new PipedInputStream();
-            PipedOutputStream stdin = new PipedOutputStream(attachInput);
-            BoundedPipe stdout = new BoundedPipe(spec.maxStdoutBufferedBytes());
-            BoundedPipe stderr = new BoundedPipe(spec.maxStderrBytes());
+            stdin = new PipedOutputStream(attachInput);
+            stdout = new BoundedPipe(spec.maxStdoutBufferedBytes());
+            stderr = new BoundedPipe(spec.maxStderrBytes());
             HostConfig hostConfig = hostConfig(spec, workspacePath);
             containerId = docker.createContainerCmd(spec.image())
                     .withCmd(command(spec)).withWorkingDir(spec.containerWorkingDirectory())
@@ -84,11 +87,14 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
             String id = containerId;
             AtomicReference<ResultCallback.Adapter<Frame>> callbackRef = new AtomicReference<>();
             AtomicReference<DockerMcpStdioProcess> processRef = new AtomicReference<>();
+            final PipedOutputStream stdinRef = stdin;
+            final BoundedPipe stdoutRef = stdout;
+            final BoundedPipe stderrRef = stderr;
             DockerMcpStdioProcess process = new DockerMcpStdioProcess(
                     stdout.input(), stdin, stderr.input(),
-                    () -> cleanup(id, callbackRef.get(), stdin, stdout, stderr),
+                    () -> { cleanup(id, callbackRef.get(), stdinRef, stdoutRef, stderrRef); processes.removeIf(value -> value == processRef.get()); },
                     (reason, cause) -> cleanupExecutor.execute(() -> {
-                        cleanup(id, callbackRef.get(), stdin, stdout, stderr);
+                        cleanup(id, callbackRef.get(), stdinRef, stdoutRef, stderrRef);
                         notifyFailure(failureListener, new McpRuntimeFailureListener.Event(
                                 spec.installationId(), spec.snapshotId(), id, reason, cause));
                         processes.remove(processRef.get());
@@ -105,6 +111,9 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
             if (containerId != null) {
                 cleanupSynchronously(containerId);
             }
+            close(stdin);
+            close(stdout);
+            close(stderr);
             throw asRuntime(exception);
         }
     }
@@ -200,7 +209,7 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
 
     private static void notifyFailure(McpRuntimeFailureListener listener, McpRuntimeFailureListener.Event event) {
         try { listener.onFailure(event); }
-        catch (RuntimeException exception) { LOGGER.warn("MCP 运行失败监听器执行失败: reason={}", event.reason(), exception); }
+        catch (RuntimeException exception) { LOGGER.warn("MCP 运行失败监听器执行失败: reason={}", event.reason()); }
     }
 
     private static void close(AutoCloseable closeable) {
@@ -238,7 +247,8 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
             @Override public int read(byte[] bytes, int off, int len) throws IOException {
                 if (len == 0) return 0;
                 try {
-                    while (current == null || offset == current.length) { current = chunks.take(); offset = 0; if (current == END) return -1; }
+                    synchronized (BoundedPipe.this) { if (closed) return -1; }
+                    while (current == null || offset == current.length) { synchronized (BoundedPipe.this) { if (closed) return -1; } current = chunks.take(); offset = 0; if (current == END) return -1; }
                     int count = Math.min(len, current.length - offset); System.arraycopy(current, offset, bytes, off, count); offset += count;
                     synchronized (BoundedPipe.this) { unread -= count; } return count;
                 } catch (InterruptedException exception) { Thread.currentThread().interrupt(); throw new IOException("读取 MCP 输出被中断", exception); }
