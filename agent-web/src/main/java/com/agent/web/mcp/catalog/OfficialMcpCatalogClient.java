@@ -177,7 +177,7 @@ public final class OfficialMcpCatalogClient {
     private static final class JdkHttpExchange implements HttpExchange {
         private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
         @Override public HttpResponse exchange(URI uri, Duration timeout, int maxBytes, String etag) {
-            try { var request = HttpRequest.newBuilder(uri).timeout(timeout).header("Accept", "application/vnd.github+json").header("User-Agent", "agent4j").build(); var response = client.send(request, HttpResponse.BodyHandlers.ofString()); if (response.body().getBytes(StandardCharsets.UTF_8).length > maxBytes) throw new IllegalStateException("response too large"); return new HttpResponse(response.statusCode(), response.body(), response.headers().firstValue("ETag").orElse(null)); } catch (Exception e) { throw new IllegalStateException(e); }
+            try { var request = HttpRequest.newBuilder(uri).timeout(timeout).header("Accept", "application/vnd.github+json").header("User-Agent", "agent4j").build(); var response = client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString()); if (response.body().getBytes(StandardCharsets.UTF_8).length > maxBytes) throw new IllegalStateException("response too large"); return new HttpResponse(response.statusCode(), response.body(), response.headers().firstValue("ETag").orElse(null)); } catch (Exception e) { throw new IllegalStateException(e); }
         }
     }
 }
