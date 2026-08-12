@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -36,6 +35,7 @@ public final class OfficialMcpCatalogClient {
     private final int maxBytes;
     private final Duration ttl;
     private volatile Snapshot snapshot;
+    private volatile String lastEtag;
 
     public OfficialMcpCatalogClient(HttpExchange exchange, ObjectMapper objectMapper, URI apiBase,
                                     Duration timeout, int maxBytes) {
@@ -65,7 +65,7 @@ public final class OfficialMcpCatalogClient {
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             Future<List<OfficialMcpServerRecord>> future = executor.submit((Callable<List<OfficialMcpServerRecord>>) this::load);
             List<OfficialMcpServerRecord> records = future.get();
-            snapshot = new Snapshot(records, System.nanoTime(), null, ttl.toNanos());
+            snapshot = new Snapshot(records, System.nanoTime(), lastEtag, ttl.toNanos());
             return records;
         } catch (Exception failure) {
             if (failure.getCause() instanceof NotModifiedException && cached != null) return cached.records;
@@ -76,14 +76,17 @@ public final class OfficialMcpCatalogClient {
 
     private List<OfficialMcpServerRecord> load() throws Exception {
         JsonNode root = objectMapper.readTree(read("/contents?ref=" + commitSha));
+        validateContents(root);
         JsonNode src = findDirectory(root, "src");
         JsonNode services = objectMapper.readTree(read("/contents/src?ref=" + commitSha));
+        validateContents(services);
         List<OfficialMcpServerRecord> result = new ArrayList<>();
         for (JsonNode service : services) {
             if (!"dir".equals(service.path("type").asText())) continue;
             String id = service.path("name").asText();
             String path = service.path("path").asText();
             JsonNode files = objectMapper.readTree(read("/contents/" + path + "?ref=" + commitSha));
+            validateContents(files);
             Map<String, String> blobs = new HashMap<>();
             for (JsonNode file : files) blobs.put(file.path("name").asText(), file.path("sha").asText());
             String metadataName = blobs.containsKey("package.json") ? "package.json" : "pyproject.toml";
@@ -99,9 +102,18 @@ public final class OfficialMcpCatalogClient {
 
     private String read(String path) {
         HttpResponse response = exchange.exchange(apiBase.resolve(path.startsWith("/") ? path.substring(1) : path), timeout, maxBytes, snapshot == null ? null : snapshot.etag);
+        lastEtag = response.etag();
         if (response.statusCode() == 304 && snapshot != null) throw new NotModifiedException();
         if (response.statusCode() >= 400) throw new IllegalStateException("GitHub HTTP " + response.statusCode());
         return response.body();
+    }
+
+    private void validateContents(JsonNode entries) {
+        if (!entries.isArray()) throw new IllegalArgumentException("invalid GitHub Contents response");
+        for (JsonNode entry : entries) {
+            var fields = entry.fieldNames();
+            while (fields.hasNext()) if (!CONTENT_FIELDS.contains(fields.next())) throw new IllegalArgumentException("unknown contents field");
+        }
     }
 
     private JsonNode findDirectory(JsonNode entries, String name) {
