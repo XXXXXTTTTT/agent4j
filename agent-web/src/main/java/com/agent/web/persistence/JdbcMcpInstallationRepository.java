@@ -5,6 +5,7 @@ import com.agent.web.mcp.installation.McpInstallationRecord;
 import com.agent.web.mcp.installation.McpInstallationRepository;
 import com.agent.web.mcp.installation.McpInstallationStatus;
 import com.agent.web.mcp.installation.McpInstallationCommand;
+import com.agent.web.mcp.installation.McpInstallationConflictException;
 import com.agent.web.mcp.installation.WorkspaceMountMode;
 import com.agent.web.mcp.installation.McpNetworkMode;
 import com.agent.core.intent.RequiredCapability;
@@ -150,9 +151,12 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
     }
 
     @Override
-    public boolean removeInstallation(UUID installationId, String actorUserId, UUID workspaceId, long expectedVersion,
-                                      com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+    public McpInstallationRecord removeInstallation(UUID installationId, String actorUserId, UUID workspaceId,
+                                                    long expectedVersion,
+                                                    com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
         return Objects.requireNonNull(transactions.execute(status -> {
+            McpInstallationRecord installation = findInstallation(installationId)
+                    .orElseThrow(() -> new McpInstallationConflictException(installationId, expectedVersion));
             int deleted = jdbc.sql("""
                 delete from agent_mcp_installations
                 where installation_id = :installationId
@@ -166,9 +170,9 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                 .param("workspaceId", workspaceId)
                 .param("expectedVersion", expectedVersion)
                 .update();
-            if (deleted != 1) return false;
+            if (deleted != 1) throw new McpInstallationConflictException(installationId, expectedVersion);
             insertAudit(auditEvent);
-            return true;
+            return installation;
         }), "MCP 删除聚合事务返回值不能为空");
     }
 
@@ -183,7 +187,7 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                     """).param("to", to.name()).param("runtimeError", runtimeError)
                     .param("containerId", containerId).param("id", installationId)
                     .param("expectedVersion", expectedVersion).param("from", from.name()).update();
-            if (updated != 1) throw new IllegalStateException("MCP 安装版本或状态冲突");
+            if (updated != 1) throw new McpInstallationConflictException(installationId, expectedVersion);
             return findInstallation(installationId).orElseThrow();
         }), "MCP 状态迁移事务返回值不能为空");
     }

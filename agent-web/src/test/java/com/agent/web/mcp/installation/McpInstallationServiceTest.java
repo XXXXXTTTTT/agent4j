@@ -155,7 +155,7 @@ class McpInstallationServiceTest {
 
         @Override public McpInstallationRecord confirmInstallation(McpInstallationCommand command) { savedSnapshots.add(command.snapshot()); savedInstallations.add(command.installation()); auditEvents.add(command.auditEvent()); return command.installation(); }
         @Override public List<McpInstallationRecord> findInstallations(String actorUserId, UUID workspaceId) { return List.copyOf(savedInstallations); }
-        @Override public boolean removeInstallation(UUID installationId, String actorUserId, UUID workspaceId, long expectedVersion, CapabilityManagementAuditEvent auditEvent) { return savedInstallations.removeIf(value -> value.installationId().equals(installationId) && value.version() == expectedVersion); }
+        @Override public McpInstallationRecord removeInstallation(UUID installationId, String actorUserId, UUID workspaceId, long expectedVersion, CapabilityManagementAuditEvent auditEvent) { return savedInstallations.stream().filter(value -> value.installationId().equals(installationId) && value.version() == expectedVersion).findFirst().orElseThrow(); }
         @Override public McpInstallationRecord transition(UUID installationId, long expectedVersion, McpInstallationStatus from, McpInstallationStatus to, String runtimeError, String containerId) { throw new UnsupportedOperationException(); }
         @Override public Optional<WorkspaceRecord> findWorkspace(UUID workspaceId, String userId) { return Optional.ofNullable(workspaces.get(workspaceId)); }
         @Override public List<WorkspaceRecord> findWorkspaces(String userId) { return List.of(); }

@@ -112,12 +112,9 @@ public final class McpInstallationService {
                 .filter(value -> value.installationId().equals(installationId))
                 .findFirst()
                 .orElseThrow(() -> new InstallationNotFoundException(installationId));
-        if (!repository.removeInstallation(installationId, actor.userId(), workspaceId, installation.version(),
+        return repository.removeInstallation(installationId, actor.userId(), workspaceId, installation.version(),
                 new CapabilityManagementAuditEvent("MCP_INSTALLATION_REMOVED", actor.userId(), workspaceId,
-                        installationId, null, null, "", "SUCCESS", clock.instant()))) {
-            throw new InstallationNotFoundException(installationId);
-        }
-        return installation;
+                        installationId, null, null, "", "SUCCESS", clock.instant()));
     }
 
     private ScopeTarget resolveTarget(

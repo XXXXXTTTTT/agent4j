@@ -7,8 +7,9 @@ import java.util.UUID;
 public interface McpInstallationRepository {
     McpInstallationRecord confirmInstallation(McpInstallationCommand command);
     List<McpInstallationRecord> findInstallations(String actorUserId, UUID workspaceId);
-    boolean removeInstallation(UUID installationId, String actorUserId, UUID workspaceId, long expectedVersion,
-                               com.agent.web.capability.CapabilityManagementAuditEvent auditEvent);
+    McpInstallationRecord removeInstallation(UUID installationId, String actorUserId, UUID workspaceId,
+                                             long expectedVersion,
+                                             com.agent.web.capability.CapabilityManagementAuditEvent auditEvent);
 
     McpInstallationRecord transition(
             UUID installationId, long expectedVersion, McpInstallationStatus from,

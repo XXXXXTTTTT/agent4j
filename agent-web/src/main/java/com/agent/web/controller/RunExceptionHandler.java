@@ -10,6 +10,7 @@ import com.agent.web.conversation.ConversationService;
 import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspaceImportService;
 import com.agent.web.mcp.installation.McpInstallationService;
+import com.agent.web.mcp.installation.McpInstallationConflictException;
 import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.skill.SkillInstallationConflictException;
 import com.agent.web.audit.AuditTextRedactor;
@@ -150,7 +151,7 @@ public final class RunExceptionHandler {
     }
 
     /** 映射 Skill 安装的乐观锁与生命周期冲突。 */
-    @ExceptionHandler(SkillInstallationConflictException.class)
+    @ExceptionHandler({SkillInstallationConflictException.class, McpInstallationConflictException.class})
     public ResponseEntity<ProblemDetail> skillInstallationConflict(
             SkillInstallationConflictException exception,
             ServerWebExchange exchange) {
