@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -73,6 +74,41 @@ public final class ModelConfigurationController {
         return ResponseEntity.noContent().build();
     }
 
+    @PutMapping("/providers/{providerId}")
+    public ModelProviderRecord updateProvider(
+            @PathVariable UUID providerId,
+            @Valid @RequestBody UpdateProviderRequest request) {
+        return service().updateProvider(providerId, request.displayName(), request.baseUrl(),
+                request.chatCompletionsPath(), request.apiKey());
+    }
+
+    @PutMapping("/endpoints/{endpointId}")
+    public ModelEndpointRecord updateEndpoint(
+            @PathVariable UUID endpointId,
+            @Valid @RequestBody UpdateEndpointRequest request) {
+        return service().updateEndpoint(endpointId, request.displayName(), request.modelId(),
+                request.capabilities(), request.priority(), request.weight(), request.enabled());
+    }
+
+    @PutMapping("/groups/{groupId}")
+    public ModelGroupRecord updateGroup(
+            @PathVariable UUID groupId,
+            @Valid @RequestBody UpdateGroupRequest request) {
+        return service().updateGroup(groupId, request.displayName(), request.taskType(), request.endpointIds());
+    }
+
+    @DeleteMapping("/endpoints/{endpointId}")
+    public ResponseEntity<Void> deleteEndpoint(@PathVariable UUID endpointId) {
+        service().deleteEndpoint(endpointId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/groups/{groupId}")
+    public ResponseEntity<Void> deleteGroup(@PathVariable UUID groupId) {
+        service().deleteGroup(groupId);
+        return ResponseEntity.noContent().build();
+    }
+
     private ModelConfigurationService service() {
         ModelConfigurationService resolved = service.getIfAvailable();
         if (resolved == null) throw new IllegalStateException("模型配置服务未启用");
@@ -90,13 +126,35 @@ public final class ModelConfigurationController {
             @NotNull UUID providerId,
             @NotBlank String displayName,
             @NotBlank String modelId,
-            @NotEmpty Set<InferenceCapability> capabilities,
+            @NotEmpty Set<@NotNull InferenceCapability> capabilities,
             @PositiveOrZero int priority,
             @Positive int weight,
             boolean enabled) {
     }
 
     public record CreateGroupRequest(
+            @NotBlank String displayName,
+            @NotNull TaskType taskType,
+            @NotEmpty List<UUID> endpointIds) {
+    }
+
+    public record UpdateProviderRequest(
+            @NotBlank String displayName,
+            @NotBlank String baseUrl,
+            @NotBlank String chatCompletionsPath,
+            String apiKey) {
+    }
+
+    public record UpdateEndpointRequest(
+            @NotBlank String displayName,
+            @NotBlank String modelId,
+            @NotEmpty Set<@NotNull InferenceCapability> capabilities,
+            @PositiveOrZero int priority,
+            @Positive int weight,
+            boolean enabled) {
+    }
+
+    public record UpdateGroupRequest(
             @NotBlank String displayName,
             @NotNull TaskType taskType,
             @NotEmpty List<UUID> endpointIds) {

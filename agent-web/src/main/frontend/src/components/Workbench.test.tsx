@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { Actor, Conversation, ConversationTurn, RunView, TraceEvent, Workspace } from '../api/contracts'
+import type { Actor, Conversation, ConversationTurn, ModelConfigurationSnapshot, RunView, TraceEvent, Workspace } from '../api/contracts'
 import type { UseConversationWorkspaceResult } from '../hooks/useConversationWorkspace'
 import type { UseRunWorkbenchResult } from '../hooks/useRunWorkbench'
 import { Workbench } from './Workbench'
@@ -59,6 +59,7 @@ function controller(
 function conversationController(
   overrides: Partial<UseConversationWorkspaceResult> = {},
 ): UseConversationWorkspaceResult {
+  const modelConfiguration: ModelConfigurationSnapshot = { providers: [], endpoints: [], groups: [] }
   return {
     identity: { userId: 'user-1', displayName: 'Alice' } satisfies Actor,
     workspaces: [{
@@ -70,8 +71,11 @@ function conversationController(
     conversations: [{ conversationId: 'conv-1', workspaceId: 'ws-1', createdBy: 'user-1', title: '模型咨询', status: 'ACTIVE', createdAt: '2026-08-07T01:00:00Z', updatedAt: '2026-08-07T01:00:00Z' } satisfies Conversation],
     activeConversation: { conversationId: 'conv-1', workspaceId: 'ws-1', createdBy: 'user-1', title: '模型咨询', status: 'ACTIVE', createdAt: '2026-08-07T01:00:00Z', updatedAt: '2026-08-07T01:00:00Z' } satisfies Conversation,
     turns: [{ turnId: 'turn-1', conversationId: 'conv-1', turnIndex: 0, userContent: '你是什么模型', assistantContent: '我是 AI。', runId: 'run-1', status: 'COMPLETED', error: null, createdAt: '2026-08-07T01:00:00Z', completedAt: '2026-08-07T01:00:05Z' } satisfies ConversationTurn],
-    searchQuery: '', loading: false, submitting: false, error: null,
+    searchQuery: '', includeArchived: false, loading: false, submitting: false, error: null, modelConfiguration,
     selectWorkspace: vi.fn(async () => undefined), selectConversation: vi.fn(async () => undefined), search: vi.fn(async () => undefined), createWorkspace: vi.fn(async () => undefined), browseWorkspaceDirectories: vi.fn(async (path: string) => ({ currentPath: path, parentPath: null, entries: [] })), importWorkspace: vi.fn(async () => undefined), createConversation: vi.fn(async () => undefined), submit: vi.fn(async (): Promise<ConversationTurn> => ({ turnId: 'turn-2', conversationId: 'conv-1', turnIndex: 1, userContent: '继续', assistantContent: null, runId: 'run-2', status: 'PENDING', error: null, createdAt: '2026-08-07T01:00:06Z', completedAt: null })), archive: vi.fn(async () => undefined), reload: vi.fn(async () => undefined),
+    toggleArchived: vi.fn(async () => undefined), deleteConversation: vi.fn(async () => undefined), reloadModelConfiguration: vi.fn(async () => undefined),
+    updateModelProvider: vi.fn(async () => modelConfiguration), updateModelEndpoint: vi.fn(async () => modelConfiguration), updateModelGroup: vi.fn(async () => modelConfiguration),
+    deleteModelProvider: vi.fn(async () => modelConfiguration), deleteModelEndpoint: vi.fn(async () => modelConfiguration), deleteModelGroup: vi.fn(async () => modelConfiguration),
     ...overrides,
   }
 }

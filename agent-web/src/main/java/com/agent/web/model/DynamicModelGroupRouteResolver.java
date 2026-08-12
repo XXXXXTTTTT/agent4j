@@ -150,18 +150,17 @@ public final class DynamicModelGroupRouteResolver implements ModelGroupRouteReso
 
     private com.agent.core.llm.LlmClient clientFor(ModelProviderRuntime runtime) {
         CacheKey key = new CacheKey(runtime.providerId(), runtime.ownerUserId());
-        int fingerprint = Objects.hash(
-                runtime.baseUrl(), runtime.chatCompletionsPath(), runtime.apiKey());
+        ClientConfiguration configuration = ClientConfiguration.from(runtime);
         CachedClient cached = clients.get(key);
-        if (cached != null && cached.fingerprint() == fingerprint) {
+        if (cached != null && cached.configuration().equals(configuration)) {
             return cached.client();
-        }
-        if (cached != null) {
-            cached.client().close();
         }
         com.agent.core.llm.LlmClient client = Objects.requireNonNull(
                 clientFactory.apply(runtime), "clientFactory 返回的 LlmClient 不能为空");
-        clients.put(key, new CachedClient(fingerprint, client));
+        clients.put(key, new CachedClient(configuration, client));
+        if (cached != null && cached.client() != client) {
+            cached.client().close();
+        }
         return client;
     }
 
@@ -189,6 +188,20 @@ public final class DynamicModelGroupRouteResolver implements ModelGroupRouteReso
     private record EndpointKey(String userId, UUID endpointId) {
     }
 
-    private record CachedClient(int fingerprint, com.agent.core.llm.LlmClient client) {
+    /** 用完整运行时配置判定客户端是否可复用，避免哈希碰撞复用过期密钥。 */
+    private record ClientConfiguration(
+            String baseUrl,
+            String chatCompletionsPath,
+            String apiKey) {
+
+        private static ClientConfiguration from(ModelProviderRuntime runtime) {
+            return new ClientConfiguration(
+                    runtime.baseUrl(), runtime.chatCompletionsPath(), runtime.apiKey());
+        }
+    }
+
+    private record CachedClient(
+            ClientConfiguration configuration,
+            com.agent.core.llm.LlmClient client) {
     }
 }

@@ -23,13 +23,23 @@ public interface ModelConfigurationRepository {
                                                String apiKey, Instant now) {
         return createProvider(providerId, actor, displayName, baseUrl, apiKey, now);
     }
+    ModelProviderRecord updateProvider(UUID providerId, Actor actor, String displayName,
+                                       String baseUrl, String chatCompletionsPath,
+                                       String apiKey, Instant now);
     ModelEndpointRecord createEndpoint(UUID endpointId, Actor actor, UUID providerId,
                                        String displayName, String modelId,
                                        Set<InferenceCapability> capabilities,
                                        int priority, int weight, boolean enabled, Instant now);
+    ModelEndpointRecord updateEndpoint(UUID endpointId, Actor actor, String displayName, String modelId,
+                                       Set<InferenceCapability> capabilities, int priority, int weight,
+                                       boolean enabled, Instant now);
     ModelGroupRecord createGroup(UUID groupId, Actor actor, String displayName,
                                  TaskType taskType, List<UUID> endpointIds, Instant now);
+    ModelGroupRecord updateGroup(UUID groupId, Actor actor, String displayName,
+                                 TaskType taskType, List<UUID> endpointIds, Instant now);
     void deleteProvider(UUID providerId, String userId);
+    void deleteEndpoint(UUID endpointId, String userId);
+    void deleteGroup(UUID groupId, String userId);
     Optional<String> apiKey(UUID providerId, String userId);
 
     /** 读取当前用户的 Provider 私密运行时配置。 */

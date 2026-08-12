@@ -145,6 +145,13 @@ async function requestJson(url: string, init: RequestInit, fetcher: typeof fetch
   }
 }
 
+async function requestWithoutBody(url: string, init: RequestInit, fetcher: typeof fetch): Promise<void> {
+  const response = await fetcher(url, init)
+  if (response.ok) return
+  const text = await response.text()
+  throw new ConversationApiError(problemDetailMessage(text, response.status), response.status, text)
+}
+
 function problemDetailMessage(text: string, status: number): string {
   try {
     const problem = objectAt(JSON.parse(text) as unknown, 'problemDetail')
@@ -252,6 +259,79 @@ export interface CreateModelEndpointCommand { providerId: string; displayName: s
 export async function createModelEndpoint(command: CreateModelEndpointCommand, fetcher: typeof fetch = globalThis.fetch): Promise<ModelConfigurationSnapshot> {
   await requestJson('/api/model-config/endpoints', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command) }, fetcher)
   return listModelConfiguration(fetcher)
+}
+
+export interface UpdateModelProviderCommand { displayName: string; baseUrl: string; chatCompletionsPath: string; apiKey?: string }
+export interface UpdateModelEndpointCommand { displayName: string; modelId: string; capabilities: string[]; priority: number; weight: number; enabled: boolean }
+export interface UpdateModelGroupCommand { displayName: string; taskType: string; endpointIds: string[] }
+
+function modelConfigurationId(value: string, name: string): string {
+  return nonBlankStringAt(value, name)
+}
+
+function updateModelProviderBody(command: UpdateModelProviderCommand): Record<string, string> {
+  const body: Record<string, string> = {
+    displayName: nonBlankStringAt(command.displayName, 'displayName'),
+    baseUrl: nonBlankStringAt(command.baseUrl, 'baseUrl'),
+    chatCompletionsPath: nonBlankStringAt(command.chatCompletionsPath, 'chatCompletionsPath'),
+  }
+  if (command.apiKey !== undefined && typeof command.apiKey !== 'string') throw new TypeError('apiKey 必须是字符串')
+  if (command.apiKey !== undefined && command.apiKey.trim().length > 0) body.apiKey = command.apiKey.trim()
+  return body
+}
+
+function updateModelEndpointBody(command: UpdateModelEndpointCommand): UpdateModelEndpointCommand {
+  if (!Array.isArray(command.capabilities) || command.capabilities.length === 0 || command.capabilities.some((entry) => !MODEL_CAPABILITIES.has(entry))) throw new TypeError('capabilities 非法')
+  if (typeof command.weight !== 'number' || !Number.isInteger(command.weight) || command.weight <= 0) throw new TypeError('weight 必须是正整数')
+  if (typeof command.enabled !== 'boolean') throw new TypeError('enabled 必须是布尔值')
+  return {
+    displayName: nonBlankStringAt(command.displayName, 'displayName'), modelId: nonBlankStringAt(command.modelId, 'modelId'),
+    capabilities: command.capabilities, priority: nonNegativeIntegerAt(command.priority, 'priority'), weight: command.weight, enabled: command.enabled,
+  }
+}
+
+function updateModelGroupBody(command: UpdateModelGroupCommand): UpdateModelGroupCommand {
+  if (!Array.isArray(command.endpointIds) || command.endpointIds.length === 0) throw new TypeError('endpointIds 必须至少包含一个 ID')
+  return {
+    displayName: nonBlankStringAt(command.displayName, 'displayName'), taskType: enumAt(command.taskType, MODEL_TASK_TYPES, 'taskType'),
+    endpointIds: command.endpointIds.map((endpointId, index) => nonBlankStringAt(endpointId, `endpointIds[${index}]`)),
+  }
+}
+
+export async function updateModelProvider(id: string, command: UpdateModelProviderCommand, fetcher: typeof fetch = globalThis.fetch): Promise<ModelConfigurationSnapshot> {
+  const exactId = modelConfigurationId(id, 'providerId')
+  await requestJson(`/api/model-config/providers/${encodeURIComponent(exactId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updateModelProviderBody(command)) }, fetcher)
+  return listModelConfiguration(fetcher)
+}
+
+export async function updateModelEndpoint(id: string, command: UpdateModelEndpointCommand, fetcher: typeof fetch = globalThis.fetch): Promise<ModelConfigurationSnapshot> {
+  const exactId = modelConfigurationId(id, 'endpointId')
+  await requestJson(`/api/model-config/endpoints/${encodeURIComponent(exactId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updateModelEndpointBody(command)) }, fetcher)
+  return listModelConfiguration(fetcher)
+}
+
+export async function updateModelGroup(id: string, command: UpdateModelGroupCommand, fetcher: typeof fetch = globalThis.fetch): Promise<ModelConfigurationSnapshot> {
+  const exactId = modelConfigurationId(id, 'groupId')
+  await requestJson(`/api/model-config/groups/${encodeURIComponent(exactId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updateModelGroupBody(command)) }, fetcher)
+  return listModelConfiguration(fetcher)
+}
+
+async function deleteModelConfiguration(path: 'providers' | 'endpoints' | 'groups', id: string, name: string, fetcher: typeof fetch): Promise<ModelConfigurationSnapshot> {
+  const exactId = modelConfigurationId(id, name)
+  await requestWithoutBody(`/api/model-config/${path}/${encodeURIComponent(exactId)}`, { method: 'DELETE' }, fetcher)
+  return listModelConfiguration(fetcher)
+}
+
+export function deleteModelProvider(id: string, fetcher: typeof fetch = globalThis.fetch): Promise<ModelConfigurationSnapshot> {
+  return deleteModelConfiguration('providers', id, 'providerId', fetcher)
+}
+
+export function deleteModelEndpoint(id: string, fetcher: typeof fetch = globalThis.fetch): Promise<ModelConfigurationSnapshot> {
+  return deleteModelConfiguration('endpoints', id, 'endpointId', fetcher)
+}
+
+export function deleteModelGroup(id: string, fetcher: typeof fetch = globalThis.fetch): Promise<ModelConfigurationSnapshot> {
+  return deleteModelConfiguration('groups', id, 'groupId', fetcher)
 }
 
 export async function searchConversations(workspaceId: string, query: string, includeArchivedOrFetcher: boolean | typeof fetch = false, fetcher: typeof fetch = globalThis.fetch): Promise<Conversation[]> {

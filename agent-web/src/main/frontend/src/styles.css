@@ -130,6 +130,20 @@ code, pre { font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
 .workspace-dialog { background: #fff; border: 1px solid #cbd7cf; border-radius: 8px; box-shadow: 0 22px 70px rgba(26, 41, 33, .24); max-width: 520px; padding: 20px; width: 100%; }
 .dialog-backdrop { align-items: center; background: rgba(25, 35, 29, .36); display: flex; inset: 0; justify-content: center; overflow: auto; padding: 18px; position: fixed; z-index: 25; }
 .model-settings-dialog { display: grid; gap: 14px; max-height: calc(100vh - 36px); overflow: auto; }
+.model-settings-section { border-top: 1px solid #e3e8e4; display: grid; gap: 8px; padding-top: 12px; }
+.model-settings-section h3, .model-settings-section h4 { margin: 0; }
+.model-settings-section h4 { color: #59635e; font-size: 11px; }
+.model-resource-row { align-items: flex-start; border: 1px solid #dce5df; border-radius: 6px; display: flex; gap: 10px; justify-content: space-between; padding: 9px; }
+.model-resource-row > div:first-child { display: grid; gap: 3px; min-width: 0; }
+.model-resource-row span { color: #68726d; font-size: 10px; overflow-wrap: anywhere; }
+.model-resource-row button { align-items: center; display: inline-flex; gap: 4px; margin-left: 4px; padding: 6px; }
+.model-settings-section form { display: grid; gap: 7px; }
+.model-settings-section input, .model-settings-section select { min-width: 0; }
+.model-settings-section fieldset { border: 1px solid #dce5df; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 8px; }
+.model-settings-section fieldset label { align-items: center; color: #59635e; display: inline-flex; font-size: 10px; gap: 4px; }
+.model-settings-section label { color: #59635e; font-size: 10px; }
+.model-settings-section label > input[type="number"] { display: block; margin-top: 3px; }
+.model-settings-section button:disabled { cursor: wait; opacity: .55; }
 .model-settings-dialog > header { align-items: center; display: flex; justify-content: space-between; }
 .model-settings-dialog > header > div { align-items: center; display: flex; gap: 7px; }
 .model-settings-dialog h2, .model-settings-dialog h3 { color: #26342c; margin: 0; }

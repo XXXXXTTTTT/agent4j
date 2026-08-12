@@ -2,11 +2,7 @@ package com.agent.core.skill;
 
 import com.agent.core.tool.ToolDefinition;
 import com.agent.core.tool.ToolRegistry;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -164,39 +160,11 @@ public final class SkillCatalog {
             for (SkillToolMetadata tool : skill.tools()) {
                 section.append("- ").append(tool.name()).append(": ")
                         .append(tool.description()).append("\n")
-                        .append("  inputSchema: ").append(canonicalJson(tool.inputSchema())).append('\n');
+                        .append("  inputSchema: ").append(SkillPromptJson.canonicalJson(objectMapper, tool.inputSchema())).append('\n');
             }
             section.append("knowledge:\n").append(skill.promptFragment()).append('\n');
         }
         return section.toString();
-    }
-
-    private String canonicalJson(JsonNode node) {
-        try {
-            return objectMapper.writeValueAsString(canonicalize(node));
-        } catch (Exception exception) {
-            throw new IllegalStateException("Skill 工具 Schema 渲染失败", exception);
-        }
-    }
-
-    private JsonNode canonicalize(JsonNode node) {
-        if (node.isObject()) {
-            java.util.Map<String, JsonNode> values = new java.util.TreeMap<>();
-            var fields = node.fields();
-            while (fields.hasNext()) {
-                var field = fields.next();
-                values.put(field.getKey(), canonicalize(field.getValue()));
-            }
-            ObjectNode result = JsonNodeFactory.instance.objectNode();
-            values.forEach(result::set);
-            return result;
-        }
-        if (node.isArray()) {
-            ArrayNode result = JsonNodeFactory.instance.arrayNode();
-            node.elements().forEachRemaining(value -> result.add(canonicalize(value)));
-            return result;
-        }
-        return node.deepCopy();
     }
 
     private String fingerprint(String value) {

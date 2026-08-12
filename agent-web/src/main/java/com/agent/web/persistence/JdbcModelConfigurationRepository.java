@@ -130,6 +130,30 @@ public final class JdbcModelConfigurationRepository implements ModelConfiguratio
     }
 
     @Override
+    public ModelProviderRecord updateProvider(UUID providerId, Actor actor, String displayName,
+                                              String baseUrl, String chatCompletionsPath,
+                                              String apiKey, Instant now) {
+        return Objects.requireNonNull(transactions.execute(status -> {
+            requireOwnedProvider(providerId, actor.userId());
+            jdbc.sql("""
+                    update agent_model_providers
+                    set display_name = :displayName,
+                        base_url = :baseUrl,
+                        chat_completions_path = :chatCompletionsPath,
+                        api_key = coalesce(:apiKey, api_key),
+                        updated_at = :updatedAt
+                    where provider_id = :providerId and owner_user_id = :ownerUserId
+                    """).param("providerId", providerId).param("ownerUserId", actor.userId())
+                    .param("displayName", displayName).param("baseUrl", baseUrl)
+                    .param("chatCompletionsPath", chatCompletionsPath).param("apiKey", apiKey)
+                    .param("updatedAt", timestamp(now)).update();
+            return findProviders(actor.userId()).stream()
+                    .filter(value -> value.providerId().equals(providerId))
+                    .findFirst().orElseThrow();
+        }), "Provider 更新事务返回值不能为空");
+    }
+
+    @Override
     public ModelEndpointRecord createEndpoint(UUID endpointId, Actor actor, UUID providerId,
                                               String displayName, String modelId,
                                               Set<InferenceCapability> capabilities, int priority,
@@ -148,6 +172,25 @@ public final class JdbcModelConfigurationRepository implements ModelConfiguratio
                 .param("createdAt", timestamp(now)).param("updatedAt", timestamp(now)).update();
         return findEndpoints(actor.userId()).stream().filter(value -> value.endpointId().equals(endpointId))
                 .findFirst().orElseThrow();
+    }
+
+    @Override
+    public ModelEndpointRecord updateEndpoint(UUID endpointId, Actor actor, String displayName, String modelId,
+                                              Set<InferenceCapability> capabilities, int priority, int weight,
+                                              boolean enabled, Instant now) {
+        return Objects.requireNonNull(transactions.execute(status -> {
+            requireOwnedEndpoint(endpointId, actor.userId());
+            jdbc.sql("""
+                    update agent_model_endpoints
+                    set display_name = :displayName, model_id = :modelId, capabilities = :capabilities,
+                        priority = :priority, weight = :weight, enabled = :enabled, updated_at = :updatedAt
+                    where endpoint_id = :endpointId
+                    """).param("endpointId", endpointId).param("displayName", displayName)
+                    .param("modelId", modelId).param("capabilities", capabilities.stream().map(Enum::name).toArray(String[]::new))
+                    .param("priority", priority).param("weight", weight).param("enabled", enabled)
+                    .param("updatedAt", timestamp(now)).update();
+            return findEndpoints(actor.userId()).stream().filter(value -> value.endpointId().equals(endpointId)).findFirst().orElseThrow();
+        }), "Endpoint 更新事务返回值不能为空");
     }
 
     @Override
@@ -175,16 +218,62 @@ public final class JdbcModelConfigurationRepository implements ModelConfiguratio
     }
 
     @Override
+    public ModelGroupRecord updateGroup(UUID groupId, Actor actor, String displayName, TaskType taskType,
+                                        List<UUID> endpointIds, Instant now) {
+        return Objects.requireNonNull(transactions.execute(status -> {
+            requireOwnedGroup(groupId, actor.userId());
+            for (UUID endpointId : endpointIds) requireOwnedEndpoint(endpointId, actor.userId());
+            jdbc.sql("update agent_model_groups set display_name = :displayName, task_type = :taskType, updated_at = :updatedAt where group_id = :groupId and owner_user_id = :userId")
+                    .param("groupId", groupId).param("userId", actor.userId()).param("displayName", displayName)
+                    .param("taskType", taskType.name()).param("updatedAt", timestamp(now)).update();
+            jdbc.sql("delete from agent_model_group_endpoints where group_id = :groupId").param("groupId", groupId).update();
+            for (int i = 0; i < endpointIds.size(); i++) {
+                jdbc.sql("insert into agent_model_group_endpoints (group_id, endpoint_id, position) values (:groupId, :endpointId, :position)")
+                        .param("groupId", groupId).param("endpointId", endpointIds.get(i)).param("position", i).update();
+            }
+            return findGroups(actor.userId()).stream().filter(value -> value.groupId().equals(groupId)).findFirst().orElseThrow();
+        }), "模型组更新事务返回值不能为空");
+    }
+
+    @Override
     public void deleteProvider(UUID providerId, String userId) {
-        requireOwnedProvider(providerId, userId);
-        Long references = jdbc.sql("""
-                select count(*) from agent_model_endpoints endpoint
-                join agent_model_group_endpoints membership on membership.endpoint_id = endpoint.endpoint_id
-                where endpoint.provider_id = :providerId
-                """).param("providerId", providerId).query(Long.class).single();
-        if (references != 0) throw new ModelConfigurationConflictException("Provider 仍被模型组引用: " + providerId);
-        jdbc.sql("delete from agent_model_providers where provider_id = :providerId")
-                .param("providerId", providerId).update();
+        transactions.executeWithoutResult(status -> {
+            requireOwnedProvider(providerId, userId);
+            jdbc.sql("select provider_id from agent_model_providers where provider_id = :providerId for update")
+                    .param("providerId", providerId).query(UUID.class).single();
+            Long references = jdbc.sql("""
+                    select count(*) from agent_model_endpoints
+                    where provider_id = :providerId
+                    """).param("providerId", providerId).query(Long.class).single();
+            if (references != 0) {
+                throw new ModelConfigurationConflictException("Provider 仍有 Endpoint，请先删除 Endpoint: " + providerId);
+            }
+            jdbc.sql("delete from agent_model_providers where provider_id = :providerId and owner_user_id = :userId")
+                    .param("providerId", providerId).param("userId", userId).update();
+        });
+    }
+
+    @Override
+    public void deleteEndpoint(UUID endpointId, String userId) {
+        transactions.executeWithoutResult(status -> {
+            requireOwnedEndpoint(endpointId, userId);
+            jdbc.sql("select endpoint_id from agent_model_endpoints where endpoint_id = :endpointId for update")
+                    .param("endpointId", endpointId).query(UUID.class).single();
+            long references = jdbc.sql("select count(*) from agent_model_group_endpoints where endpoint_id = :endpointId")
+                    .param("endpointId", endpointId).query(Long.class).single();
+            if (references != 0) throw new ModelConfigurationConflictException("Endpoint 仍被模型组引用，请先从 Group 移除: " + endpointId);
+            jdbc.sql("delete from agent_model_endpoints where endpoint_id = :endpointId and provider_id in (select provider_id from agent_model_providers where owner_user_id = :userId)")
+                    .param("endpointId", endpointId).param("userId", userId).update();
+        });
+    }
+
+    @Override
+    public void deleteGroup(UUID groupId, String userId) {
+        transactions.executeWithoutResult(status -> {
+            requireOwnedGroup(groupId, userId);
+            jdbc.sql("delete from agent_model_groups where group_id = :groupId and owner_user_id = :userId")
+                    .param("groupId", groupId).param("userId", userId).update();
+        });
     }
 
     @Override
@@ -223,6 +312,13 @@ public final class JdbcModelConfigurationRepository implements ModelConfiguratio
                 where endpoint.endpoint_id = :endpointId and provider.owner_user_id = :userId
                 """).param("endpointId", endpointId).param("userId", userId).query(Long.class).single() == 0) {
             throw new ModelConfigurationNotFoundException(endpointId);
+        }
+    }
+
+    private void requireOwnedGroup(UUID groupId, String userId) {
+        if (jdbc.sql("select count(*) from agent_model_groups where group_id = :groupId and owner_user_id = :userId")
+                .param("groupId", groupId).param("userId", userId).query(Long.class).single() == 0) {
+            throw new ModelConfigurationNotFoundException(groupId);
         }
     }
 

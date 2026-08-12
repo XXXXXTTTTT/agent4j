@@ -3,6 +3,7 @@ package com.agent.core.nodes;
 import com.agent.core.engine.AgentState;
 import com.agent.core.llm.ChatMessage;
 import com.agent.core.llm.LlmClient;
+import com.agent.core.llm.ModelRequest;
 import com.agent.core.llm.RoutedCompletion;
 import com.agent.core.skill.SkillCatalog;
 import com.agent.core.skill.SkillDefinition;
@@ -16,10 +17,101 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ToolAgentNodeTest {
+
+    @Test
+    void doesNotForceStrictToolSchemasForGatewayRequests() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        AtomicReference<ModelRequest> captured = new AtomicReference<>();
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            registry.register(new ToolDefinition(
+                    "artifact.create",
+                    "生成工件",
+                    mapper.readTree("{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\"}},\"required\":[\"prompt\"],\"additionalProperties\":false}"),
+                    Set.of(com.agent.core.intent.RequiredCapability.TOOL),
+                    ToolRiskLevel.LOW,
+                    Duration.ofSeconds(2),
+                    (call, context) -> mapper.createObjectNode().put("ok", true)));
+            ToolAgentNode node = new ToolAgentNode(request -> {
+                captured.set(request);
+                return completion(ChatMessage.assistant("已完成"), "tool-model");
+            }, registry, mapper, null, 1);
+
+            node.execute(AgentState.empty().withVariable(PlannerNode.TASK_KEY, "生成工件"));
+
+            assertThat(captured.get().tools()).singleElement()
+                    .extracting(tool -> tool.function().strict())
+                    .isNull();
+        }
+    }
+
+    @Test
+    void normalizesToolNamesForGatewayAndKeepsCollisionsUnique() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        AtomicReference<ModelRequest> captured = new AtomicReference<>();
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            for (String name : List.of("artifact.create", "artifact_create", "code.apply-diff")) {
+                registry.register(new ToolDefinition(name, "- artifact.create:",
+                        mapper.readTree("{\"type\":\"object\",\"description\":\"- artifact.create:\"}"),
+                        Set.of(com.agent.core.intent.RequiredCapability.TOOL), ToolRiskLevel.LOW,
+                        Duration.ofSeconds(2), (call, context) -> mapper.createObjectNode().put("ok", true)));
+            }
+            SkillCatalog skills = new SkillCatalog(List.of(new SkillDefinition(
+                    "artifact-skill", "1.0.0", "工件 Skill", List.of("调用工具"),
+                    List.of("artifact.create", "artifact_create", "code.apply-diff"),
+                    "- artifact.create: 保留知识\ntools:\n- artifact.create: knowledge 哨兵")), registry, mapper);
+            ToolAgentNode node = new ToolAgentNode(request -> {
+                captured.set(request);
+                return completion(ChatMessage.assistant("已完成"), "tool-model");
+            }, registry, mapper, skills, 1);
+
+            node.execute(AgentState.empty().withVariable(PlannerNode.TASK_KEY, "调用工具"));
+
+            assertThat(captured.get().tools()).extracting(tool -> tool.function().name())
+                    .containsExactly("artifact_create", "artifact_create_2", "code_apply_diff")
+                    .allMatch(name -> name.matches("[A-Za-z0-9_-]+"));
+            String systemPrompt = ((ChatMessage.TextContent) captured.get().messages().getFirst().content()).text();
+            String activation = systemPrompt.substring(systemPrompt.indexOf("已激活 Skill："));
+            assertThat(activation)
+                    .contains("- artifact_create: - artifact.create:",
+                            "- artifact_create_2: - artifact.create:",
+                            "- code_apply_diff: - artifact.create:")
+                    .contains("inputSchema: {\"description\":\"- artifact.create:\",\"type\":\"object\"}")
+                    .contains("knowledge:\n- artifact.create: 保留知识\ntools:\n- artifact.create: knowledge 哨兵");
+        }
+    }
+
+    @Test
+    void executesOriginalToolWhenModelReturnsNormalizedName() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        AtomicInteger calls = new AtomicInteger();
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            registry.register(new ToolDefinition("artifact.create", "生成工件",
+                    mapper.readTree("{\"type\":\"object\"}"),
+                    Set.of(com.agent.core.intent.RequiredCapability.TOOL), ToolRiskLevel.LOW,
+                    Duration.ofSeconds(2), (call, context) -> {
+                        calls.incrementAndGet();
+                        return mapper.createObjectNode().put("ok", true);
+                    }));
+            ToolAgentNode node = new ToolAgentNode(request -> {
+                if (calls.get() == 0) {
+                    ChatMessage.ToolCall call = new ChatMessage.ToolCall("call-1", "function",
+                            new ChatMessage.FunctionCall("artifact_create", "{}"));
+                    return completion(ChatMessage.assistantToolCalls(List.of(call)), "tool-model");
+                }
+                return completion(ChatMessage.assistant("完成"), "tool-model");
+            }, registry, mapper, null, 2);
+
+            AgentState result = node.execute(AgentState.empty().withVariable(PlannerNode.TASK_KEY, "调用工具"));
+
+            assertThat(calls).hasValue(1);
+            assertThat(result.variables()).doesNotContainKey(ToolAgentNode.ERROR_KEY);
+        }
+    }
 
     @Test
     void executesToolCallThenPersistsFinalResponse() throws Exception {
@@ -33,8 +125,11 @@ class ToolAgentNodeTest {
                     Set.of(com.agent.core.intent.RequiredCapability.TOOL),
                     ToolRiskLevel.LOW,
                     Duration.ofSeconds(2),
-                    (call, context) -> mapper.createObjectNode()
-                            .put("markdown", "![生成结果](data:image/png;base64,AA==)")));
+                    (call, context) -> {
+                        assertThat(call.name()).isEqualTo("artifact.create");
+                        return mapper.createObjectNode()
+                                .put("markdown", "![生成结果](data:image/png;base64,AA==)");
+                    }));
             SkillCatalog skills = new SkillCatalog(List.of(new SkillDefinition(
                     "artifact-generation", "1.0.0", "工件生成", List.of("生成工件"),
                     List.of("artifact.create"), "先调用工件工具")), registry, mapper);
@@ -43,7 +138,7 @@ class ToolAgentNodeTest {
                     ChatMessage.ToolCall call = new ChatMessage.ToolCall(
                             "image-call-1", "function",
                             new ChatMessage.FunctionCall(
-                                    "artifact.create", "{\"prompt\":\"蓝色方块\"}"));
+                                    "artifact_create", "{\"prompt\":\"蓝色方块\"}"));
                     return completion(ChatMessage.assistantToolCalls(List.of(call)), "tool-model");
                 }
                 return completion(ChatMessage.assistant("图片已生成。\n\n![生成结果](data:image/png;base64,AA==)"), "tool-model");
