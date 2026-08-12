@@ -22,14 +22,13 @@ class DockerMcpStdioProcessTest {
         ByteArrayInputStream stderr = new ByteArrayInputStream(new byte[0]);
         AtomicInteger destroyed = new AtomicInteger();
         DockerMcpStdioProcess process = new DockerMcpStdioProcess(
-                stdout, stdin, stderr, destroyed::incrementAndGet, () -> { });
+                stdout, stdin, stderr, destroyed::incrementAndGet, (reason, failure) -> { });
 
         RuntimeException failure = new RuntimeException("attach disconnected");
-        process.fail(failure);
+        process.fail(McpRuntimeFailureListener.Reason.ATTACH_DISCONNECTED, failure);
         process.destroy();
 
         assertThat(process.isAlive()).isFalse();
-        assertThat(process.failure()).isSameAs(failure);
         assertThat(destroyed).hasValue(1);
         assertThatThrownBy(() -> process.stdin().write(1)).isInstanceOf(IOException.class);
     }

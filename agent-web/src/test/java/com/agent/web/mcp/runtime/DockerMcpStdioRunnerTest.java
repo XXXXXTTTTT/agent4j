@@ -55,10 +55,10 @@ class DockerMcpStdioRunnerTest {
                 installationId, snapshotId, IMAGE, "sh", List.of("-c", "printf ready"),
                 "/workspace", WorkspaceMountMode.READ_ONLY, "none",
                 128L * 1024 * 1024, 100_000_000L, 64L,
-                4096, 4096, Set.of());
+                4096, 4096, 4096, Set.of());
 
         try (DockerMcpStdioRunner runner = new DockerMcpStdioRunner()) {
-            var process = runner.start(spec, Map.of(), workspace);
+            var process = runner.start(spec, Map.of(), workspace, event -> { });
             var containers = verificationClient.listContainersCmd().withShowAll(true)
                     .withLabelFilter(Map.of("com.agent.runtime.installation-id", installationId.toString())).exec();
             assertThat(containers).hasSize(1);

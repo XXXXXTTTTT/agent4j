@@ -20,6 +20,7 @@ public record McpDockerLaunchSpec(
         long nanoCpus,
         long pidsLimit,
         int maxStdoutFrameBytes,
+        int maxStdoutBufferedBytes,
         int maxStderrBytes,
         Set<String> environmentVariableNames) {
 
@@ -39,7 +40,8 @@ public record McpDockerLaunchSpec(
             throw new IllegalArgumentException("networkMode 只允许 none");
         }
         if (memoryBytes <= 0 || nanoCpus <= 0 || pidsLimit <= 0
-                || maxStdoutFrameBytes <= 0 || maxStderrBytes <= 0) {
+                || maxStdoutFrameBytes <= 0 || maxStdoutBufferedBytes <= 0
+                || maxStderrBytes <= 0) {
             throw new IllegalArgumentException("资源与输出限制必须为正数");
         }
         environmentVariableNames = Set.copyOf(
