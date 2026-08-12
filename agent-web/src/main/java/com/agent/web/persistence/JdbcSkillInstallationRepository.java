@@ -31,6 +31,17 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
     }
 
     @Override
+    public SkillInstallationRecord confirmSkill(SkillSnapshotRecord snapshot, SkillInstallationRecord installation) {
+        Objects.requireNonNull(snapshot, "snapshot 不能为空");
+        Objects.requireNonNull(installation, "installation 不能为空");
+        return Objects.requireNonNull(transactions.execute(status -> {
+            saveSnapshot(snapshot);
+            saveInstallation(installation);
+            return findInstallation(installation.skillInstallationId()).orElseThrow();
+        }), "Skill 聚合事务返回值不能为空");
+    }
+
+    @Override
     public SkillSnapshotRecord saveSnapshot(SkillSnapshotRecord snapshot) {
         Objects.requireNonNull(snapshot, "snapshot 不能为空");
         return Objects.requireNonNull(transactions.execute(status -> {
@@ -76,10 +87,10 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
             jdbc.sql("""
                     insert into agent_skill_installations (
                         skill_installation_id, skill_snapshot_id, scope, workspace_id, actor_user_id,
-                        status, confirmation_token_sha256, created_at, confirmed_at, updated_at
+                        status, confirmation_token_sha256, created_at, confirmed_at, updated_at, version
                     ) values (
                         :id, :snapshotId, :scope, :workspaceId, :actorUserId,
-                        :status, :token, :createdAt, :confirmedAt, :updatedAt
+                        :status, :token, :createdAt, :confirmedAt, :updatedAt, :version
                     )
                     """)
                     .param("id", installation.skillInstallationId()).param("snapshotId", installation.skillSnapshotId())
@@ -87,10 +98,11 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
                     .param("actorUserId", installation.actorUserId()).param("status", installation.status().name())
                     .param("token", installation.confirmationTokenSha256()).param("createdAt", timestamp(installation.createdAt()))
                     .param("confirmedAt", timestamp(installation.confirmedAt())).param("updatedAt", timestamp(installation.updatedAt()))
+                    .param("version", installation.version())
                     .update();
             return jdbc.sql("""
                     select skill_installation_id, skill_snapshot_id, scope, workspace_id, actor_user_id,
-                           status, confirmation_token_sha256, created_at, confirmed_at, updated_at
+                           status, confirmation_token_sha256, created_at, confirmed_at, updated_at, version
                     from agent_skill_installations where skill_installation_id = :id
                     """).param("id", installation.skillInstallationId()).query(this::mapInstallation).single();
         }), "Skill 安装保存事务返回值不能为空");
@@ -100,7 +112,7 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
     public List<SkillInstallationRecord> findInstallations(String actorUserId, UUID workspaceId) {
         return jdbc.sql("""
                 select skill_installation_id, skill_snapshot_id, scope, workspace_id, actor_user_id,
-                       status, confirmation_token_sha256, created_at, confirmed_at, updated_at
+                       status, confirmation_token_sha256, created_at, confirmed_at, updated_at, version
                 from agent_skill_installations
                 where actor_user_id = :actorUserId
                   and ((scope = 'WORKSPACE' and workspace_id = :workspaceId) or scope = 'USER_GLOBAL')
@@ -134,7 +146,15 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
                 rs.getObject("workspace_id", UUID.class), rs.getString("actor_user_id"),
                 SkillInstallationStatus.valueOf(rs.getString("status")), rs.getString("confirmation_token_sha256"),
                 rs.getTimestamp("created_at").toInstant(), rs.getTimestamp("confirmed_at").toInstant(),
-                rs.getTimestamp("updated_at").toInstant());
+                rs.getTimestamp("updated_at").toInstant(), rs.getLong("version"));
+    }
+
+    private java.util.Optional<SkillInstallationRecord> findInstallation(UUID id) {
+        return jdbc.sql("""
+                select skill_installation_id, skill_snapshot_id, scope, workspace_id, actor_user_id,
+                       status, confirmation_token_sha256, created_at, confirmed_at, updated_at, version
+                from agent_skill_installations where skill_installation_id = :id
+                """).param("id", id).query(this::mapInstallation).optional();
     }
 
     private List<String> readList(String value) {

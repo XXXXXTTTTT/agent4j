@@ -4,6 +4,11 @@ import com.agent.web.capability.InstallationScope;
 import com.agent.web.mcp.installation.McpInstallationRecord;
 import com.agent.web.mcp.installation.McpInstallationRepository;
 import com.agent.web.mcp.installation.McpInstallationStatus;
+import com.agent.web.mcp.installation.McpInstallationCommand;
+import com.agent.web.mcp.installation.WorkspaceMountMode;
+import com.agent.web.mcp.installation.McpNetworkMode;
+import com.agent.core.intent.RequiredCapability;
+import com.agent.core.tool.ToolRiskLevel;
 import com.agent.web.mcp.installation.McpSourceSnapshot;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -31,6 +36,17 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc 不能为空");
         this.transactions = Objects.requireNonNull(transactions, "transactions 不能为空");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
+    }
+
+    @Override
+    public McpInstallationRecord confirmInstallation(McpInstallationCommand command) {
+        Objects.requireNonNull(command, "command 不能为空");
+        return Objects.requireNonNull(transactions.execute(status -> {
+            saveSnapshot(command.snapshot());
+            saveInstallation(command.installation());
+            insertAudit(command.auditEvent());
+            return findInstallation(command.installation().installationId()).orElseThrow();
+        }), "MCP 聚合事务返回值不能为空");
     }
 
     @Override
@@ -77,10 +93,14 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
             jdbc.sql("""
                     insert into agent_mcp_installations (
                         installation_id, snapshot_id, scope, workspace_id, actor_user_id, status,
-                        confirmation_token_sha256, created_at, confirmed_at, updated_at
+                        confirmation_token_sha256, created_at, confirmed_at, updated_at,
+                        risk_level, required_capabilities, workspace_mount_mode, network_mode,
+                        runtime_image, container_id, runtime_error, version
                     ) values (
                         :installationId, :snapshotId, :scope, :workspaceId, :actorUserId, :status,
-                        :confirmationTokenSha256, :createdAt, :confirmedAt, :updatedAt
+                        :confirmationTokenSha256, :createdAt, :confirmedAt, :updatedAt,
+                        :riskLevel, cast(:requiredCapabilities as jsonb), :workspaceMountMode, :networkMode,
+                        :runtimeImage, :containerId, :runtimeError, :version
                     )
                     """)
                     .param("installationId", installation.installationId())
@@ -93,6 +113,14 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                     .param("createdAt", timestamp(installation.createdAt()))
                     .param("confirmedAt", timestamp(installation.confirmedAt()))
                     .param("updatedAt", timestamp(installation.updatedAt()))
+                    .param("riskLevel", installation.riskLevel().name())
+                    .param("requiredCapabilities", json(installation.requiredCapabilities().stream().map(Enum::name).toList()))
+                    .param("workspaceMountMode", installation.workspaceMountMode().name())
+                    .param("networkMode", installation.networkMode().name())
+                    .param("runtimeImage", installation.runtimeImage())
+                    .param("containerId", installation.containerId())
+                    .param("runtimeError", installation.runtimeError())
+                    .param("version", installation.version())
                     .update();
             return findInstallation(installation.installationId()).orElse(installation);
         }), "MCP 安装保存事务返回值不能为空");
@@ -103,7 +131,9 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
         Objects.requireNonNull(actorUserId, "actorUserId 不能为空");
         return jdbc.sql("""
                 select installation_id, snapshot_id, scope, workspace_id, actor_user_id, status,
-                       confirmation_token_sha256, created_at, confirmed_at, updated_at
+                       confirmation_token_sha256, created_at, confirmed_at, updated_at,
+                       risk_level, required_capabilities, workspace_mount_mode, network_mode,
+                       runtime_image, container_id, runtime_error, version
                 from agent_mcp_installations
                 where actor_user_id = :actorUserId
                   and ((scope = 'WORKSPACE' and workspace_id = :workspaceId)
@@ -145,7 +175,9 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
     private java.util.Optional<McpInstallationRecord> findInstallation(UUID installationId) {
         return jdbc.sql("""
                 select installation_id, snapshot_id, scope, workspace_id, actor_user_id, status,
-                       confirmation_token_sha256, created_at, confirmed_at, updated_at
+                       confirmation_token_sha256, created_at, confirmed_at, updated_at,
+                       risk_level, required_capabilities, workspace_mount_mode, network_mode,
+                       runtime_image, container_id, runtime_error, version
                 from agent_mcp_installations where installation_id = :installationId
                 """)
                 .param("installationId", installationId).query(this::mapInstallation).optional();
@@ -165,7 +197,31 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                 InstallationScope.valueOf(rs.getString("scope")), rs.getObject("workspace_id", UUID.class),
                 rs.getString("actor_user_id"), McpInstallationStatus.valueOf(rs.getString("status")),
                 rs.getString("confirmation_token_sha256"), rs.getTimestamp("created_at").toInstant(),
-                rs.getTimestamp("confirmed_at").toInstant(), rs.getTimestamp("updated_at").toInstant());
+                rs.getTimestamp("confirmed_at").toInstant(), rs.getTimestamp("updated_at").toInstant(),
+                ToolRiskLevel.valueOf(rs.getString("risk_level")), readCapabilities(rs.getString("required_capabilities")),
+                WorkspaceMountMode.valueOf(rs.getString("workspace_mount_mode")), McpNetworkMode.valueOf(rs.getString("network_mode")),
+                rs.getString("runtime_image"), rs.getString("container_id"), rs.getString("runtime_error"), rs.getLong("version"));
+    }
+
+    private void insertAudit(com.agent.web.capability.CapabilityManagementAuditEvent event) {
+        jdbc.sql("""
+                insert into agent_capability_management_audit (
+                    audit_id, event_type, actor_user_id, workspace_id, installation_id, skill_id, run_id,
+                    source_commit_sha, result, occurred_at, operation_id, from_status, to_status, detail_sha256)
+                values (:auditId, :eventType, :actorUserId, :workspaceId, :installationId, :skillId, :runId,
+                    :sourceCommitSha, :result, :occurredAt, :operationId, :fromStatus, :toStatus, :detailSha256)
+                """)
+                .param("auditId", UUID.randomUUID()).param("eventType", event.eventType())
+                .param("actorUserId", event.actorUserId()).param("workspaceId", event.workspaceId())
+                .param("installationId", event.installationId()).param("skillId", event.skillId())
+                .param("runId", event.runId()).param("sourceCommitSha", event.sourceCommitSha())
+                .param("result", event.result()).param("occurredAt", timestamp(event.occurredAt()))
+                .param("operationId", event.operationId()).param("fromStatus", event.fromStatus())
+                .param("toStatus", event.toStatus()).param("detailSha256", event.detailSha256()).update();
+    }
+
+    private java.util.Set<RequiredCapability> readCapabilities(String value) {
+        return readList(value).stream().map(RequiredCapability::valueOf).collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     private String json(Object value) {

@@ -1,6 +1,8 @@
 package com.agent.web.mcp.installation;
 
 import com.agent.web.capability.InstallationScope;
+import com.agent.core.intent.RequiredCapability;
+import com.agent.core.tool.ToolRiskLevel;
 
 import java.time.Instant;
 import java.util.Objects;
@@ -17,7 +19,25 @@ public record McpInstallationRecord(
         String confirmationTokenSha256,
         Instant createdAt,
         Instant confirmedAt,
-        Instant updatedAt) {
+        Instant updatedAt,
+        ToolRiskLevel riskLevel,
+        java.util.Set<RequiredCapability> requiredCapabilities,
+        WorkspaceMountMode workspaceMountMode,
+        McpNetworkMode networkMode,
+        String runtimeImage,
+        String containerId,
+        String runtimeError,
+        long version) {
+    public McpInstallationRecord(
+            UUID installationId, UUID snapshotId, InstallationScope scope, UUID workspaceId,
+            String actorUserId, McpInstallationStatus status, String confirmationTokenSha256,
+            Instant createdAt, Instant confirmedAt, Instant updatedAt) {
+        this(installationId, snapshotId, scope, workspaceId, actorUserId, status,
+                confirmationTokenSha256, createdAt, confirmedAt, updatedAt,
+                ToolRiskLevel.HIGH, java.util.Set.of(RequiredCapability.TOOL),
+                WorkspaceMountMode.NONE, McpNetworkMode.NONE, "", null, null, 0);
+    }
+
     public McpInstallationRecord {
         Objects.requireNonNull(installationId, "installationId 不能为空");
         Objects.requireNonNull(snapshotId, "snapshotId 不能为空");
@@ -28,6 +48,15 @@ public record McpInstallationRecord(
         createdAt = Objects.requireNonNull(createdAt, "createdAt 不能为空");
         confirmedAt = Objects.requireNonNull(confirmedAt, "confirmedAt 不能为空");
         updatedAt = Objects.requireNonNull(updatedAt, "updatedAt 不能为空");
+        riskLevel = Objects.requireNonNull(riskLevel, "riskLevel 不能为空");
+        requiredCapabilities = java.util.Set.copyOf(Objects.requireNonNull(requiredCapabilities, "requiredCapabilities 不能为空"));
+        if (!requiredCapabilities.contains(RequiredCapability.TOOL)) {
+            throw new IllegalArgumentException("requiredCapabilities 必须包含 TOOL");
+        }
+        workspaceMountMode = Objects.requireNonNull(workspaceMountMode, "workspaceMountMode 不能为空");
+        networkMode = Objects.requireNonNull(networkMode, "networkMode 不能为空");
+        runtimeImage = Objects.requireNonNullElse(runtimeImage, "");
+        if (version < 0) throw new IllegalArgumentException("version 不能小于 0");
         if (scope == InstallationScope.WORKSPACE && workspaceId == null) {
             throw new IllegalArgumentException("WORKSPACE 安装必须绑定 workspaceId");
         }

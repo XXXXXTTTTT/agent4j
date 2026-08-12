@@ -17,7 +17,17 @@ public record SkillInstallationRecord(
         String confirmationTokenSha256,
         Instant createdAt,
         Instant confirmedAt,
-        Instant updatedAt) {
+        Instant updatedAt,
+        long version) {
+    public SkillInstallationRecord(
+            UUID skillInstallationId, UUID skillSnapshotId, InstallationScope scope,
+            UUID workspaceId, String actorUserId, SkillInstallationStatus status,
+            String confirmationTokenSha256, Instant createdAt, Instant confirmedAt,
+            Instant updatedAt) {
+        this(skillInstallationId, skillSnapshotId, scope, workspaceId, actorUserId, status,
+                confirmationTokenSha256, createdAt, confirmedAt, updatedAt, 0);
+    }
+
     public SkillInstallationRecord {
         Objects.requireNonNull(skillInstallationId, "skillInstallationId 不能为空");
         Objects.requireNonNull(skillSnapshotId, "skillSnapshotId 不能为空");
@@ -28,6 +38,7 @@ public record SkillInstallationRecord(
         createdAt = Objects.requireNonNull(createdAt, "createdAt 不能为空");
         confirmedAt = Objects.requireNonNull(confirmedAt, "confirmedAt 不能为空");
         updatedAt = Objects.requireNonNull(updatedAt, "updatedAt 不能为空");
+        if (version < 0) throw new IllegalArgumentException("version 不能小于 0");
         if (scope == InstallationScope.WORKSPACE && workspaceId == null) {
             throw new IllegalArgumentException("WORKSPACE 安装必须绑定 workspaceId");
         }

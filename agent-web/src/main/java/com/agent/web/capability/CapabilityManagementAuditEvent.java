@@ -14,13 +14,27 @@ public record CapabilityManagementAuditEvent(
         UUID runId,
         String sourceCommitSha,
         String result,
-        Instant occurredAt) {
+        Instant occurredAt,
+        UUID operationId,
+        String fromStatus,
+        String toStatus,
+        String detailSha256) {
+    public CapabilityManagementAuditEvent(
+            String eventType, String actorUserId, UUID workspaceId, UUID installationId,
+            UUID skillId, UUID runId, String sourceCommitSha, String result, Instant occurredAt) {
+        this(eventType, actorUserId, workspaceId, installationId, skillId, runId,
+                sourceCommitSha, result, occurredAt, null, null, null, null);
+    }
+
     public CapabilityManagementAuditEvent {
         eventType = required(eventType, "eventType");
         actorUserId = required(actorUserId, "actorUserId");
         sourceCommitSha = Objects.requireNonNullElse(sourceCommitSha, "");
         result = required(result, "result");
         occurredAt = Objects.requireNonNull(occurredAt, "occurredAt 不能为空");
+        fromStatus = Objects.requireNonNullElse(fromStatus, "");
+        toStatus = Objects.requireNonNullElse(toStatus, "");
+        detailSha256 = Objects.requireNonNullElse(detailSha256, "");
     }
 
     private static String required(String value, String field) {
