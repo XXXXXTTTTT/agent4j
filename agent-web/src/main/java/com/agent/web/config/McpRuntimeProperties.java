@@ -14,6 +14,7 @@ public record McpRuntimeProperties(
         String materialContainerDirectory,
         String materialSourceContainer,
         String materialSourcePath,
+        String pythonPreparationImage,
         String image,
         String containerWorkingDirectory,
         long memoryBytes,
@@ -30,6 +31,7 @@ public record McpRuntimeProperties(
         materialContainerDirectory = text(materialContainerDirectory, "materialContainerDirectory");
         materialSourceContainer = optionalText(materialSourceContainer);
         materialSourcePath = optionalText(materialSourcePath);
+        pythonPreparationImage = optionalText(pythonPreparationImage);
         if (materialSourceContainer.isBlank() != materialSourcePath.isBlank()) {
             throw new IllegalArgumentException("materialSourceContainer 与 materialSourcePath 必须同时配置");
         }

@@ -264,10 +264,16 @@ public final class McpInstallationRuntime implements AutoCloseable {
             List<McpToolBindingRecord> bindings = discovered.stream().map(binding -> new McpToolBindingRecord(
                     installing.installationId(), binding.localToolName(), binding.remoteToolName(),
                     installing.riskLevel(), installing.requiredCapabilities(), clock.instant())).toList();
-            McpInstallationRecord running = repository.completeStart(new McpRuntimeStartCompletion(
-                    installing.installationId(), installing.version(), request.targetWorkspaceId(), process.containerId(), bindings,
-                    audit(aggregate, requestWorkspaceId, "MCP_INSTALLATION_STARTED", "SUCCESS",
-                            McpInstallationStatus.INSTALLING, McpInstallationStatus.RUNNING)));
+            McpInstallationRecord running;
+            try {
+                running = repository.completeStart(new McpRuntimeStartCompletion(
+                        installing.installationId(), installing.version(), request.targetWorkspaceId(), process.containerId(), bindings,
+                        audit(aggregate, requestWorkspaceId, "MCP_INSTALLATION_STARTED", "SUCCESS",
+                                McpInstallationStatus.INSTALLING, McpInstallationStatus.RUNNING)));
+            } catch (RuntimeException completionFailure) {
+                cleanupUncommittedStart(installing.installationId(), client, process, completionFailure);
+                throw completionFailure;
+            }
             active.put(running.installationId(), new ActiveRuntime(client, process));
             return running;
         } catch (RuntimeException exception) {
@@ -326,6 +332,19 @@ public final class McpInstallationRuntime implements AutoCloseable {
         } catch (McpInstallationConflictException ignored) {
             // 并发失败回调或显式停止已推进版本时不覆盖其结果。
         }
+    }
+
+    /** completeStart 未提交时撤销已暴露工具并销毁容器，再收敛持久化状态。 */
+    private void cleanupUncommittedStart(UUID installationId, McpClient client, DockerMcpStdioProcess process,
+                                         RuntimeException original) {
+        try { toolRegistry.beginDrain(installationId.toString()); }
+        catch (RuntimeException cleanupFailure) { original.addSuppressed(cleanupFailure); }
+        try { toolRegistry.unregisterOwned(installationId.toString(), configuration.drainTimeout()); }
+        catch (RuntimeException cleanupFailure) { original.addSuppressed(cleanupFailure); }
+        try { client.close(); }
+        catch (RuntimeException cleanupFailure) { original.addSuppressed(cleanupFailure); }
+        try { process.destroy(); }
+        catch (RuntimeException cleanupFailure) { original.addSuppressed(cleanupFailure); }
     }
 
     private Path authorizeWorkspace(Actor actor, McpInstallationRecord installation, UUID targetWorkspaceId) {

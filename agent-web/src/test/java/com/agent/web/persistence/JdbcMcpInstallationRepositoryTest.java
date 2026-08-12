@@ -153,6 +153,28 @@ class JdbcMcpInstallationRepositoryTest {
                 .orElseThrow().bindings()).isEmpty();
     }
 
+    @Test
+    void persistsPreparedMaterialAndRejectsStaleInstallationVersion() throws Exception {
+        McpSourceSnapshot snapshot = snapshot();
+        McpInstallationRecord installation = installation(snapshot, McpInstallationStatus.STOPPED, 0);
+        repository.confirmInstallation(new com.agent.web.mcp.installation.McpInstallationCommand(snapshot, installation,
+                audit(installation, snapshot, "MCP_INSTALLATION_CONFIRMED", "STOPPED", "STOPPED")));
+        java.nio.file.Path materialDirectory = java.nio.file.Files.createTempDirectory("mcp-prepared-material");
+        java.nio.file.Files.writeString(materialDirectory.resolve("server.mjs"), "process.stdout.write('ready');");
+        com.agent.web.mcp.installation.McpPreparedMaterialRecord material = new com.agent.web.mcp.installation.McpPreparedMaterialRecord(
+                materialDirectory, "d".repeat(64), "server.mjs", List.of(), NOW);
+
+        McpInstallationRecord prepared = repository.completeMaterialPreparation(installation.installationId(), "mcp-test-user",
+                WORKSPACE_ID, 0, material, audit(installation, snapshot, "MCP_MATERIAL_PREPARED", "STOPPED", "STOPPED"));
+
+        assertThat(prepared.version()).isEqualTo(1);
+        assertThat(repository.findPreparedMaterial(snapshot.snapshotId())).contains(material);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> repository.completeMaterialPreparation(
+                installation.installationId(), "mcp-test-user", WORKSPACE_ID, 0, material,
+                audit(installation, snapshot, "MCP_MATERIAL_PREPARED", "STOPPED", "STOPPED")))
+                .isInstanceOf(com.agent.web.mcp.installation.McpInstallationConflictException.class);
+    }
+
     private McpSourceSnapshot snapshot() {
         OfficialMcpServerRecord server = new OfficialMcpServerRecord(
                 "filesystem", "src/filesystem", URI.create("https://raw.githubusercontent.com/modelcontextprotocol/servers/main/src/filesystem"),

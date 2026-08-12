@@ -378,6 +378,57 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                         rs.getTimestamp("material_prepared_at").toInstant())).optional();
     }
 
+    @Override
+    public McpInstallationRecord completeMaterialPreparation(UUID installationId, String actorUserId,
+                                                             UUID requestWorkspaceId, long expectedVersion,
+                                                             com.agent.web.mcp.installation.McpPreparedMaterialRecord material,
+                                                             com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+        Objects.requireNonNull(material, "material 不能为空");
+        return Objects.requireNonNull(transactions.execute(status -> {
+            McpInstallationRecord installation = findInstallation(installationId)
+                    .orElseThrow(() -> new McpInstallationConflictException(installationId, expectedVersion));
+            int updated = jdbc.sql("""
+                    update agent_mcp_installations set version = version + 1, updated_at = current_timestamp
+                    where installation_id = :installationId and actor_user_id = :actorUserId and version = :expectedVersion
+                      and status in ('STOPPED', 'FAILED')
+                      and ((scope = 'WORKSPACE' and workspace_id = :workspaceId) or scope = 'USER_GLOBAL')
+                    """).param("installationId", installationId).param("actorUserId", actorUserId)
+                    .param("expectedVersion", expectedVersion).param("workspaceId", requestWorkspaceId).update();
+            if (updated != 1) throw new McpInstallationConflictException(installationId, expectedVersion);
+            int snapshotUpdated = jdbc.sql("""
+                    update agent_mcp_installation_snapshots set material_directory = :directory,
+                           material_sha256 = :sha256, material_command = :command,
+                           material_arguments = cast(:arguments as jsonb), material_prepared_at = :preparedAt
+                    where snapshot_id = :snapshotId
+                    """).param("directory", material.directory().toString()).param("sha256", material.sha256())
+                    .param("command", material.command()).param("arguments", json(material.arguments()))
+                    .param("preparedAt", timestamp(material.preparedAt())).param("snapshotId", installation.snapshotId()).update();
+            if (snapshotUpdated != 1) throw new McpInstallationConflictException(installationId, expectedVersion);
+            insertAudit(auditEvent);
+            return findInstallation(installationId).orElseThrow();
+        }), "MCP 物料准备聚合事务返回值不能为空");
+    }
+
+    @Override
+    public void recordMaterialPreparationFailure(UUID installationId, String actorUserId, UUID requestWorkspaceId,
+                                                 long expectedVersion,
+                                                 com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+        Objects.requireNonNull(auditEvent, "auditEvent 不能为空");
+        Objects.requireNonNull(transactions.execute(status -> {
+            int matched = jdbc.sql("""
+                    select count(*) from agent_mcp_installations
+                    where installation_id = :installationId and actor_user_id = :actorUserId and version = :expectedVersion
+                      and status in ('STOPPED', 'FAILED')
+                      and ((scope = 'WORKSPACE' and workspace_id = :workspaceId) or scope = 'USER_GLOBAL')
+                    """).param("installationId", installationId).param("actorUserId", actorUserId)
+                    .param("expectedVersion", expectedVersion).param("workspaceId", requestWorkspaceId)
+                    .query(Integer.class).single();
+            if (matched != 1) throw new McpInstallationConflictException(installationId, expectedVersion);
+            insertAudit(auditEvent);
+            return Boolean.TRUE;
+        }), "MCP 物料准备失败审计事务返回值不能为空");
+    }
+
     private List<com.agent.web.mcp.installation.McpToolBindingRecord> findBindings(UUID installationId) {
         return jdbc.sql("""
                 select installation_id, local_tool_name, remote_tool_name, risk_level, required_capabilities, created_at

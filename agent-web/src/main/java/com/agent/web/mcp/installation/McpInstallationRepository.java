@@ -27,6 +27,19 @@ public interface McpInstallationRepository {
         throw new UnsupportedOperationException("当前 MCP 仓储不支持物料读取");
     }
 
+    default McpInstallationRecord completeMaterialPreparation(UUID installationId, String actorUserId,
+                                                               UUID requestWorkspaceId, long expectedVersion,
+                                                               McpPreparedMaterialRecord material,
+                                                               com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+        throw new UnsupportedOperationException("当前 MCP 仓储不支持物料准备完成");
+    }
+
+    default void recordMaterialPreparationFailure(UUID installationId, String actorUserId, UUID requestWorkspaceId,
+                                                  long expectedVersion,
+                                                  com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+        throw new UnsupportedOperationException("当前 MCP 仓储不支持物料准备失败审计");
+    }
+
     default McpInstallationRecord beginStart(UUID installationId, String actorUserId, UUID requestWorkspaceId,
                                      UUID runtimeWorkspaceId, long expectedVersion,
                                      com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {

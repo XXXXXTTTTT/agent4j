@@ -12,6 +12,7 @@ import com.agent.web.workspace.WorkspaceImportService;
 import com.agent.web.mcp.installation.McpInstallationService;
 import com.agent.web.mcp.installation.McpInstallationConflictException;
 import com.agent.web.mcp.runtime.McpMaterialNotPreparedException;
+import com.agent.web.mcp.runtime.McpMaterialPreparationImageNotConfiguredException;
 import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.skill.SkillInstallationConflictException;
 import com.agent.web.audit.AuditTextRedactor;
@@ -173,6 +174,14 @@ public final class RunExceptionHandler {
             McpMaterialNotPreparedException exception,
             ServerWebExchange exchange) {
         return problem(HttpStatus.CONFLICT, "MATERIAL_NOT_PREPARED", exchange);
+    }
+
+    /** Python 物料准备镜像未由部署者明确配置时返回稳定错误码。 */
+    @ExceptionHandler(McpMaterialPreparationImageNotConfiguredException.class)
+    public ResponseEntity<ProblemDetail> mcpMaterialPreparationImageNotConfigured(
+            McpMaterialPreparationImageNotConfiguredException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.CONFLICT, "MATERIAL_PREPARATION_IMAGE_NOT_CONFIGURED", exchange);
     }
 
     /** 将数据库唯一约束冲突转换为稳定的客户端错误。 */

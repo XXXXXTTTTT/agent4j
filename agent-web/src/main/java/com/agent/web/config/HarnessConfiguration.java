@@ -34,6 +34,9 @@ import com.agent.web.mcp.runtime.McpInstallationRuntime;
 import com.agent.web.mcp.runtime.McpRuntimeMaterialProvider;
 import com.agent.web.mcp.runtime.McpRuntimeSecretProvider;
 import com.agent.web.mcp.runtime.McpRuntimeRecovery;
+import com.agent.web.mcp.runtime.DockerMcpMaterialPreparationRunner;
+import com.agent.web.mcp.runtime.McpMaterialPreparationRunner;
+import com.agent.web.mcp.runtime.McpMaterialPreparationService;
 import com.agent.web.persistence.JdbcMcpInstallationRepository;
 import com.agent.web.persistence.JdbcSkillInstallationRepository;
 import com.agent.web.persistence.JdbcCapabilityManagementAuditSink;
@@ -197,6 +200,26 @@ public class HarnessConfiguration {
     @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
     McpRuntimeSecretProvider mcpRuntimeSecretProvider() {
         return McpRuntimeSecretProvider.declaredNamesOnly();
+    }
+
+    /** 物料准备单独使用短生命周期 Docker 容器，不复用持续 MCP runner。 */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    McpMaterialPreparationRunner mcpMaterialPreparationRunner(McpRuntimeProperties properties,
+                                                               ObjectMapper objectMapper, Clock harnessClock) {
+        return new DockerMcpMaterialPreparationRunner(properties.materialRoot(), properties.image(),
+                properties.pythonPreparationImage(), objectMapper, harnessClock);
+    }
+
+    /** 将物料下载和安装确认、运行生命周期明确隔离。 */
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    McpMaterialPreparationService mcpMaterialPreparationService(ActorResolver actorResolver,
+                                                                  WorkspaceAccessService workspaceAccess,
+                                                                  McpInstallationRepository repository,
+                                                                  McpMaterialPreparationRunner runner,
+                                                                  Clock harnessClock) {
+        return new McpMaterialPreparationService(actorResolver, workspaceAccess, repository, runner, harnessClock);
     }
 
     /** Docker stdio 运行器由 Spring 在应用关闭时统一关闭。 */

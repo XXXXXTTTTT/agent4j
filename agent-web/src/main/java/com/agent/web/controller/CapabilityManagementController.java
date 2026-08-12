@@ -7,6 +7,7 @@ import com.agent.web.mcp.installation.McpInstallationPreview;
 import com.agent.web.mcp.installation.McpInstallationRecord;
 import com.agent.web.mcp.installation.McpInstallationService;
 import com.agent.web.mcp.runtime.McpInstallationRuntime;
+import com.agent.web.mcp.runtime.McpMaterialPreparationService;
 import com.agent.web.skill.GitHubSkillCatalogClient;
 import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.skill.GitHubSkillRepository;
@@ -39,17 +40,20 @@ public final class CapabilityManagementController {
     private final GitHubSkillCatalogClient skillCatalog;
     private final GitHubSkillInstallationService skillInstallations;
     private final McpInstallationRuntime mcpRuntime;
+    private final McpMaterialPreparationService materialPreparation;
 
     public CapabilityManagementController(OfficialMcpCatalogClient mcpCatalog,
                                           McpInstallationService mcpInstallations,
                                           GitHubSkillCatalogClient skillCatalog,
                                           GitHubSkillInstallationService skillInstallations,
-                                          org.springframework.beans.factory.ObjectProvider<McpInstallationRuntime> mcpRuntimeProvider) {
+                                          org.springframework.beans.factory.ObjectProvider<McpInstallationRuntime> mcpRuntimeProvider,
+                                          org.springframework.beans.factory.ObjectProvider<McpMaterialPreparationService> materialPreparationProvider) {
         this.mcpCatalog = Objects.requireNonNull(mcpCatalog, "mcpCatalog 不能为空");
         this.mcpInstallations = Objects.requireNonNull(mcpInstallations, "mcpInstallations 不能为空");
         this.skillCatalog = Objects.requireNonNull(skillCatalog, "skillCatalog 不能为空");
         this.skillInstallations = Objects.requireNonNull(skillInstallations, "skillInstallations 不能为空");
         this.mcpRuntime = mcpRuntimeProvider.getIfAvailable();
+        this.materialPreparation = materialPreparationProvider.getIfAvailable();
     }
 
     @GetMapping("/api/mcp/catalog")
@@ -88,7 +92,14 @@ public final class CapabilityManagementController {
     @DeleteMapping("/api/workspaces/{workspaceId}/mcp/installations/{installationId}")
     public InstallationView uninstallMcp(@PathVariable UUID workspaceId, @PathVariable UUID installationId,
                                          @RequestParam long expectedVersion) {
-        return InstallationView.from(mcpInstallations.uninstall(workspaceId, installationId));
+        return InstallationView.from(mcpInstallations.uninstall(workspaceId, installationId, expectedVersion));
+    }
+
+    @PostMapping("/api/workspaces/{workspaceId}/mcp/installations/{installationId}/material")
+    public InstallationView prepareMcpMaterial(@PathVariable UUID workspaceId, @PathVariable UUID installationId,
+                                               @Valid @RequestBody MaterialPreparationRequest request) {
+        if (materialPreparation == null) throw new IllegalStateException("MCP 物料准备器未配置");
+        return InstallationView.from(materialPreparation.prepare(workspaceId, installationId, request.expectedVersion()));
     }
 
     @PostMapping("/api/workspaces/{workspaceId}/mcp/installations/{installationId}/start")
@@ -139,6 +150,7 @@ public final class CapabilityManagementController {
                                               @NotNull InstallationScope scope, UUID targetWorkspaceId) { }
     public record LifecycleRequest(long expectedVersion, @NotNull UUID targetWorkspaceId,
                                    @NotNull java.util.Map<String, String> environment) { }
+    public record MaterialPreparationRequest(long expectedVersion) { }
     public record SkillPreviewRequest(@NotBlank String repository, InstallationScope scope, UUID targetWorkspaceId) { }
     public record ConfirmSkillRequest(@NotNull UUID previewId, @NotBlank String confirmationToken,
                                       @NotNull InstallationScope scope, UUID targetWorkspaceId) { }

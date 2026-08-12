@@ -7,6 +7,7 @@ import com.agent.web.mcp.installation.McpInstallationPreview;
 import com.agent.web.mcp.installation.McpInstallationRecord;
 import com.agent.web.mcp.installation.McpInstallationService;
 import com.agent.web.mcp.installation.McpInstallationStatus;
+import com.agent.web.mcp.runtime.McpMaterialPreparationService;
 import com.agent.web.skill.GitHubSkillCatalogClient;
 import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.skill.GitHubSkillRepository;
@@ -56,6 +57,9 @@ class CapabilityManagementControllerTest {
 
     @MockBean
     private GitHubSkillInstallationService skillInstallations;
+
+    @MockBean
+    private McpMaterialPreparationService materialPreparation;
 
     @Test
     void returnsOfficialMcpCatalogAndCreatesWorkspacePreview() {
@@ -125,7 +129,7 @@ class CapabilityManagementControllerTest {
         when(mcpInstallations.confirm(eq(WORKSPACE_ID), eq(PREVIEW_ID), eq("confirm-mcp"),
                 eq(InstallationScope.WORKSPACE), eq(WORKSPACE_ID))).thenReturn(installation);
         when(mcpInstallations.list(WORKSPACE_ID)).thenReturn(List.of(installation));
-        when(mcpInstallations.uninstall(WORKSPACE_ID, INSTALLATION_ID)).thenReturn(installation);
+        when(mcpInstallations.uninstall(WORKSPACE_ID, INSTALLATION_ID, installation.version())).thenReturn(installation);
 
         client.post().uri("/api/workspaces/{workspaceId}/mcp/installations", WORKSPACE_ID)
                 .header("Content-Type", "application/json")
@@ -146,7 +150,21 @@ class CapabilityManagementControllerTest {
                         .queryParam("expectedVersion", installation.version())
                         .build(WORKSPACE_ID, INSTALLATION_ID))
                 .exchange().expectStatus().isOk();
-        verify(mcpInstallations).uninstall(WORKSPACE_ID, INSTALLATION_ID);
+        verify(mcpInstallations).uninstall(WORKSPACE_ID, INSTALLATION_ID, installation.version());
+    }
+
+    @Test
+    void preparesMcpMaterialUsingSuppliedExpectedVersion() {
+        McpInstallationRecord installation = mcpInstallation();
+        when(materialPreparation.prepare(WORKSPACE_ID, INSTALLATION_ID, installation.version())).thenReturn(installation);
+
+        client.post().uri("/api/workspaces/{workspaceId}/mcp/installations/{installationId}/material", WORKSPACE_ID, INSTALLATION_ID)
+                .header("Content-Type", "application/json")
+                .bodyValue("{\"expectedVersion\":%d}".formatted(installation.version()))
+                .exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.installationId").isEqualTo(INSTALLATION_ID.toString());
+
+        verify(materialPreparation).prepare(WORKSPACE_ID, INSTALLATION_ID, installation.version());
     }
 
     @Test

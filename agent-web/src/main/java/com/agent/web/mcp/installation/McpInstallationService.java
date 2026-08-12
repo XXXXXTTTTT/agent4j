@@ -124,6 +124,21 @@ public final class McpInstallationService {
     }
 
     /** 撤销当前主体可管理范围内的安装记录，不启动或停止运行时。 */
+    public McpInstallationRecord uninstall(UUID workspaceId, UUID installationId, long expectedVersion) {
+        Objects.requireNonNull(installationId, "installationId 不能为空");
+        Actor actor = actorResolver.current();
+        workspaceAccess.requireWorkspace(workspaceId, actor.userId(), WorkspacePermission.OPERATOR);
+        McpInstallationRecord installation = repository.findInstallations(actor.userId(), workspaceId).stream()
+                .filter(value -> value.installationId().equals(installationId))
+                .findFirst()
+                .orElseThrow(() -> new InstallationNotFoundException(installationId));
+        return repository.removeInstallation(installationId, actor.userId(), workspaceId, expectedVersion,
+                new CapabilityManagementAuditEvent("MCP_INSTALLATION_REMOVED", actor.userId(), workspaceId,
+                        installationId, null, null, "", "SUCCESS", clock.instant()));
+    }
+
+    /** 兼容旧内部调用；HTTP 入口必须传递调用方的 expectedVersion。 */
+    @Deprecated
     public McpInstallationRecord uninstall(UUID workspaceId, UUID installationId) {
         Objects.requireNonNull(installationId, "installationId 不能为空");
         Actor actor = actorResolver.current();
@@ -132,9 +147,7 @@ public final class McpInstallationService {
                 .filter(value -> value.installationId().equals(installationId))
                 .findFirst()
                 .orElseThrow(() -> new InstallationNotFoundException(installationId));
-        return repository.removeInstallation(installationId, actor.userId(), workspaceId, installation.version(),
-                new CapabilityManagementAuditEvent("MCP_INSTALLATION_REMOVED", actor.userId(), workspaceId,
-                        installationId, null, null, "", "SUCCESS", clock.instant()));
+        return uninstall(workspaceId, installationId, installation.version());
     }
 
     private ScopeTarget resolveTarget(
