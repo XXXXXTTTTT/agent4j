@@ -23,6 +23,8 @@ public record McpRuntimeProperties(
         int maxStdoutFrameBytes,
         int maxStdoutBufferedBytes,
         int maxStderrBytes,
+        long maxMaterialBytes,
+        Duration preparationTimeout,
         Duration requestTimeout,
         Duration toolTimeout,
         Duration drainTimeout) {
@@ -37,10 +39,11 @@ public record McpRuntimeProperties(
         }
         image = text(image, "image");
         containerWorkingDirectory = text(containerWorkingDirectory, "containerWorkingDirectory");
-        if (memoryBytes <= 0 || nanoCpus <= 0 || pidsLimit <= 0
+        if (memoryBytes <= 0 || nanoCpus <= 0 || pidsLimit <= 0 || maxMaterialBytes <= 0
                 || maxStdoutFrameBytes <= 0 || maxStdoutBufferedBytes <= 0 || maxStderrBytes <= 0) {
             throw new IllegalArgumentException("MCP 运行资源限制必须为正数");
         }
+        positive(preparationTimeout, "preparationTimeout");
         positive(requestTimeout, "requestTimeout");
         positive(toolTimeout, "toolTimeout");
         positive(drainTimeout, "drainTimeout");

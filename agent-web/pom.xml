@@ -18,6 +18,7 @@
         <dependency><groupId>com.agent</groupId><artifactId>agent-sandbox</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.github.docker-java</groupId><artifactId>docker-java-core</artifactId><version>${docker-java.version}</version></dependency>
         <dependency><groupId>com.github.docker-java</groupId><artifactId>docker-java-transport-httpclient5</artifactId><version>${docker-java.version}</version></dependency>
+        <dependency><groupId>org.apache.commons</groupId><artifactId>commons-compress</artifactId></dependency>
         <dependency>
             <groupId>com.agent</groupId>
             <artifactId>agent-core</artifactId>

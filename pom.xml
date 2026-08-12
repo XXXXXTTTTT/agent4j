@@ -42,6 +42,7 @@
         <httpclient5.version>5.5.1</httpclient5.version>
         <httpcore5.version>5.3.6</httpcore5.version>
         <opentelemetry.version>1.64.0</opentelemetry.version>
+        <commons-compress.version>1.26.2</commons-compress.version>
     </properties>
 
     <dependencyManagement>
@@ -50,6 +51,11 @@
                 <groupId>com.github.docker-java</groupId>
                 <artifactId>docker-java-api</artifactId>
                 <version>${docker-java.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-compress</artifactId>
+                <version>${commons-compress.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.opentelemetry</groupId>

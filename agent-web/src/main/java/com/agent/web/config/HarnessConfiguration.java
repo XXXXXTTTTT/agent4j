@@ -208,7 +208,8 @@ public class HarnessConfiguration {
     McpMaterialPreparationRunner mcpMaterialPreparationRunner(McpRuntimeProperties properties,
                                                                ObjectMapper objectMapper, Clock harnessClock) {
         return new DockerMcpMaterialPreparationRunner(properties.materialRoot(), properties.image(),
-                properties.pythonPreparationImage(), objectMapper, harnessClock);
+                properties.pythonPreparationImage(), properties.maxMaterialBytes(), properties.preparationTimeout(),
+                objectMapper, harnessClock);
     }
 
     /** 将物料下载和安装确认、运行生命周期明确隔离。 */

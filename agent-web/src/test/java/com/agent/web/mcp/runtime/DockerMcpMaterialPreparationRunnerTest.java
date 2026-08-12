@@ -52,6 +52,36 @@ class DockerMcpMaterialPreparationRunnerTest {
         }
     }
 
+    @Test
+    void preparesFixedPythonPackageIntoOfflineMaterialDirectoryWhenExplicitTestImageIsConfigured() throws Exception {
+        String pythonImage = System.getenv("TEST_MCP_PYTHON_PREPARATION_IMAGE");
+        Assumptions.assumeTrue(pythonImage != null && !pythonImage.isBlank(),
+                "未设置 TEST_MCP_PYTHON_PREPARATION_IMAGE，跳过真实 Python MCP 物料准备测试");
+        Assumptions.assumeTrue(DockerClientFactory.instance().isDockerAvailable(),
+                "Docker Engine 不可用，跳过真实 Python MCP 物料准备测试");
+        Path root = Files.createTempDirectory("mcp-python-material-root");
+        McpSourceSnapshot snapshot = new McpSourceSnapshot(UUID.randomUUID(), "mcp-server-fetch", "src/fetch",
+                URI.create("https://example.invalid/fetch"), "0123456789012345678901234567890123456789", Map.of(),
+                "c".repeat(64), "2025.4.7", "fixture", "MIT", "uvx",
+                List.of("mcp-server-fetch==2025.4.7"), "mcp-server-fetch", List.of(), "fixture", Instant.EPOCH);
+        try (DockerMcpMaterialPreparationRunner runner = new DockerMcpMaterialPreparationRunner(root, "node:22-alpine",
+                pythonImage, new ObjectMapper(), Clock.systemUTC())) {
+            var material = runner.prepare(snapshot);
+
+            assertThat(material.directory()).startsWith(root.toRealPath());
+            assertThat(material.command()).isEqualTo("venv/bin/mcp-server-fetch");
+            assertThat(material.arguments()).isEmpty();
+            assertThat(Files.isRegularFile(material.directory().resolve(material.command()))).isTrue();
+            assertThat(Files.isSymbolicLink(material.directory().resolve(material.command()))).isFalse();
+            try (var paths = Files.walk(material.directory())) {
+                assertThat(paths.noneMatch(Files::isSymbolicLink)).isTrue();
+            }
+            assertThat(Files.readString(material.directory().resolve(material.command())))
+                    .startsWith("#!/mcp-material/venv/bin/python\n");
+            assertThat(McpRuntimeMaterialProvider.sha256(material.directory())).isEqualTo(material.sha256());
+        }
+    }
+
     private static McpSourceSnapshot pythonSnapshot() {
         return new McpSourceSnapshot(UUID.randomUUID(), "python", "src/python", URI.create("https://example.invalid/python"),
                 "0123456789012345678901234567890123456789", Map.of(), "a".repeat(64), "1.0.0", "python", "MIT",
