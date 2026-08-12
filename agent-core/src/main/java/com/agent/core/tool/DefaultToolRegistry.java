@@ -145,7 +145,7 @@ public final class DefaultToolRegistry implements ToolRegistry {
                     throw new ToolRegistrationException(definition.name(), "工具 Schema 注册校验失败", exception);
                 }
             }
-            if (batch.isEmpty()) {
+            if (batch.isEmpty() && currentOwnerState == ToolOwnerState.ACTIVE) {
                 return;
             }
             HashMap<String, ToolDefinition> nextDefinitions = new HashMap<>(current.definitions());
@@ -259,19 +259,19 @@ public final class DefaultToolRegistry implements ToolRegistry {
         String argumentsSha256 = sha256(call.arguments());
         ToolDefinition definition;
         String ownerId;
+        boolean ownerDraining;
         synchronized (lifecycleMonitor) {
             RegistrySnapshot current = snapshot;
             definition = current.definitions().get(call.name());
             if (definition == null) {
                 ownerId = null;
+                ownerDraining = false;
             } else {
                 ownerId = current.owners().get(call.name());
-                if (current.ownerStates().get(ownerId) == ToolOwnerState.DRAINING) {
-                    ToolException exception = new ToolException("工具 owner 正在停止: " + ownerId);
-                    return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
-                            NullNode.getInstance(), exception, started, false, argumentsSha256);
+                ownerDraining = current.ownerStates().get(ownerId) == ToolOwnerState.DRAINING;
+                if (!ownerDraining) {
+                    snapshot = current.withInFlight(ownerId, current.inFlight().getOrDefault(ownerId, 0) + 1);
                 }
-                snapshot = current.withInFlight(ownerId, current.inFlight().getOrDefault(ownerId, 0) + 1);
             }
         }
         if (definition == null) {
@@ -279,7 +279,13 @@ public final class DefaultToolRegistry implements ToolRegistry {
             return finish(call, context, Optional.empty(), ToolResultStatus.FAILED,
                     NullNode.getInstance(), exception, started, false, argumentsSha256);
         }
+        if (ownerDraining) {
+            ToolException exception = new ToolException("工具 owner 正在停止: " + ownerId);
+            return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
+                    NullNode.getInstance(), exception, started, false, argumentsSha256);
+        }
 
+        boolean handlerSubmitted = false;
         try {
             try {
                 schemaValidator.validateArguments(definition.inputSchema(), call.arguments());
@@ -335,7 +341,14 @@ public final class DefaultToolRegistry implements ToolRegistry {
                         NullNode.getInstance(), exception, started, false, argumentsSha256);
             }
 
-            Future<JsonNode> future = executor.submit(() -> definition.handler().execute(call, context));
+            Future<JsonNode> future = executor.submit(() -> {
+                try {
+                    return definition.handler().execute(call, context);
+                } finally {
+                    releaseOwnerCall(ownerId);
+                }
+            });
+            handlerSubmitted = true;
             try {
                 JsonNode output = future.get(definition.timeout().toNanos(), TimeUnit.NANOSECONDS);
                 if (output == null || (!output.isObject() && !output.isArray())) {
@@ -360,8 +373,9 @@ public final class DefaultToolRegistry implements ToolRegistry {
                         NullNode.getInstance(), timeout, started, cancellationRequested, argumentsSha256);
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
+                boolean cancellationRequested = future.cancel(true);
                 return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
-                        NullNode.getInstance(), exception, started, future.cancel(true), argumentsSha256);
+                        NullNode.getInstance(), exception, started, cancellationRequested, argumentsSha256);
             } catch (CancellationException exception) {
                 return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
                         NullNode.getInstance(), exception, started, false, argumentsSha256);
@@ -374,7 +388,9 @@ public final class DefaultToolRegistry implements ToolRegistry {
                         NullNode.getInstance(), exception, started, false, argumentsSha256);
             }
         } finally {
-            releaseOwnerCall(ownerId);
+            if (!handlerSubmitted) {
+                releaseOwnerCall(ownerId);
+            }
         }
     }
 

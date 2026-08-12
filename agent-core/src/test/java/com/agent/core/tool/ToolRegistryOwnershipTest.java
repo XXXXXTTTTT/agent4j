@@ -1,6 +1,7 @@
 package com.agent.core.tool;
 
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
@@ -97,6 +98,91 @@ class ToolRegistryOwnershipTest {
                 allowCompletion.countDown();
                 assertThat(running.get(1, TimeUnit.SECONDS).status()).isEqualTo(ToolResultStatus.SUCCEEDED);
             }
+        }
+    }
+
+    @Test
+    void keepsOwnerDrainingUntilTimedOutHandlerIgnoringInterruptActuallyExits() throws Exception {
+        CountDownLatch handlerStarted = new CountDownLatch(1);
+        CountDownLatch allowHandlerExit = new CountDownLatch(1);
+        CountDownLatch handlerExited = new CountDownLatch(1);
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            registry.registerOwned("installation-a", List.of(new ToolDefinition(
+                    "ignoring-interrupt.tool", "忽略中断工具",
+                    JsonNodeFactory.instance.objectNode().put("type", "object"), Set.of(), ToolRiskLevel.LOW,
+                    Duration.ofMillis(20), (call, context) -> {
+                        handlerStarted.countDown();
+                        while (allowHandlerExit.getCount() > 0) {
+                            try {
+                                allowHandlerExit.await();
+                            } catch (InterruptedException ignored) {
+                                // 测试 handler 忽略取消中断，直到显式允许退出。
+                            }
+                        }
+                        handlerExited.countDown();
+                        return JsonNodeFactory.instance.objectNode();
+                    })));
+
+            ToolResult timedOut = registry.execute(call("timeout", "ignoring-interrupt.tool"), context());
+            assertThat(handlerStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(timedOut.status()).isEqualTo(ToolResultStatus.TIMED_OUT);
+            registry.beginDrain("installation-a");
+            registry.unregisterOwned("installation-a", Duration.ofMillis(20));
+            assertThat(registry.find("ignoring-interrupt.tool")).isPresent();
+
+            allowHandlerExit.countDown();
+            assertThat(handlerExited.await(1, TimeUnit.SECONDS)).isTrue();
+            registry.unregisterOwned("installation-a", Duration.ofSeconds(1));
+            assertThat(registry.find("ignoring-interrupt.tool")).isEmpty();
+        }
+    }
+
+    @Test
+    void createsLifecycleForEmptyOwnerRegistration() {
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            registry.registerOwned("empty-installation", List.of());
+
+            registry.beginDrain("empty-installation");
+            registry.unregisterOwned("empty-installation", Duration.ZERO);
+            registry.registerOwned("empty-installation", List.of(definition("after-empty.tool")));
+
+            assertThat(registry.find("after-empty.tool")).isPresent();
+        }
+    }
+
+    @Test
+    void doesNotHoldLifecycleMonitorWhileAuditingDrainedCall() throws Exception {
+        CountDownLatch auditStarted = new CountDownLatch(1);
+        CountDownLatch allowAuditReturn = new CountDownLatch(1);
+        try (DefaultToolRegistry registry = new DefaultToolRegistry(
+                new JacksonToolSchemaValidator(), new DefaultToolAuthorizer(), event -> {
+                    auditStarted.countDown();
+                    try {
+                        if (!allowAuditReturn.await(1, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("审计未收到放行信号");
+                        }
+                    } catch (InterruptedException exception) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("审计等待被中断", exception);
+                    }
+                }, new ObjectMapper(), System::nanoTime)) {
+            registry.registerOwned("installation-a", List.of(definition("drained.tool")));
+            registry.beginDrain("installation-a");
+
+            try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+                Future<ToolResult> rejected = executor.submit(
+                        () -> registry.execute(call("drained", "drained.tool"), context()));
+                assertThat(auditStarted.await(1, TimeUnit.SECONDS)).isTrue();
+
+                Future<?> unregistered = executor.submit(
+                        () -> registry.unregisterOwned("installation-a", Duration.ZERO));
+                assertThat(unregistered.get(500, TimeUnit.MILLISECONDS)).isNull();
+                allowAuditReturn.countDown();
+                assertThat(rejected.get(1, TimeUnit.SECONDS).status()).isEqualTo(ToolResultStatus.FAILED);
+            }
+            assertThat(registry.find("drained.tool")).isEmpty();
+        } finally {
+            allowAuditReturn.countDown();
         }
     }
 
