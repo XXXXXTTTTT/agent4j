@@ -125,6 +125,19 @@ describe('Workbench', () => {
     expect(runs.followRun).toHaveBeenCalledWith('run-2')
   })
 
+  it('展示不属于会话轮次的 governed-cli Run 证据', async () => {
+    render(
+      <Workbench
+        controller={controller({ run: runView({ graphId: 'governed-cli', nextNode: 'ops', status: 'RUNNING' }) })}
+        conversation={conversationController()}
+        onTerminalReady={() => undefined}
+      />,
+    )
+
+    expect(screen.getByText('governed-cli')).toBeVisible()
+    expect(screen.getByText('Checkpoint 2')).toBeVisible()
+  })
+
   it('从工作区侧栏创建并切换工作区', async () => {
     const user = userEvent.setup()
     const createWorkspace = vi.fn(async () => undefined)

@@ -40,6 +40,7 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
   const [reviewOpened, setReviewOpened] = useState(false)
   const belongsToConversation = conversation === undefined
     || controller.run === null
+    || controller.run.graphId === 'governed-cli'
     || conversation.turns.some((turn) => turn.runId === controller.run?.runId)
   const run = belongsToConversation ? controller.run : null
   const history = belongsToConversation ? controller.history : []

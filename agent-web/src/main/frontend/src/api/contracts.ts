@@ -151,6 +151,25 @@ export interface WorkspaceDirectoryListing {
   entries: WorkspaceDirectoryEntry[]
 }
 
+export type CliRiskLevel = 'READ_ONLY' | 'MUTATING' | 'DESTRUCTIVE'
+
+/** 当前工作区中允许执行的受治理 CLI 命令。 */
+export interface GovernedCliCommand {
+  name: string
+  executable: string
+  fixedArguments: string[]
+  riskLevel: CliRiskLevel
+  requiredCapabilities: string[]
+  maxArguments: number
+}
+
+/** 创建受治理 CLI Run 的精确请求体。 */
+export interface GovernedCliRunCommand {
+  commandName: string
+  arguments: string[]
+  timeoutSeconds: number
+}
+
 export type ConversationStatus = 'ACTIVE' | 'ARCHIVED'
 
 export interface Conversation {
