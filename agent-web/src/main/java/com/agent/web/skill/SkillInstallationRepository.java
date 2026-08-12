@@ -9,10 +9,9 @@ import java.util.UUID;
 public interface SkillInstallationRepository {
     SkillInstallationRecord confirmSkill(SkillSnapshotRecord snapshot, SkillInstallationRecord installation,
                                          com.agent.web.capability.CapabilityManagementAuditEvent auditEvent);
-    SkillSnapshotRecord saveSnapshot(SkillSnapshotRecord snapshot);
-    SkillInstallationRecord saveInstallation(SkillInstallationRecord installation);
     List<SkillInstallationRecord> findInstallations(String actorUserId, UUID workspaceId);
-    boolean deleteInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId, long expectedVersion);
+    boolean removeInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId, long expectedVersion,
+                               com.agent.web.capability.CapabilityManagementAuditEvent auditEvent);
 
     SkillInstallationRecord transition(
             UUID skillInstallationId, long expectedVersion, SkillInstallationStatus from,

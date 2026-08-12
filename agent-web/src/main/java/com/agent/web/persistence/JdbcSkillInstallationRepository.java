@@ -36,17 +36,16 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
         Objects.requireNonNull(snapshot, "snapshot 不能为空");
         Objects.requireNonNull(installation, "installation 不能为空");
         return Objects.requireNonNull(transactions.execute(status -> {
-            saveSnapshot(snapshot);
-            saveInstallation(installation);
+            saveSnapshotInTransaction(snapshot);
+            saveInstallationInTransaction(installation);
+            insertAudit(auditEvent);
             return findInstallation(installation.skillInstallationId()).orElseThrow();
         }), "Skill 聚合事务返回值不能为空");
     }
 
-    @Override
-    public SkillSnapshotRecord saveSnapshot(SkillSnapshotRecord snapshot) {
+    private SkillSnapshotRecord saveSnapshotInTransaction(SkillSnapshotRecord snapshot) {
         Objects.requireNonNull(snapshot, "snapshot 不能为空");
-        return Objects.requireNonNull(transactions.execute(status -> {
-            jdbc.sql("""
+        jdbc.sql("""
                     insert into agent_skill_snapshots (
                         skill_snapshot_id, repository_url, repository, commit_sha, blob_sha, skill_path,
                         license, content_sha256, summary, requested_tool_names, content, created_at
@@ -68,23 +67,11 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
                     .param("content", snapshot.content())
                     .param("createdAt", timestamp(snapshot.createdAt()))
                     .update();
-            return jdbc.sql("""
-                    select skill_snapshot_id, repository_url, repository, commit_sha, blob_sha, skill_path,
-                           license, content_sha256, summary, requested_tool_names, content, created_at
-                    from agent_skill_snapshots
-                    where repository = :repository and commit_sha = :commitSha
-                      and blob_sha = :blobSha and skill_path = :path and content_sha256 = :contentSha256
-                    """)
-                    .param("repository", snapshot.repository()).param("commitSha", snapshot.commitSha())
-                    .param("blobSha", snapshot.blobSha()).param("path", snapshot.path())
-                    .param("contentSha256", snapshot.contentSha256()).query(this::mapSnapshot).single();
-        }), "Skill 快照保存事务返回值不能为空");
+        return jdbc.sql("select skill_snapshot_id, repository_url, repository, commit_sha, blob_sha, skill_path, license, content_sha256, summary, requested_tool_names, content, created_at from agent_skill_snapshots where repository = :repository and commit_sha = :commitSha and blob_sha = :blobSha and skill_path = :path and content_sha256 = :contentSha256").param("repository", snapshot.repository()).param("commitSha", snapshot.commitSha()).param("blobSha", snapshot.blobSha()).param("path", snapshot.path()).param("contentSha256", snapshot.contentSha256()).query(this::mapSnapshot).single();
     }
 
-    @Override
-    public SkillInstallationRecord saveInstallation(SkillInstallationRecord installation) {
+    private SkillInstallationRecord saveInstallationInTransaction(SkillInstallationRecord installation) {
         Objects.requireNonNull(installation, "installation 不能为空");
-        return Objects.requireNonNull(transactions.execute(status -> {
             jdbc.sql("""
                     insert into agent_skill_installations (
                         skill_installation_id, skill_snapshot_id, scope, workspace_id, actor_user_id,
@@ -101,12 +88,7 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
                     .param("confirmedAt", timestamp(installation.confirmedAt())).param("updatedAt", timestamp(installation.updatedAt()))
                     .param("version", installation.version())
                     .update();
-            return jdbc.sql("""
-                    select skill_installation_id, skill_snapshot_id, scope, workspace_id, actor_user_id,
-                           status, confirmation_token_sha256, created_at, confirmed_at, updated_at, version
-                    from agent_skill_installations where skill_installation_id = :id
-                    """).param("id", installation.skillInstallationId()).query(this::mapInstallation).single();
-        }), "Skill 安装保存事务返回值不能为空");
+        return findInstallation(installation.skillInstallationId()).orElse(installation);
     }
 
     @Override
@@ -123,14 +105,25 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
     }
 
     @Override
-    public boolean deleteInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId, long expectedVersion) {
-        return jdbc.sql("""
+    public boolean removeInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId, long expectedVersion, com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+        return Objects.requireNonNull(transactions.execute(status -> {
+            int deleted = jdbc.sql("""
                 delete from agent_skill_installations
                   where skill_installation_id = :id and actor_user_id = :actorUserId
                   and version = :expectedVersion
+                  and status in ('APPROVED', 'REJECTED', 'REMOVED')
                   and ((scope = 'WORKSPACE' and workspace_id = :workspaceId) or scope = 'USER_GLOBAL')
                 """).param("id", skillInstallationId).param("actorUserId", actorUserId)
-                .param("workspaceId", workspaceId).param("expectedVersion", expectedVersion).update() > 0;
+                .param("workspaceId", workspaceId).param("expectedVersion", expectedVersion).update();
+            if (deleted != 1) return false;
+            insertAudit(auditEvent);
+            return true;
+        }), "Skill 删除聚合事务返回值不能为空");
+    }
+
+    private void insertAudit(com.agent.web.capability.CapabilityManagementAuditEvent event) {
+        jdbc.sql("insert into agent_capability_management_audit (audit_id,event_type,actor_user_id,workspace_id,installation_id,skill_id,run_id,source_commit_sha,result,occurred_at,operation_id,from_status,to_status,detail_sha256) values (:id,:type,:actor,:workspace,:installation,:skill,:run,:sha,:result,:at,:op,:from,:to,:detail)")
+                .param("id", UUID.randomUUID()).param("type", event.eventType()).param("actor", event.actorUserId()).param("workspace", event.workspaceId()).param("installation", event.installationId()).param("skill", event.skillId()).param("run", event.runId()).param("sha", event.sourceCommitSha()).param("result", event.result()).param("at", timestamp(event.occurredAt())).param("op", event.operationId()).param("from", event.fromStatus()).param("to", event.toStatus()).param("detail", event.detailSha256()).update();
     }
 
     @Override

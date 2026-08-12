@@ -42,18 +42,16 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
     public McpInstallationRecord confirmInstallation(McpInstallationCommand command) {
         Objects.requireNonNull(command, "command 不能为空");
         return Objects.requireNonNull(transactions.execute(status -> {
-            saveSnapshot(command.snapshot());
-            saveInstallation(command.installation());
+            McpSourceSnapshot snapshot = saveSnapshotInTransaction(command.snapshot());
+            saveInstallationInTransaction(withSnapshotId(command.installation(), snapshot.snapshotId()));
             insertAudit(command.auditEvent());
             return findInstallation(command.installation().installationId()).orElseThrow();
         }), "MCP 聚合事务返回值不能为空");
     }
 
-    @Override
-    public McpSourceSnapshot saveSnapshot(McpSourceSnapshot snapshot) {
+    private McpSourceSnapshot saveSnapshotInTransaction(McpSourceSnapshot snapshot) {
         Objects.requireNonNull(snapshot, "snapshot 不能为空");
-        return Objects.requireNonNull(transactions.execute(status -> {
-            jdbc.sql("""
+        jdbc.sql("""
                     insert into agent_mcp_installation_snapshots (
                         snapshot_id, server_key, repository_path, source_url, commit_sha,
                         blob_shas, metadata_sha256, version, description, license, command,
@@ -81,16 +79,13 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                     .param("environmentNames", json(snapshot.environmentVariableNames()))
                     .param("readmeSummary", snapshot.readmeSummary())
                     .param("createdAt", timestamp(snapshot.createdAt()))
-                    .update();
-            return findSnapshot(snapshot.serverKey(), snapshot.commitSha(), snapshot.metadataSha256()).orElse(snapshot);
-        }), "MCP 源快照保存事务返回值不能为空");
+                .update();
+        return findSnapshot(snapshot.serverKey(), snapshot.commitSha(), snapshot.metadataSha256()).orElse(snapshot);
     }
 
-    @Override
-    public McpInstallationRecord saveInstallation(McpInstallationRecord installation) {
+    private McpInstallationRecord saveInstallationInTransaction(McpInstallationRecord installation) {
         Objects.requireNonNull(installation, "installation 不能为空");
-        return Objects.requireNonNull(transactions.execute(status -> {
-            jdbc.sql("""
+        jdbc.sql("""
                     insert into agent_mcp_installations (
                         installation_id, snapshot_id, scope, workspace_id, actor_user_id, status,
                         confirmation_token_sha256, created_at, confirmed_at, updated_at,
@@ -121,9 +116,17 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                     .param("containerId", installation.containerId())
                     .param("runtimeError", installation.runtimeError())
                     .param("version", installation.version())
-                    .update();
-            return findInstallation(installation.installationId()).orElse(installation);
-        }), "MCP 安装保存事务返回值不能为空");
+                .update();
+        return findInstallation(installation.installationId()).orElse(installation);
+    }
+
+    private static McpInstallationRecord withSnapshotId(McpInstallationRecord installation, UUID snapshotId) {
+        return new McpInstallationRecord(installation.installationId(), snapshotId, installation.scope(),
+                installation.workspaceId(), installation.actorUserId(), installation.status(),
+                installation.confirmationTokenSha256(), installation.createdAt(), installation.confirmedAt(),
+                installation.updatedAt(), installation.riskLevel(), installation.requiredCapabilities(),
+                installation.workspaceMountMode(), installation.networkMode(), installation.runtimeImage(),
+                installation.containerId(), installation.runtimeError(), installation.version());
     }
 
     @Override
@@ -147,19 +150,26 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
     }
 
     @Override
-    public boolean deleteInstallation(UUID installationId, String actorUserId, UUID workspaceId, long expectedVersion) {
-        return jdbc.sql("""
+    public boolean removeInstallation(UUID installationId, String actorUserId, UUID workspaceId, long expectedVersion,
+                                      com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+        return Objects.requireNonNull(transactions.execute(status -> {
+            int deleted = jdbc.sql("""
                 delete from agent_mcp_installations
                 where installation_id = :installationId
                   and actor_user_id = :actorUserId
                   and version = :expectedVersion
+                  and status in ('STOPPED', 'FAILED', 'REJECTED')
                   and ((scope = 'WORKSPACE' and workspace_id = :workspaceId) or scope = 'USER_GLOBAL')
                 """)
                 .param("installationId", installationId)
                 .param("actorUserId", actorUserId)
                 .param("workspaceId", workspaceId)
                 .param("expectedVersion", expectedVersion)
-                .update() > 0;
+                .update();
+            if (deleted != 1) return false;
+            insertAudit(auditEvent);
+            return true;
+        }), "MCP 删除聚合事务返回值不能为空");
     }
 
     @Override
