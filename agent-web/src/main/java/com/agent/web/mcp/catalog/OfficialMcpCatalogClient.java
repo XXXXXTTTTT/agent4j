@@ -70,7 +70,7 @@ public final class OfficialMcpCatalogClient {
             Snapshot result = refreshed == null ? cached : refreshed;
             return result == null ? new CatalogResult(List.of(), Map.of()) : result.result();
         } catch (Exception failure) {
-            if (cached != null && !cached.expired()) return cached.result();
+            if (cached != null) return cached.result();
             throw new IllegalStateException("CATALOG_UNAVAILABLE", failure);
         }
     }
@@ -91,7 +91,7 @@ public final class OfficialMcpCatalogClient {
             if (!"dir".equals(text(service, "type"))) continue;
             String id = text(service, "name");
             try { records.add(readService(commit, service)); }
-            catch (RuntimeException failure) { errors.put(id, failure.getMessage()); }
+            catch (Exception failure) { errors.put(id, failureMessage(failure)); }
         }
         return new Snapshot(new CatalogResult(List.copyOf(records), Map.copyOf(errors)), System.nanoTime(), rootResponse.etag(), ttl.toNanos());
     }
@@ -131,11 +131,18 @@ public final class OfficialMcpCatalogClient {
     }
 
     private Metadata packageMetadata(String source) throws Exception {
-        JsonNode node = objectMapper.readTree(source);
+        JsonNode node;
+        try { node = objectMapper.readTree(source); }
+        catch (Exception failure) { throw new IllegalArgumentException("invalid package.json", failure); }
+        if (node == null || !node.isObject()) throw new IllegalArgumentException("invalid package.json");
         String name = text(node, "name");
         String version = text(node, "version");
         JsonNode bin = node.path("bin");
-        if (!bin.isObject() || bin.isEmpty() || bin.fields().next().getValue().asText().isBlank()) throw new IllegalArgumentException("missing package bin");
+        if (!bin.isObject() || bin.isEmpty()) throw new IllegalArgumentException("missing package bin");
+        if (bin.size() != 1) throw new IllegalArgumentException("package bin must contain exactly one entry");
+        var entry = bin.fields().next();
+        if (!entry.getValue().isTextual() || entry.getValue().asText().isBlank()) throw new IllegalArgumentException("missing package bin");
+        if (!expectedBinKey(name).equals(entry.getKey())) throw new IllegalArgumentException("package bin key does not match package identity");
         return new Metadata(version, node.path("description").asText(""), node.path("license").asText(""), "npx", List.of("-y", name + "@" + version));
     }
 
@@ -153,7 +160,6 @@ public final class OfficialMcpCatalogClient {
         HttpResponse response = exchange.exchange(apiBase.resolve(path.startsWith("/") ? path.substring(1) : path), timeout, maxBytes, etag);
         if (response.statusCode() == 429 || (response.statusCode() == 403 && response.rateLimitRemaining() != null && response.rateLimitRemaining() == 0)) throw new IllegalStateException("GitHub rate limited");
         if (response.statusCode() != 200 && response.statusCode() != 304) throw new IllegalStateException("GitHub HTTP " + response.statusCode());
-        if (response.body() != null && response.body().getBytes(StandardCharsets.UTF_8).length > maxBytes) throw new IllegalArgumentException("response too large");
         return response;
     }
 
@@ -162,6 +168,13 @@ public final class OfficialMcpCatalogClient {
     private Map<String, String> blobs(JsonNode files) { Map<String, String> values = new LinkedHashMap<>(); for (JsonNode file : files) if ("file".equals(file.path("type").asText())) values.put(text(file, "name"), text(file, "sha")); return Map.copyOf(values); }
     private String text(JsonNode node, String field) { String value = node.path(field).asText(); return required(value, field); }
     private String summary(String readme) { return readme.lines().filter(line -> !line.isBlank()).findFirst().orElse(""); }
+    private String failureMessage(Exception failure) { String message = failure.getMessage(); return message == null || message.isBlank() ? failure.getClass().getSimpleName() : message; }
+    private String expectedBinKey(String packageName) {
+        int slash = packageName.lastIndexOf('/');
+        String unscopedName = slash < 0 ? packageName : packageName.substring(slash + 1);
+        if (unscopedName.isBlank()) throw new IllegalArgumentException("invalid package name");
+        return "mcp-" + unscopedName;
+    }
     private String license(String value) { if (value == null || value.isBlank()) return ""; String trimmed = value.trim(); if (!trimmed.startsWith("{")) return unquote(trimmed); int marker = trimmed.indexOf("text"); int quote = marker < 0 ? -1 : trimmed.indexOf('"', marker); int end = quote < 0 ? -1 : trimmed.indexOf('"', quote + 1); return quote >= 0 && end > quote ? trimmed.substring(quote + 1, end) : ""; }
     private String sha256(byte[] bytes) throws Exception { return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)); }
     private static String unquote(String value) { return value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"") ? value.substring(1, value.length() - 1) : value; }
