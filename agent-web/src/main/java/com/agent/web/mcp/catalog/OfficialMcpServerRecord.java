@@ -18,6 +18,7 @@ public record OfficialMcpServerRecord(
         String license,
         String command,
         List<String> arguments,
+        String launchBin,
         List<String> environmentVariableNames,
         String readmeSummary) {
     public OfficialMcpServerRecord {
@@ -32,6 +33,7 @@ public record OfficialMcpServerRecord(
         license = Objects.requireNonNullElse(license, "");
         command = required(command, "command");
         arguments = List.copyOf(Objects.requireNonNull(arguments, "arguments 不能为空"));
+        launchBin = required(launchBin, "launchBin");
         environmentVariableNames = List.copyOf(Objects.requireNonNull(environmentVariableNames, "environmentVariableNames 不能为空"));
         readmeSummary = Objects.requireNonNullElse(readmeSummary, "");
     }

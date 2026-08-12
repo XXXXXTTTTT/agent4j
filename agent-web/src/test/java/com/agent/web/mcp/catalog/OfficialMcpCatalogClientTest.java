@@ -39,6 +39,7 @@ class OfficialMcpCatalogClientTest {
         assertThat(record.metadataSha256()).isEqualTo(sha256(packageJson));
         assertThat(record.command()).isEqualTo("npx");
         assertThat(record.arguments()).containsExactly("-y", "@modelcontextprotocol/server-everything@2.0.0");
+        assertThat(record.launchBin()).isEqualTo("mcp-server-everything");
         assertThat(record.readmeSummary()).isEqualTo("# Everything");
     }
 
@@ -102,6 +103,39 @@ class OfficialMcpCatalogClientTest {
     }
 
     @Test
+    void isolatesMalformedContentsServiceEntry() {
+        String packageJson = "{\"name\":\"@modelcontextprotocol/server-everything\",\"version\":\"2.0.0\",\"bin\":{\"mcp-server-everything\":\"dist/index.js\"}}";
+        var exchange = new Exchange(Map.of(
+                "/commits/release", "{\"sha\":\"" + COMMIT + "\"}",
+                "/contents?ref=" + COMMIT, contents("src", "src", "root", "dir"),
+                "/contents/src?ref=" + COMMIT, "[{\"type\":\"dir\",\"name\":\"broken\",\"path\":\"src/broken\"}," + content("everything", "src/everything", "tree-one", "dir") + "]",
+                "/contents/src/everything?ref=" + COMMIT, contents("package.json", "src/everything/package.json", "blob-ok", "file"),
+                "/contents/src/everything/package.json?ref=" + COMMIT, encoded(packageJson, "blob-ok")
+        ));
+
+        var result = client(exchange, 100_000, Duration.ZERO).fetchCatalogResult();
+
+        assertThat(result.records()).extracting(OfficialMcpServerRecord::serviceId).containsExactly("everything");
+        assertThat(result.errors()).containsEntry("broken", "sha 不能为空");
+    }
+
+    @Test
+    void exposesImmutableCacheMetadata() {
+        var client = client(catalogExchange(), 100_000, Duration.ofSeconds(30));
+
+        var result = client.fetchCatalogResult();
+
+        assertThat(result.repository()).isEqualTo("modelcontextprotocol/servers");
+        assertThat(result.commitSha()).isEqualTo(COMMIT);
+        assertThat(result.fetchedAt()).isNotNull();
+        assertThat(result.expiresAt()).isAfter(result.fetchedAt());
+        assertThat(result.etag()).isEqualTo("root-etag");
+        assertThat(result.status()).isEqualTo("FRESH");
+        assertThatThrownBy(() -> result.records().add(null)).isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> result.errors().put("x", "y")).isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
     void keepsVerifiedServiceWhenAnotherServiceHasInvalidJson() {
         String packageJson = "{\"name\":\"@modelcontextprotocol/server-everything\",\"version\":\"2.0.0\",\"bin\":{\"mcp-server-everything\":\"dist/index.js\"}}";
         var exchange = serviceExchange(packageJson, "{invalid-json");
@@ -139,27 +173,46 @@ class OfficialMcpCatalogClientTest {
     @Test
     void keepsVerifiedServiceWhenAnotherServiceExceedsDecodedContentLimit() {
         String packageJson = "{\"name\":\"@modelcontextprotocol/server-everything\",\"version\":\"2.0.0\",\"bin\":{\"mcp-server-everything\":\"dist/index.js\"}}";
-        var exchange = serviceExchange(packageJson, packageJson + "too-large");
+        var exchange = serviceExchange(packageJson, packageJson + "x".repeat(1_000));
 
-        var result = client(exchange, packageJson.length(), Duration.ZERO).fetchCatalogResult();
+        var result = client(exchange, 500, Duration.ZERO).fetchCatalogResult();
 
         assertThat(result.records()).extracting(OfficialMcpServerRecord::serviceId).containsExactly("everything");
         assertThat(result.errors()).containsEntry("broken", "response too large");
     }
 
     @Test
-    void keepsVerifiedServiceWhenAnotherServiceHasMultipleOrMismatchedBin() {
+    void keepsVerifiedServiceWhenAnotherServiceHasMultipleBin() {
         String valid = "{\"name\":\"@modelcontextprotocol/server-everything\",\"version\":\"2.0.0\",\"bin\":{\"mcp-server-everything\":\"dist/index.js\"}}";
         String multiple = "{\"name\":\"@modelcontextprotocol/server-broken\",\"version\":\"2.0.0\",\"bin\":{\"mcp-server-broken\":\"dist/index.js\",\"mcp-server-other\":\"dist/other.js\"}}";
         var multipleResult = client(serviceExchange(valid, multiple), 100_000, Duration.ZERO).fetchCatalogResult();
-        String mismatched = "{\"name\":\"@modelcontextprotocol/server-broken\",\"version\":\"2.0.0\",\"bin\":{\"mcp-server-other\":\"dist/index.js\"}}";
-        var mismatchResult = client(serviceExchange(valid, mismatched), 100_000, Duration.ZERO).fetchCatalogResult();
         String invalid = "{\"name\":\"@modelcontextprotocol/server-broken\",\"version\":\"2.0.0\",\"bin\":\"dist/index.js\"}";
         var invalidResult = client(serviceExchange(valid, invalid), 100_000, Duration.ZERO).fetchCatalogResult();
 
         assertThat(multipleResult.errors()).containsEntry("broken", "package bin must contain exactly one entry");
-        assertThat(mismatchResult.errors()).containsEntry("broken", "package bin key does not match package identity");
         assertThat(invalidResult.errors()).containsEntry("broken", "missing package bin");
+    }
+
+    @Test
+    void acceptsExactUniquePackageBinWithoutDerivingItsName() {
+        String valid = "{\"name\":\"@modelcontextprotocol/server-everything\",\"version\":\"2.0.0\",\"bin\":{\"mcp-server-everything\":\"dist/index.js\"}}";
+        String nonDerived = "{\"name\":\"@modelcontextprotocol/server-broken\",\"version\":\"2.0.0\",\"bin\":{\"actual-launch-entry\":\"dist/index.js\"}}";
+
+        var result = client(serviceExchange(valid, nonDerived), 100_000, Duration.ZERO).fetchCatalogResult();
+
+        assertThat(result.errors()).doesNotContainKey("broken");
+        assertThat(result.records()).filteredOn(record -> record.serviceId().equals("broken"))
+                .singleElement().extracting(OfficialMcpServerRecord::launchBin).isEqualTo("actual-launch-entry");
+    }
+
+    @Test
+    void enforcesResponseLimitForCustomHttpExchange() {
+        var exchange = new Exchange(Map.of("/commits/release", "{\"sha\":\"" + COMMIT + "\"}"));
+        exchange.override("/commits/release", "x".repeat(64));
+
+        var client = client(exchange, 16, Duration.ZERO);
+
+        assertThatThrownBy(client::fetchCatalog).hasMessageContaining("CATALOG_UNAVAILABLE");
     }
 
     @Test
