@@ -151,9 +151,17 @@ public final class RunExceptionHandler {
     }
 
     /** 映射 Skill 安装的乐观锁与生命周期冲突。 */
-    @ExceptionHandler({SkillInstallationConflictException.class, McpInstallationConflictException.class})
+    @ExceptionHandler(SkillInstallationConflictException.class)
     public ResponseEntity<ProblemDetail> skillInstallationConflict(
             SkillInstallationConflictException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);
+    }
+
+    /** 映射 MCP 安装的乐观锁与生命周期冲突。 */
+    @ExceptionHandler(McpInstallationConflictException.class)
+    public ResponseEntity<ProblemDetail> mcpInstallationConflict(
+            McpInstallationConflictException exception,
             ServerWebExchange exchange) {
         return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);
     }
