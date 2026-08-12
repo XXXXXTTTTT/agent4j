@@ -38,7 +38,7 @@ class OfficialMcpCatalogClientTest {
         assertThat(record.blobShas()).containsEntry("package.json", "blob-package");
         assertThat(record.metadataSha256()).isEqualTo(sha256(packageJson));
         assertThat(record.command()).isEqualTo("npx");
-        assertThat(record.arguments()).containsExactly("-y", "@modelcontextprotocol/server-everything");
+        assertThat(record.arguments()).containsExactly("-y", "@modelcontextprotocol/server-everything@2.0.0");
         assertThat(record.readmeSummary()).isEqualTo("# Everything");
     }
 
@@ -57,7 +57,7 @@ class OfficialMcpCatalogClientTest {
 
         assertThat(record.license()).isEqualTo("MIT");
         assertThat(record.command()).isEqualTo("uvx");
-        assertThat(record.arguments()).containsExactly("mcp-server-time");
+        assertThat(record.arguments()).containsExactly("mcp-server-time==0.6.2");
     }
 
     @Test
@@ -75,7 +75,7 @@ class OfficialMcpCatalogClientTest {
         assertThat(exchange.etags).contains("root-etag");
         exchange.notModified = false;
         exchange.fail = true;
-        assertThat(client.fetchCatalog()).isEmpty();
+        assertThatThrownBy(client::fetchCatalog).hasMessageContaining("CATALOG_UNAVAILABLE");
     }
 
     @Test
@@ -86,17 +86,45 @@ class OfficialMcpCatalogClientTest {
         assertThatThrownBy(client::fetchCatalog).hasMessageContaining("CATALOG_UNAVAILABLE");
     }
 
+    @Test
+    void keepsVerifiedServiceWhenAnotherServiceHasInvalidMetadata() {
+        String packageJson = "{\"name\":\"@modelcontextprotocol/server-everything\",\"version\":\"2.0.0\",\"bin\":{\"server\":\"dist/index.js\"}}";
+        var exchange = new Exchange(Map.of(
+                "/commits/release", "{\"sha\":\"" + COMMIT + "\"}",
+                "/contents?ref=" + COMMIT, contents("src", "src", "root", "dir"),
+                "/contents/src?ref=" + COMMIT, "[" + content("everything", "src/everything", "tree-one", "dir") + "," + content("broken", "src/broken", "tree-two", "dir") + "]",
+                "/contents/src/everything?ref=" + COMMIT, contents("package.json", "src/everything/package.json", "blob-ok", "file"),
+                "/contents/src/everything/package.json?ref=" + COMMIT, encoded(packageJson, "blob-ok"),
+                "/contents/src/broken?ref=" + COMMIT, "[]"
+        ));
+
+        var result = new OfficialMcpCatalogClient(exchange, new ObjectMapper(), URI.create("https://api.github.test/"), "release", Duration.ofSeconds(2), 100_000, Duration.ZERO).fetchCatalogResult();
+
+        assertThat(result.records()).extracting(OfficialMcpServerRecord::serviceId).containsExactly("everything");
+        assertThat(result.errors()).containsKey("broken");
+    }
+
+    @Test
+    void treatsRateLimited403AsCatalogUnavailable() {
+        var exchange = new Exchange(Map.of("/commits/release", "{\"sha\":\"" + COMMIT + "\"}"));
+        exchange.rateLimited403 = true;
+
+        var client = new OfficialMcpCatalogClient(exchange, new ObjectMapper(), URI.create("https://api.github.test/"), "release", Duration.ofSeconds(2), 100_000, Duration.ZERO);
+
+        assertThatThrownBy(client::fetchCatalog).hasMessageContaining("CATALOG_UNAVAILABLE");
+    }
+
     private static String contents(String name, String path, String sha, String type) { return "[" + content(name, path, sha, type) + "]"; }
     private static String content(String name, String path, String sha, String type) { return "{\"name\":\"" + name + "\",\"path\":\"" + path + "\",\"sha\":\"" + sha + "\",\"size\":0,\"git_url\":\"x\",\"html_url\":\"x\",\"url\":\"x\",\"download_url\":null,\"type\":\"" + type + "\",\"_links\":{\"self\":\"x\"}}"; }
     private static String encoded(String source, String sha) { return "{\"type\":\"file\",\"sha\":\"" + sha + "\",\"encoding\":\"base64\",\"content\":\"" + Base64.getEncoder().encodeToString(source.getBytes(StandardCharsets.UTF_8)) + "\"}"; }
     private static String sha256(String source) throws Exception { return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(source.getBytes(StandardCharsets.UTF_8))); }
 
     private static final class Exchange implements OfficialMcpCatalogClient.HttpExchange {
-        private final Map<String, String> values; private final List<String> paths = new ArrayList<>(); private final List<String> etags = new ArrayList<>(); private boolean fail; private boolean notModified; private boolean rateLimited;
+        private final Map<String, String> values; private final List<String> paths = new ArrayList<>(); private final List<String> etags = new ArrayList<>(); private boolean fail; private boolean notModified; private boolean rateLimited; private boolean rateLimited403;
         private Exchange(Map<String, String> values) { this.values = values; }
         @Override public OfficialMcpCatalogClient.HttpResponse exchange(URI uri, Duration timeout, int maxBytes, String etag) {
             paths.add(uri.getPath() + (uri.getQuery() == null ? "" : "?" + uri.getQuery())); if (etag != null) etags.add(etag);
-            if (fail) throw new IllegalStateException("offline"); if (rateLimited) return new OfficialMcpCatalogClient.HttpResponse(429, "{}", null);
+            if (fail) throw new IllegalStateException("offline"); if (rateLimited) return new OfficialMcpCatalogClient.HttpResponse(429, "{}", null); if (rateLimited403) return new OfficialMcpCatalogClient.HttpResponse(403, "{}", null, 0);
             if (notModified && uri.getPath().equals("/contents")) return new OfficialMcpCatalogClient.HttpResponse(304, "", "root-etag");
             return new OfficialMcpCatalogClient.HttpResponse(200, values.get(uri.getPath() + (uri.getQuery() == null ? "" : "?" + uri.getQuery())), "root-etag");
         }

@@ -9,6 +9,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse.BodyHandlers;
 import java.nio.charset.StandardCharsets;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -54,15 +56,21 @@ public final class OfficialMcpCatalogClient {
 
     /** 在 TTL 内返回缓存；过期刷新失败时返回旧快照。 */
     public List<OfficialMcpServerRecord> fetchCatalog() {
+        return fetchCatalogResult().records();
+    }
+
+    /** 获取目录并隔离单个服务解析错误。 */
+    public CatalogResult fetchCatalogResult() {
         Snapshot cached = snapshot;
-        if (cached != null && !cached.expired()) return cached.records();
+        if (cached != null && !cached.expired()) return cached.result();
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             Future<Snapshot> future = executor.submit((Callable<Snapshot>) () -> refresh(cached));
             Snapshot refreshed = future.get();
             if (refreshed != null) snapshot = refreshed;
-            return (refreshed == null ? cached : refreshed).records();
+            Snapshot result = refreshed == null ? cached : refreshed;
+            return result == null ? new CatalogResult(List.of(), Map.of()) : result.result();
         } catch (Exception failure) {
-            if (cached != null) return cached.records();
+            if (cached != null && !cached.expired()) return cached.result();
             throw new IllegalStateException("CATALOG_UNAVAILABLE", failure);
         }
     }
@@ -72,17 +80,20 @@ public final class OfficialMcpCatalogClient {
         HttpResponse rootResponse = request("/contents?ref=" + commit, cached == null ? null : cached.rootEtag());
         if (rootResponse.statusCode() == 304) {
             if (cached == null) throw new IllegalStateException("unexpected root 304");
-            return new Snapshot(cached.records(), System.nanoTime(), cached.rootEtag(), ttl.toNanos());
+            return new Snapshot(cached.result(), System.nanoTime(), cached.rootEtag(), ttl.toNanos());
         }
         JsonNode root = array(rootResponse.body(), "root contents");
         JsonNode src = directory(root, "src");
         JsonNode services = array(request("/contents/" + text(src, "path") + "?ref=" + commit, null).body(), "src contents");
         List<OfficialMcpServerRecord> records = new ArrayList<>();
+        Map<String, String> errors = new LinkedHashMap<>();
         for (JsonNode service : services) {
             if (!"dir".equals(text(service, "type"))) continue;
-            records.add(readService(commit, service));
+            String id = text(service, "name");
+            try { records.add(readService(commit, service)); }
+            catch (RuntimeException failure) { errors.put(id, failure.getMessage()); }
         }
-        return new Snapshot(List.copyOf(records), System.nanoTime(), rootResponse.etag(), ttl.toNanos());
+        return new Snapshot(new CatalogResult(List.copyOf(records), Map.copyOf(errors)), System.nanoTime(), rootResponse.etag(), ttl.toNanos());
     }
 
     private String resolveCommit() throws Exception {
@@ -104,7 +115,7 @@ public final class OfficialMcpCatalogClient {
         String readme = blobs.containsKey("README.md") ? readFile(commit, path, "README.md", blobs.get("README.md")).text() : "";
         return new OfficialMcpServerRecord(id, path,
                 URI.create("https://github.com/modelcontextprotocol/servers/tree/" + commit + "/" + path),
-                commit, blobs, sha256(metadata.text()), parsed.version(), parsed.description(), parsed.license(),
+                commit, blobs, sha256(metadata.bytes()), parsed.version(), parsed.description(), parsed.license(),
                 parsed.command(), parsed.arguments(), List.of(), summary(readme));
     }
 
@@ -115,7 +126,8 @@ public final class OfficialMcpCatalogClient {
         String encoded = text(node, "content");
         byte[] bytes = Base64.getMimeDecoder().decode(encoded);
         if (bytes.length > maxBytes) throw new IllegalArgumentException("response too large");
-        return new FileContent(new String(bytes, StandardCharsets.UTF_8));
+        try { return new FileContent(bytes, StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes)).toString()); }
+        catch (CharacterCodingException failure) { throw new IllegalArgumentException("content is not valid UTF-8", failure); }
     }
 
     private Metadata packageMetadata(String source) throws Exception {
@@ -123,8 +135,8 @@ public final class OfficialMcpCatalogClient {
         String name = text(node, "name");
         String version = text(node, "version");
         JsonNode bin = node.path("bin");
-        if (!bin.isObject() || bin.isEmpty()) throw new IllegalArgumentException("missing package bin");
-        return new Metadata(version, node.path("description").asText(""), node.path("license").asText(""), "npx", List.of("-y", name));
+        if (!bin.isObject() || bin.isEmpty() || bin.fields().next().getValue().asText().isBlank()) throw new IllegalArgumentException("missing package bin");
+        return new Metadata(version, node.path("description").asText(""), node.path("license").asText(""), "npx", List.of("-y", name + "@" + version));
     }
 
     private Metadata pythonMetadata(String source) {
@@ -133,13 +145,13 @@ public final class OfficialMcpCatalogClient {
         Map<String, String> scripts = tables.values("project.scripts");
         String name = unquote(required(project.get("name"), "project.name"));
         String version = unquote(required(project.get("version"), "project.version"));
-        if (!scripts.containsKey(name)) throw new IllegalArgumentException("missing project script: " + name);
-        return new Metadata(version, unquote(project.getOrDefault("description", "")), license(project.get("license")), "uvx", List.of(name));
+        if (!scripts.containsKey(name) || unquote(scripts.get(name)).isBlank()) throw new IllegalArgumentException("missing project script: " + name);
+        return new Metadata(version, unquote(project.getOrDefault("description", "")), license(project.get("license")), "uvx", List.of(name + "==" + version));
     }
 
     private HttpResponse request(String path, String etag) {
         HttpResponse response = exchange.exchange(apiBase.resolve(path.startsWith("/") ? path.substring(1) : path), timeout, maxBytes, etag);
-        if (response.statusCode() == 429) throw new IllegalStateException("GitHub rate limited");
+        if (response.statusCode() == 429 || (response.statusCode() == 403 && response.rateLimitRemaining() != null && response.rateLimitRemaining() == 0)) throw new IllegalStateException("GitHub rate limited");
         if (response.statusCode() != 200 && response.statusCode() != 304) throw new IllegalStateException("GitHub HTTP " + response.statusCode());
         if (response.body() != null && response.body().getBytes(StandardCharsets.UTF_8).length > maxBytes) throw new IllegalArgumentException("response too large");
         return response;
@@ -151,16 +163,17 @@ public final class OfficialMcpCatalogClient {
     private String text(JsonNode node, String field) { String value = node.path(field).asText(); return required(value, field); }
     private String summary(String readme) { return readme.lines().filter(line -> !line.isBlank()).findFirst().orElse(""); }
     private String license(String value) { if (value == null || value.isBlank()) return ""; String trimmed = value.trim(); if (!trimmed.startsWith("{")) return unquote(trimmed); int marker = trimmed.indexOf("text"); int quote = marker < 0 ? -1 : trimmed.indexOf('"', marker); int end = quote < 0 ? -1 : trimmed.indexOf('"', quote + 1); return quote >= 0 && end > quote ? trimmed.substring(quote + 1, end) : ""; }
-    private String sha256(String text) throws Exception { return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8))); }
+    private String sha256(byte[] bytes) throws Exception { return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)); }
     private static String unquote(String value) { return value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"") ? value.substring(1, value.length() - 1) : value; }
     private static String required(String value, String field) { if (value == null || value.isBlank()) throw new IllegalArgumentException(field + " 不能为空"); return value; }
     private static Duration positive(Duration value, String field) { if (value == null || value.isNegative() || value.isZero()) throw new IllegalArgumentException(field + " 必须大于零"); return value; }
 
     public interface HttpExchange { HttpResponse exchange(URI uri, Duration timeout, int maxBytes, String etag); }
-    public record HttpResponse(int statusCode, String body, String etag) {}
-    private record FileContent(String text) {}
+    public record CatalogResult(List<OfficialMcpServerRecord> records, Map<String, String> errors) { public CatalogResult { records = List.copyOf(records); errors = Map.copyOf(errors); } }
+    public record HttpResponse(int statusCode, String body, String etag, Integer rateLimitRemaining) { public HttpResponse(int statusCode, String body, String etag) { this(statusCode, body, etag, null); } }
+    private record FileContent(byte[] bytes, String text) {}
     private record Metadata(String version, String description, String license, String command, List<String> arguments) {}
-    private record Snapshot(List<OfficialMcpServerRecord> records, long createdNanos, String rootEtag, long ttlNanos) { boolean expired() { return ttlNanos <= 0 || System.nanoTime() - createdNanos >= ttlNanos; } }
+    private record Snapshot(CatalogResult result, long createdNanos, String rootEtag, long ttlNanos) { boolean expired() { return ttlNanos <= 0 || System.nanoTime() - createdNanos >= ttlNanos; } }
 
     /** 仅支持本目录使用的 TOML table、字符串和值对象，避免跨 table 的键匹配。 */
     private static final class TomlTables {
@@ -186,7 +199,8 @@ public final class OfficialMcpCatalogClient {
                 if (etag != null) request.header("If-None-Match", etag);
                 var response = client.send(request.build(), BodyHandlers.ofInputStream());
                 String body = readBounded(response.body(), maxBytes);
-                return new HttpResponse(response.statusCode(), body, response.headers().firstValue("ETag").orElse(null));
+                Integer remaining = response.headers().firstValue("X-RateLimit-Remaining").map(Integer::valueOf).orElse(null);
+                return new HttpResponse(response.statusCode(), body, response.headers().firstValue("ETag").orElse(null), remaining);
             } catch (Exception failure) { throw new IllegalStateException("GitHub request failed", failure); }
         }
         private String readBounded(InputStream input, int maxBytes) throws Exception { try (input) { byte[] bytes = input.readNBytes(maxBytes + 1); if (bytes.length > maxBytes) throw new IllegalArgumentException("response too large"); return new String(bytes, StandardCharsets.UTF_8); } }
