@@ -21,6 +21,7 @@ HTTP/HTTPS MCP 配置继续由现有 `McpGatewayProperties`、`McpRuntime` 提�
 - `ToolRegistry` 当前没有撤销接口；本期增加按 `ownerId` 原子注册、停用和撤销端口，保留现有 `register/registerAll/find/list/execute` 行为。`ownerId` 对 MCP 精确等于 `installationId.toString()`，内置工具使用保留 owner `builtin`。
 - `CliCommandCatalog` 的真实字段为 `name`、`executable`、`fixedArguments`、`riskLevel`、`requiredCapabilities`，其 `authorize(CliCommandIntent, CliAuthorizationContext)` 是唯一授权入口。
 - `AgentRunService.start` 只能启动 `GraphRegistry` 中已注册的精确 graphId。现有生产图精确为 `code-agent`，因此 CLI 必须增加独立 graphId `governed-cli`，不得把 CLI 请求伪装成普通对话。
+- 通用 `POST /api/runs` 当前接受调用方提供的 `graphId` 与完整 `initialState`，不能作为外部 Skill 的身份授权入口；它不得启动 `code-agent` 或 `governed-cli`。这两个图只能分别通过受信任的会话/`POST /api/runs/code-agent` 入口和 `POST /api/workspaces/{workspaceId}/cli/runs` 启动。
 - `ConversationComposer.tsx` 当前只有 textarea、模型组 select 和普通会话提交；新增命令面板必须在 `Workbench.tsx` 的真实挂载路径中显示。
 - `DockerCommandExecutor` 当前通过 `createContainerCmd` 执行一次性 `bash -lc`，只 follow stdout/stderr 并在 `finally` 删除容器；持续 MCP stdio 必须新增独立运行器，不得修改该类的一次性语义。
 - `McpStdioTransport` 已经通过 `McpStdioProcess` 消费三个标准流；缺口是使用 docker-java create/start/attach API 实现该进程端口，而不是再实现 JSON-RPC transport。
@@ -90,11 +91,21 @@ Skill 记录字段：`skillId`、`repositoryUrl`、`repository`、`commitSha`、
 
 安装预览展示来源、commit/blob SHA、许可证、摘要、声明工具和风险。确认后保存不可变快照。Skill 只能引用本地已注册且通过 `ToolRegistry` 能力/风险策略的工具；禁止 Skill 创建工具、执行 shell、覆盖系统 prompt 或访问安装目录之外的文件。提示词注入、未知 front matter、未知工具名均拒绝安装。
 
-现有 `GitHubSkillContent` 只返回摘要与工具名，无法构造 `SkillDefinition`。本期扩展其受控解析结果为精确字段：front matter `name`、`version`、`description`、`triggers`、`tools` 和正文 `promptFragment`。字段集合仍是 allowlist；`version` 必须通过 `SkillDefinition` 的语义版本规则，`triggers` 和 `tools` 为字符串列表，正文继续通过 `DefaultPromptInjectionDetector`。旧的无 `version/triggers` 快照不得运行，状态迁移为 `REJECTED` 并写原因审计，不能补默认值。
+现有 `GitHubSkillContent` 只返回摘要与工具名，无法构造 `SkillDefinition`。本期扩展其受控解析结果为精确字段：front matter `name`、`version`、`description`、`triggers`、`tools` 和正文 `promptFragment`。字段集合仍是 allowlist；`version` 必须通过 `SkillDefinition` 的语义版本规则，`triggers` 和 `tools` 为字符串列表，正文继续通过 `DefaultPromptInjectionDetector`。V7 的 `agent_skill_snapshots.content` 继续是完整固定源码的持久化真源，不为上述派生字段新增数据库列；`GitHubSkillSnapshot` 和 `SkillSnapshotRecord` 保留现有持久化字段，安装预览及运行时从固定 content 使用同一个 parser 重建 `SkillDefinition`，并交叉校验 `description == summary`、`tools == requestedToolNames`。旧的无 `version/triggers` 快照不得运行，状态迁移为 `REJECTED` 并写原因审计，不能补默认值。
 
-新增 `InstalledSkillCatalogProvider.resolve(String actorUserId, UUID workspaceId)`：查询 `APPROVED` 且属于 `(actorUserId, workspaceId)` 的工作区安装和同一 `actorUserId` 的用户全局安装，加载对应不可变快照，重新校验 SHA-256，并把内置 Skill 与外部 `SkillDefinition` 一次性构造成 `SkillCatalog`。名称或 trigger 冲突、工具未注册、快照校验失败时拒绝整份外部目录并写审计，内置目录仍可用。
+core 端口精确为 `SkillCatalogProvider.resolve(String actorUserId, UUID workspaceId)`，返回 `SkillCatalogSnapshot`。web 实现 `InstalledSkillCatalogProvider`：查询 `APPROVED` 且属于 `(actorUserId, workspaceId)` 的工作区安装和同一 `actorUserId` 的用户全局安装，加载对应不可变快照，重新校验 SHA-256，并把内置 Skill 与外部 `SkillDefinition` 一次性构造成 `SkillCatalogSnapshot`。repository 的聚合返回类型精确为 `InstalledSkillRecord(SkillInstallationRecord installation, SkillSnapshotRecord snapshot)`；查询按 `installation.updatedAt`、`installation.skillInstallationId` 升序返回，另提供 `Instant installationsUpdatedAt(String actorUserId, UUID workspaceId)`，其值是同一查询范围内安装记录的最大 `updatedAt`，无记录时为 `Instant.EPOCH`。名称或 trigger 冲突、工具未注册、快照校验失败时拒绝整份外部目录并写 `SKILL_CATALOG_REJECTED` 管理审计，内置目录仍可用；`detailSha256` 只覆盖稳定原因码和受影响安装 id，不写 Skill 正文。
 
-`ToolAgentNode` 不再持有固定 `SkillCatalog`，改持有 `SkillCatalogProvider`。执行时从现有状态精确读取 `PlannerNode.USER_ID_KEY` (`planner.userId`) 和 `conversation.workspaceId`，解析当前请求目录。`SkillCatalogProvider` 只按 `(actorUserId, workspaceId, installationsUpdatedAt, toolRegistryRevision)` 缓存不可变目录；安装/卸载、MCP 工具注册/撤销时使对应缓存失效。不得把 A 用户或 A 工作区的 Skill 摘要、正文或工具暴露给另一个上下文。
+身份绑定发生在 Web 的受信任 Run 启动边界，而不是 `ToolAgentNode` 内。`ConversationService.submitTurn` 使用当前 `Actor.userId()` 和已经通过 `WorkspaceAccessService.requireWorkspace(..., OPERATOR)` 返回的 `WorkspaceRecord.workspaceId()` 调用 provider。`CodeAgentStartRequest` 的字段精确改为 `task`、必填 `workspaceId`、`repositoryId`、`reviewerUrl`，删除 `workspacePath`；`RunController.startCodeAgent` 使用请求中的 `workspaceId` 调用 `WorkspaceAccessService.requireWorkspace(workspaceId, actor.userId(), OPERATOR)`，只使用返回记录的 `workspacePath/repositoryId/workspaceId` 构造状态和解析 Skill，旧 `workspacePath` 字段因未知字段而拒绝。通用 `RunController.start(StartRunRequest)` 明确拒绝 `code-agent` 和 `governed-cli`。任何调用方提供的 `planner.userId`、`conversation.workspaceId` 或 `skill.catalogSnapshot` 都不参与授权并被受信任入口覆盖。
+
+冻结目录写入 `AgentState.variables` 的精确状态键为 `ToolAgentNode.SKILL_CATALOG_SNAPSHOT_KEY` (`skill.catalogSnapshot`)。值是 `SkillCatalogSnapshotCodec` 生成的 UTF-8 规范 JSON 字符串，顶层字段严格为 `schemaVersion`、`actorUserId`、`workspaceId`、`installationsUpdatedAt`、`toolRegistryRevision`、`definitions`、`snapshotSha256`：
+
+```json
+{"schemaVersion":1,"actorUserId":"user-1","workspaceId":"00000000-0000-0000-0000-000000000001","installationsUpdatedAt":"2026-08-12T00:00:00Z","toolRegistryRevision":7,"definitions":[{"name":"review-java","version":"1.2.0","description":"审查 Java 变更","triggers":["审查 Java"],"toolNames":["code.patch"],"promptFragment":"只审查当前工作区。"}],"snapshotSha256":"<64 位小写十六进制>"}
+```
+
+`definitions` 允许为空并按 `name` 升序；每个 definition 的字段顺序严格为示例顺序，`triggers` 和 `toolNames` 保留已校验快照中的顺序；时间使用 `Instant.toString()`；JSON 对象键不接受未知字段。`snapshotSha256` 是移除该字段后其余顶层对象规范 JSON UTF-8 字节的 SHA-256。`SkillCatalogSnapshotCodec.decode` 必须重新计算摘要、校验顶层 actor/workspace 与本次已绑定状态中的 `planner.userId`/`conversation.workspaceId` 精确相等，再用当前 `ToolRegistry` 构造只读 `SkillCatalog`；definitions 为空时返回“无 Skill”结果，不调用要求非空列表的 `SkillCatalog` 构造器。快照包含 Skill 定义，不包含工具 handler、secret、工作区路径或安装目录。
+
+`ToolAgentNode` 不再持有固定 `SkillCatalog` 或在执行时查询 repository；它只从 `skill.catalogSnapshot` 解码本 Run 的不可变目录。checkpoint 创建后安装、卸载或目录缓存失效都不得改变该 Run 的提示词和暴露工具集合；进程重启恢复时继续解码 checkpoint 中同一 JSON，禁止重新调用 provider。工具定义与执行 handler 不冻结到状态中：每次调用仍按快照中的精确 `toolNames` 通过当前 `ToolRegistry.find/list/execute` 解析，工具已 drain 或撤销时本 Run 必须失败，不能使用旧 handler。`InstalledSkillCatalogProvider` 只按 `(actorUserId, workspaceId, installationsUpdatedAt, toolRegistryRevision)` 缓存冻结快照；安装/卸载、MCP 工具注册/撤销通过时间戳或 revision 形成新键，不覆盖已写入 checkpoint 的值。
 
 Skill 正文只追加在现有 `ToolAgentNode.systemPrompt` 的“已激活 Skill”受限区，不能替换系统 prompt。`exposedDefinitions` 仍只暴露已激活 Skill 声明的工具；每次执行仍经 `ToolRegistry.execute` 的 schema、参数、capability、审批、输出脱敏与审计链。外部 Skill 不拥有独立的 secret、文件、网络或命令执行权限。
 
@@ -112,9 +123,11 @@ repository 不再暴露由 service 串联的 `saveSnapshot` + `saveInstallation`
 
 现有 `CliCommandDefinition` 的精确字段为：`name`、`executable`、`fixedArguments`、`riskLevel`、`requiredCapabilities`。本期不扩展该核心 record，也不引入未经现有源码验证的描述、命名参数或参数类型字段。命令目录 API 返回上述五个字段，并增加由服务根据 `CliCommandIntent` 上限返回的 `maxArguments=64`。前端按 `riskLevel` 展示审批状态：`READ_ONLY` 为自动允许，`MUTATING` 为等待用户批准；`DESTRUCTIVE` 不出现在首期目录。`fixedArguments` 是不可变的字符串 token 列表，按定义顺序渲染在 executable 之后。
 
-CLI Run 请求字段精确为：`commandName`、`arguments`、`timeoutSeconds`。其中 `arguments` 是与 `CliCommandIntent.arguments` 相同的有序 `List<String>`；每个元素都是一个完整 token，不允许 null、空 token、控制字符或 Shell 控制字符（`;`、`&`、`|`、`<`、`>`、反引号、`$`），最多 64 个元素，服务不得把它解释为 Shell 片段。请求拒绝 `approval`、`shell`、`bashCommand`、未声明字段和工作区外路径。服务使用当前 `WorkspaceAccessService` 返回的 `workspacePath` 和 `WorkspaceTerminalTargetResolver` 构造 `CliCommandIntent`，并把唯一授权入口交给 `CliCommandCatalog.authorize`。
+CLI Run 请求字段精确为：`commandName`、`arguments`、`timeoutSeconds`。其中 `arguments` 是与 `CliCommandIntent.arguments` 相同的有序 `List<String>`；每个元素都是一个完整 token，不允许 null、空 token、控制字符或 Shell 控制字符（`;`、`&`、`|`、`<`、`>`、反引号、`$`），最多 64 个元素，服务不得把它解释为 Shell 片段。`timeoutSeconds` 必须为 1 至 600 的整数。请求拒绝 `approval`、`shell`、`bashCommand`、未声明字段和工作区外路径。服务使用当前 `WorkspaceAccessService` 返回的 `workspacePath` 和 `WorkspaceTerminalTargetResolver` 构造 `CliCommandIntent`，并把唯一授权入口交给 `CliCommandCatalog.authorize`。
 
-专用 graphId 精确为 `governed-cli`，图只注册现有 `ops` 节点：入口为 `ops`，执行完成后到 `StateGraph.END`。创建 Run 前写入以下已存在的状态变量：`OpsNode.COMMAND_NAME_KEY` (`ops.commandName`)、`OpsNode.COMMAND_ARGUMENTS_KEY` (`ops.commandArguments`，JSON 字符串数组)、`CoderNode.WORKSPACE_PATH_KEY` (`coder.workspacePath`) 和 `PlannerNode.REQUIRED_CAPABILITIES_KEY` (`planner.requiredCapabilities`，由命令定义的 `requiredCapabilities` 按 `RequiredCapability` 枚举声明顺序连接为逗号分隔名称)。进入 `ops` 前由 `CliApprovalInterruptPolicy.evaluate` 调用目录授权：`READ_ONLY` 直接运行；`MUTATING` 产生 `RunStatus.WAITING_APPROVAL`；目录不得注册 `DESTRUCTIVE` 命令。中断详情使用现有 `InterruptRequest` 字段，至少包含 `commandName`、`commandArguments`、渲染后的 `command`、`riskLevel`、`commandSha256` 和 `authorizationReason`。批准/拒绝只能调用现有 `POST /api/runs/{runId}/approval`，提交 `ApprovalRequest { decision, expectedVersion, reason, variableUpdates }` 并由 `AgentRunService.decide` 处理；本期 `variableUpdates` 必须为空。批准恢复 `ops`，拒绝得到 `RunStatus.REJECTED`。日志继续由 `RunTerminalController` 的 `/api/runs/{runId}/logs` 和 Trace `/api/runs/{runId}/events` 提供。
+专用 graphId 精确为 `governed-cli`，图只注册现有 `ops` 节点：入口为 `ops`，执行完成后到 `StateGraph.END`。创建 Run 前写入状态变量：`OpsNode.COMMAND_NAME_KEY` (`ops.commandName`)、`OpsNode.COMMAND_ARGUMENTS_KEY` (`ops.commandArguments`，JSON 字符串数组)、新增 `OpsNode.COMMAND_TIMEOUT_SECONDS_KEY` (`ops.commandTimeoutSeconds`，十进制整数字符串)、`CoderNode.WORKSPACE_PATH_KEY` (`coder.workspacePath`) 和 `PlannerNode.REQUIRED_CAPABILITIES_KEY` (`planner.requiredCapabilities`，由命令定义的 `requiredCapabilities` 按 `RequiredCapability` 枚举声明顺序连接为逗号分隔名称)。`CliApprovalInterruptPolicy.parse` 必须从 `ops.commandTimeoutSeconds` 构造 `Duration.ofSeconds`，重新执行 1 至 600 校验，并把同一 `Duration` 放入最终 `CliCommandIntent`；不得再用构造器中的 `ProductionAgentProperties.commandTimeout()` 覆盖请求值。构造器固定 timeout 只保留给没有状态字段的非 `governed-cli` 兼容路径；`governed-cli` 缺少或篡改该字段时失败，不回退默认值。
+
+进入 `ops` 前由 `CliApprovalInterruptPolicy.evaluate` 调用目录授权：`READ_ONLY` 直接运行；`MUTATING` 产生 `RunStatus.WAITING_APPROVAL`。`CliCommandController.list` 与 `start` 都必须拒绝 `CliRiskLevel.DESTRUCTIVE`：列表过滤，直接按名称提交时返回稳定错误，不能只依赖前端隐藏。中断详情使用现有 `InterruptRequest` 字段，至少包含 `commandName`、`commandArguments`、渲染后的 `command`、`riskLevel`、`commandSha256`、`timeoutSeconds` 和 `authorizationReason`。批准/拒绝只能调用现有 `POST /api/runs/{runId}/approval`，提交 `ApprovalRequest { decision, expectedVersion, reason, variableUpdates }` 并由 `AgentRunService.decide` 处理；本期 `variableUpdates` 必须为空，现有通用 `ApprovalDialog` 对 `governed-cli` 必须隐藏“修改”动作。批准恢复 `ops`，拒绝得到 `RunStatus.REJECTED`。日志继续由 `RunTerminalController` 的 `/api/runs/{runId}/logs` 和 Trace `/api/runs/{runId}/events` 提供，CLI E2E 必须用同一 `runId` 断言审批、终端日志与 Trace。
 
 ## 8. 精确管理 API
 
@@ -137,7 +150,7 @@ CLI Run 请求字段精确为：`commandName`、`arguments`、`timeoutSeconds`�
 
 Skill 区显示当前工作区与用户全局的已安装列表、`APPROVED/REJECTED/REMOVED`、来源 commit、工具声明和“已进入当前 Agent”状态。卸载后下一轮对话不得出现该 Skill；进行中的 Run 保留启动时解析出的不可变目录快照，避免中途 prompt/工具集合漂移。
 
-测试必须覆盖 DTO 精确字段、工作区权限、预览无副作用、固定 SHA/ETag/TTL/限流、Docker 启停与恢复、stdio 并发帧/通知/退出、按安装撤销、Skill 供应链拒绝、CLI 审批和前端挂载。
+测试必须覆盖 DTO 精确字段、工作区权限、预览无副作用、固定 SHA/ETag/TTL/限流、Docker 启停与恢复、stdio 并发帧/通知/退出、按安装撤销、Skill 供应链拒绝、伪造 Run 身份状态拒绝、Skill Run 冻结与 checkpoint 恢复、CLI 请求超时贯穿执行链、`DESTRUCTIVE` 过滤、`MUTATING` 批准/拒绝、同一 Run 的终端日志/Trace 和前端真实挂载。
 
 真实 EDD 使用仓库已有入口：
 

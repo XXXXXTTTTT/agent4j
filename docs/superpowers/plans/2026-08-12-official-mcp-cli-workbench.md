@@ -108,21 +108,42 @@
 
 **Files:**
 - Modify: `agent-web/src/main/java/com/agent/web/skill/GitHubSkillContent.java`
+- Modify: `agent-web/src/main/java/com/agent/web/skill/GitHubSkillCatalogClient.java`
 - Modify: `agent-web/src/main/java/com/agent/web/skill/SkillSnapshotRecord.java`
 - Modify: `agent-web/src/main/java/com/agent/web/skill/SkillInstallationRepository.java`
+- Create: `agent-web/src/main/java/com/agent/web/skill/InstalledSkillRecord.java`
 - Create: `agent-core/src/main/java/com/agent/core/skill/SkillCatalogProvider.java`
+- Create: `agent-core/src/main/java/com/agent/core/skill/SkillCatalogSnapshot.java`
+- Create: `agent-core/src/main/java/com/agent/core/skill/SkillCatalogSnapshotCodec.java`
 - Create: `agent-web/src/main/java/com/agent/web/skill/InstalledSkillCatalogProvider.java`
 - Modify: `agent-core/src/main/java/com/agent/core/nodes/ToolAgentNode.java`
+- Modify: `agent-web/src/main/java/com/agent/web/conversation/ConversationService.java`
+- Modify: `agent-web/src/main/java/com/agent/web/controller/CodeAgentStartRequest.java`
+- Modify: `agent-web/src/main/java/com/agent/web/controller/RunController.java`
 - Modify: `agent-web/src/main/java/com/agent/web/config/ProductionGraphConfiguration.java`
+- Modify: `agent-web/src/main/java/com/agent/web/persistence/JdbcSkillInstallationRepository.java`
+- Modify: `agent-web/src/main/frontend/src/api/runApi.ts`
+- Test: `agent-web/src/test/java/com/agent/web/skill/GitHubSkillCatalogClientTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/skill/GitHubSkillInstallationServiceTest.java`
 - Test: `agent-web/src/test/java/com/agent/web/skill/InstalledSkillCatalogProviderTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/persistence/JdbcSkillInstallationRepositoryTest.java`
 - Test: `agent-core/src/test/java/com/agent/core/nodes/ToolAgentNodeTest.java`
+- Test: `agent-core/src/test/java/com/agent/core/skill/SkillCatalogSnapshotCodecTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/conversation/ConversationServiceTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/controller/CodeAgentRunControllerTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/controller/RunControllerTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/RunRecoveryIntegrationTest.java`
+- Test: `agent-web/src/main/frontend/src/api/runApi.test.ts`
 
-- [ ] 扩展受控 SKILL.md parser 测试：只接受 `name/version/description/triggers/tools`，正文作为 promptFragment；未知字段、非法 semver、重复 trigger、提示词注入、未注册工具全部拒绝。
-- [ ] repository 增加一次查询当前 actor 的 WORKSPACE APPROVED 与 USER_GLOBAL APPROVED 安装及快照；不返回其他用户或其他工作区记录。
-- [ ] 实现 `InstalledSkillCatalogProvider.resolve(actorUserId, workspaceId)`：校验 content SHA，组合内置与已安装 definition，冲突时隔离外部目录并审计；缓存键含 actor、workspace、安装更新时间和 `ToolRegistry.revision()`。
-- [ ] `ToolAgentNode` 用 provider 读取精确状态键 `planner.userId` 和 `conversation.workspaceId`；Run 启动后持有不可变目录快照，安装/卸载不改变进行中的提示词和工具集。
-- [ ] 测试 A 用户/A 工作区 Skill 不出现在 B 上下文；卸载后下一 Run 不再发现；Skill 激活只暴露声明工具且调用仍经过 ToolRegistry 治理。
-- [ ] 运行 `mvn -pl agent-web -am -Dtest=InstalledSkillCatalogProviderTest,ToolAgentNodeTest,SkillMcpIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`，预期全部 PASS。
+- [ ] 扩展受控 SKILL.md parser 测试：只接受 `name/version/description/triggers/tools`，解析结果精确保留这五项和正文 `promptFragment`；未知字段、非法 semver、重复 trigger、重复工具、提示词注入、未注册工具全部拒绝。V7 固定 `content` 继续是持久化真源，安装与运行时使用同一个 parser 重建 definition，并校验 `description == summary`、`tools == requestedToolNames`；不新增派生字段数据库列，不为旧快照补默认版本或 trigger。
+- [ ] 写 PostgreSQL 集成测试后扩展 repository：新增精确聚合 `InstalledSkillRecord(SkillInstallationRecord installation, SkillSnapshotRecord snapshot)`，一次查询当前 actor 的 WORKSPACE APPROVED 与 USER_GLOBAL APPROVED 安装及快照，按 `updatedAt`、`skillInstallationId` 升序，不返回其他用户或工作区；`installationsUpdatedAt(actorUserId, workspaceId)` 返回同一范围最大更新时间，无记录返回 `Instant.EPOCH`。
+- [ ] 写旧快照事务测试：缺少 `version/triggers` 的旧 APPROVED 快照必须使用 expected version 原子迁移为 REJECTED，并在同一事务写 `SKILL_SNAPSHOT_REJECTED`；并发处理只有一次成功，审计失败全部回滚，正文不进入审计。扩展 `GitHubSkillInstallationServiceTest` 证明新确认只保存完整结构化字段。
+- [ ] 在 core 定义精确冻结契约：`SkillCatalogSnapshot` 字段为 `schemaVersion/actorUserId/workspaceId/installationsUpdatedAt/toolRegistryRevision/definitions/snapshotSha256`；`SkillCatalogSnapshotCodec` 按设计第 5 节规范 JSON 排序、编码、摘要和严格解码，拒绝未知字段、身份不一致、摘要不一致和非 `schemaVersion=1`。状态键精确为 `ToolAgentNode.SKILL_CATALOG_SNAPSHOT_KEY` (`skill.catalogSnapshot`)。
+- [ ] 实现 `InstalledSkillCatalogProvider.resolve(actorUserId, workspaceId)`：重新校验 content SHA，组合内置与已安装 definition 并生成冻结快照；缓存键精确包含 actor、workspace、`installationsUpdatedAt` 和 `ToolRegistry.revision()`。名称/trigger 冲突、工具未注册或 SHA 失败时拒绝整份外部目录、保留内置目录，并写不含正文的 `SKILL_CATALOG_REJECTED` 审计。
+- [ ] 把身份绑定移到受信任 Run 启动边界：`ConversationService.submitTurn` 使用当前 Actor 与已授权 `WorkspaceRecord` 解析快照后写入初始状态；把 `CodeAgentStartRequest` 精确改为 `task/workspaceId/repositoryId/reviewerUrl` 并删除 `workspacePath`，`RunController.startCodeAgent` 用必填 workspaceId 执行 OPERATOR 权限校验，只使用返回 `WorkspaceRecord` 的路径、repository id 和 workspace id；旧 `workspacePath` 因未知字段而拒绝。同步修改 `createCodeAgentRun` 和 decoder 测试，只发送 workspaceId。通用 `RunController.start` 拒绝 `code-agent` 和 `governed-cli`。测试调用方伪造 `planner.userId`、`conversation.workspaceId`、`skill.catalogSnapshot` 均不能跨用户或工作区加载 Skill。
+- [ ] 修改 `ToolAgentNode`：不查询 repository，不按执行时状态调用 provider，只严格解码 `skill.catalogSnapshot` 并生成目录；当前 Run 的提示词和工具名集合在 checkpoint 创建时冻结。执行 handler 不冻结，每次仍经当前 `ToolRegistry.find/list/execute`，已 drain/撤销工具必须失败。
+- [ ] 写恢复与时序测试：Run 创建后、tool-agent 执行前卸载，当前 Run 仍使用原快照；下一 Run 不再发现；应用重启从 checkpoint 恢复后不调用 provider；快照工具被撤销时恢复 Run 不使用旧 handler。测试 A 用户/A 工作区摘要、正文和工具均不出现在 B 上下文。
+- [ ] 运行 `mvn -pl agent-web -am -Dtest=GitHubSkillCatalogClientTest,GitHubSkillInstallationServiceTest,JdbcSkillInstallationRepositoryTest,InstalledSkillCatalogProviderTest,ToolAgentNodeTest,SkillCatalogSnapshotCodecTest,ConversationServiceTest,CodeAgentRunControllerTest,RunControllerTest,RunRecoveryIntegrationTest,SkillMcpIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`，预期全部 PASS。
 - [ ] 提交 `feat(skill): load approved installations into agents`。
 
 ### Task 6: 生命周期 UI、端到端与真实 EDD
@@ -140,7 +161,41 @@
 - [ ] 实现安装列表、启动/停止/重试/卸载；仅合法状态显示动作。Skill 列表显示 scope、commit、工具和当前 Agent 可用状态。
 - [ ] 用受控 fixture 镜像完成 Docker E2E：确认安装、启动、真实 tools/list、Agent function call、工具 Trace/Audit、停止后不可调用、应用重启恢复、卸载。
 - [ ] 用两个用户和两个工作区完成 Skill 隔离 E2E；断言激活证据 `skill.active`、`skill.fingerprint` 和工具调用均来自固定快照。
-- [ ] 运行前端 `Set-Location agent-web/src/main/frontend; .\.frontend\node\npm.cmd run test:run`，运行后端 `mvn clean verify`。
 - [ ] 使用已配置 LLM 执行 `pwsh .agent4j/acceptance/run-real-agent.ps1` 与 `mvn -pl agent-eval -am -Dgroups=edd -Dtest=LlmEddTest test`；报告必须有 `modelCallAttempts > 0`、真实 HTTP、MCP tool call、Run/Trace/Audit，缺少配置只能 SKIP。
-- [ ] 运行 `git diff --check` 和 `git status --short`，确认不提交 `.env`、日志、target；完成 Sol high 规格审查与质量复审。
-- [ ] 提交 `feat(web): deliver mcp and skill runtime workbench`。
+- [ ] 提交 `feat(web): deliver mcp and skill lifecycle workbench`。
+
+### Task 7: 受治理 CLI 专用 Run 完整闭环
+
+**Files:**
+- Modify: `agent-core/src/main/java/com/agent/core/nodes/OpsNode.java`
+- Modify: `agent-core/src/main/java/com/agent/core/cli/CliApprovalInterruptPolicy.java`
+- Modify: `agent-web/src/main/java/com/agent/web/controller/CliCommandController.java`
+- Modify: `agent-web/src/main/java/com/agent/web/controller/CliCommandView.java`
+- Modify: `agent-web/src/main/java/com/agent/web/controller/RunController.java`
+- Modify: `agent-web/src/main/frontend/src/components/ConversationComposer.tsx`
+- Modify: `agent-web/src/main/frontend/src/components/ApprovalDialog.tsx`
+- Test: `agent-core/src/test/java/com/agent/core/cli/CliApprovalInterruptPolicyTest.java`
+- Test: `agent-core/src/test/java/com/agent/core/cli/GovernedCliCommandExecutorTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/controller/CliCommandControllerTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/controller/RunControllerTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/RunLifecycleIntegrationTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/terminal/RunTerminalControllerTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/trace/RunTraceControllerTest.java`
+- Test: `agent-web/src/main/frontend/src/api/cliApi.test.ts`
+- Test: `agent-web/src/main/frontend/src/components/ConversationComposer.test.tsx`
+- Test: `agent-web/src/main/frontend/src/components/Workbench.test.tsx`
+- Test: `agent-web/src/test/java/com/agent/web/ProductWorkbenchLifecycleIntegrationTest.java`
+
+- [ ] 先写 core 失败测试，证明 `CliApprovalInterruptPolicy` 从新增 `OpsNode.COMMAND_TIMEOUT_SECONDS_KEY` (`ops.commandTimeoutSeconds`) 读取十进制秒数并原样传到最终 `CommandRequest.timeout()`；缺失、非整数、小于 1、大于 600 都失败，不回退 `ProductionAgentProperties.commandTimeout()`。实现精确状态键并保留非 `governed-cli` 现有构造路径。
+- [ ] 扩展控制器测试：`CliCommandController.start` 把请求 `timeoutSeconds` 写入 `ops.commandTimeoutSeconds`；工作区路径只来自 `WorkspaceAccessService.requireWorkspace(..., OPERATOR)`；调用方不能提交 `approval/shell/bashCommand` 或未知字段。断言 1 秒与 600 秒到 `CliApprovalInterruptPolicy` 生成的 `CliCommandIntent.timeout()` 均不被固定配置覆盖；实际 executor 的 `CommandRequest.timeout()` 由既有 `GovernedCliCommandExecutorTest` 使用该意图验证。
+- [ ] 为 `DESTRUCTIVE` 写 API 边界测试：`GET .../commands` 过滤所有 `CliRiskLevel.DESTRUCTIVE`；直接向 `POST .../runs` 提交其精确名称返回稳定拒绝且不调用 `AgentRunService.start`。前端不能只靠隐藏实现该限制。
+- [ ] 写专用 Run 生命周期集成测试：READ_ONLY 直接完成；MUTATING 创建后到 `RunStatus.WAITING_APPROVAL`，中断详情精确包含 `commandName/commandArguments/command/riskLevel/commandSha256/timeoutSeconds/authorizationReason`；使用现有 `POST /api/runs/{runId}/approval`、空 `variableUpdates` 和 expectedVersion 分别验证批准恢复并完成、拒绝进入 REJECTED、旧 version 冲突。
+- [ ] 修正通用 Run 边界测试：`POST /api/runs` 拒绝 `governed-cli`，确保专用工作区 API 是唯一创建入口；批准接口对 governed-cli 拒绝任何非空 `variableUpdates`。
+- [ ] 写同一 Run 证据集成测试：用一个 MUTATING CLI `runId` 完成批准执行，`/api/runs/{runId}/logs` 返回原始终端片段，`/api/runs/{runId}/events` 返回 WAITING_APPROVAL、节点恢复和终态 Trace；拒绝路径不得产生命令执行日志。
+- [ ] 扩展前端 decoder 与组件测试：slash 菜单只展示后端返回的 READ_ONLY/MUTATING；`timeoutSeconds` 作为 1 至 600 的整数提交；MUTATING 创建后跟随 Run 并展示现有 `ApprovalDialog`。当 `run.graphId === 'governed-cli'` 时审批对话框只显示批准和拒绝，提交 `variableUpdates: {}`，不显示“修改/批准修改”。
+- [ ] 扩展 `ProductWorkbenchLifecycleIntegrationTest` 与 `Workbench.test.tsx`，从真实 `ConversationComposer` 选择 MUTATING 命令，经历 WAITING_APPROVAL、批准、终端日志、Trace、COMPLETED；另一路拒绝到 REJECTED。断言前端挂载路径为现有 `Workbench -> ConversationComposer/ApprovalDialog/TerminalPanel/TraceTimeline`。
+- [ ] 运行 `mvn -pl agent-web -am -Dtest=CliApprovalInterruptPolicyTest,GovernedCliCommandExecutorTest,CliCommandControllerTest,RunControllerTest,RunLifecycleIntegrationTest,RunTerminalControllerTest,RunTraceControllerTest,ProductWorkbenchLifecycleIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`，预期全部 PASS。
+- [ ] 运行 `Set-Location agent-web/src/main/frontend; .\.frontend\node\npm.cmd run test:run -- cliApi.test.ts ConversationComposer.test.tsx Workbench.test.tsx`，预期全部 PASS。
+- [ ] 运行全量前端 `Set-Location agent-web/src/main/frontend; .\.frontend\node\npm.cmd run test:run` 和全量后端 `mvn clean verify`，预期全部 PASS 或只有测试自身声明并打印原因的环境 SKIP。
+- [ ] 运行 `git diff --check` 和 `git status --short`，确认 `ops.commandTimeoutSeconds`、`DESTRUCTIVE`、审批、日志与 Trace 均有对应测试，且不提交 `.env`、日志、target；完成 Sol high 规格审查与质量复审。
+- [ ] 提交 `feat(cli): complete governed run lifecycle`。
