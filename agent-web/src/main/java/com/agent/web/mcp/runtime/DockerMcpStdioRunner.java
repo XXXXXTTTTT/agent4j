@@ -33,6 +33,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.Phaser;
+import java.util.function.Supplier;
 
 /** 通过 Docker 容器运行持续 MCP stdio 服务。 */
 public final class DockerMcpStdioRunner implements AutoCloseable {
@@ -40,6 +44,8 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
     private final DockerClient docker;
     private final ExecutorService cleanupExecutor;
     private final Set<DockerMcpStdioProcess> processes = ConcurrentHashMap.newKeySet();
+    private final ReentrantLock lifecycleLock = new ReentrantLock();
+    private final Phaser cleanupTasks = new Phaser(1);
 
     public DockerMcpStdioRunner() {
         DefaultDockerClientConfig config = DefaultDockerClientConfig.createDefaultConfigBuilder().build();
@@ -70,6 +76,8 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
         PipedOutputStream stdin = null;
         BoundedPipe stdout = null;
         BoundedPipe stderr = null;
+        DockerMcpStdioProcess process = null;
+        ResultCallback.Adapter<Frame> callback = null;
         try {
             PipedInputStream attachInput = new PipedInputStream();
             stdin = new PipedOutputStream(attachInput);
@@ -90,19 +98,13 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
             final PipedOutputStream stdinRef = stdin;
             final BoundedPipe stdoutRef = stdout;
             final BoundedPipe stderrRef = stderr;
-            DockerMcpStdioProcess process = new DockerMcpStdioProcess(
+            process = new DockerMcpStdioProcess(
                     stdout.input(), stdin, stderr.input(),
-                    () -> { cleanup(id, callbackRef.get(), stdinRef, stdoutRef, stderrRef); processes.removeIf(value -> value == processRef.get()); },
-                    (reason, cause) -> cleanupExecutor.execute(() -> {
-                        cleanup(id, callbackRef.get(), stdinRef, stdoutRef, stderrRef);
-                        notifyFailure(failureListener, new McpRuntimeFailureListener.Event(
-                                spec.installationId(), spec.snapshotId(), id, reason, cause));
-                        processes.remove(processRef.get());
-                    }));
+                    () -> { cleanup(id, callbackRef.get(), stdinRef, stdoutRef, stderrRef); processes.removeIf(value -> value == processRef.get()); });
             processRef.set(process);
             processes.add(process);
 
-            ResultCallback.Adapter<Frame> callback = callback(spec, id, process, stdout, stderr);
+            callback = callback(spec, id, process, stdout, stderr, callbackRef, stdinRef, failureListener);
             callbackRef.set(callback);
             docker.attachContainerCmd(id).withFollowStream(true).withStdOut(true).withStdErr(true)
                     .withStdIn(attachInput).exec(callback);
@@ -111,6 +113,8 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
             if (containerId != null) {
                 cleanupSynchronously(containerId);
             }
+            if (process != null) processes.remove(process);
+            close(callback);
             close(stdin);
             close(stdout);
             close(stderr);
@@ -120,7 +124,8 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
 
     private ResultCallback.Adapter<Frame> callback(
             McpDockerLaunchSpec spec, String containerId, DockerMcpStdioProcess process,
-            BoundedPipe stdout, BoundedPipe stderr) {
+            BoundedPipe stdout, BoundedPipe stderr, AtomicReference<ResultCallback.Adapter<Frame>> callbackRef,
+            PipedOutputStream stdin, McpRuntimeFailureListener failureListener) {
         return new ResultCallback.Adapter<>() {
             private long stderrReceived;
             @Override public void onNext(Frame frame) {
@@ -128,34 +133,75 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
                 try {
                     if (frame.getStreamType() == StreamType.STDOUT) {
                         if (payload.length > spec.maxStdoutFrameBytes()) {
-                            process.fail(McpRuntimeFailureListener.Reason.STDOUT_FRAME_LIMIT_EXCEEDED,
+                            completeFailure(process, spec, containerId, callbackRef, stdin, stdout, stderr,
+                                    failureListener, McpRuntimeFailureListener.Reason.STDOUT_FRAME_LIMIT_EXCEEDED,
                                     new IOException("MCP stdout frame 超过上限"));
                         } else if (!stdout.offer(payload)) {
-                            process.fail(McpRuntimeFailureListener.Reason.STDOUT_BUFFER_LIMIT_EXCEEDED,
+                            completeFailure(process, spec, containerId, callbackRef, stdin, stdout, stderr,
+                                    failureListener, McpRuntimeFailureListener.Reason.STDOUT_BUFFER_LIMIT_EXCEEDED,
                                     new IOException("MCP stdout 缓冲超过上限"));
                         }
                     } else if (frame.getStreamType() == StreamType.STDERR) {
                         stderrReceived += payload.length;
                         if (stderrReceived > spec.maxStderrBytes()) {
-                            process.fail(McpRuntimeFailureListener.Reason.STDERR_LIMIT_EXCEEDED,
+                            completeFailure(process, spec, containerId, callbackRef, stdin, stdout, stderr,
+                                    failureListener, McpRuntimeFailureListener.Reason.STDERR_LIMIT_EXCEEDED,
                                     new IOException("MCP stderr 超过上限"));
                         } else if (!stderr.offer(payload)) {
-                            process.fail(McpRuntimeFailureListener.Reason.STREAM_IO_FAILED,
+                            completeFailure(process, spec, containerId, callbackRef, stdin, stdout, stderr,
+                                    failureListener, McpRuntimeFailureListener.Reason.STREAM_IO_FAILED,
                                     new IOException("MCP stderr 管道不可写"));
                         }
                     }
                 } catch (RuntimeException exception) {
-                    process.fail(McpRuntimeFailureListener.Reason.STREAM_IO_FAILED, exception);
+                    completeFailure(process, spec, containerId, callbackRef, stdin, stdout, stderr,
+                            failureListener, McpRuntimeFailureListener.Reason.STREAM_IO_FAILED, exception);
                 }
             }
-            @Override public void onComplete() {
-                cleanupExecutor.execute(() -> process.fail(completionReason(containerId),
-                        new IOException("MCP stdio attach 已结束")));
-            }
+            @Override public void onComplete() { completeCompletion(process, spec, containerId, callbackRef,
+                    stdin, stdout, stderr, failureListener); }
             @Override public void onError(Throwable error) {
-                process.fail(McpRuntimeFailureListener.Reason.ATTACH_DISCONNECTED, error);
+                completeFailure(process, spec, containerId, callbackRef, stdin, stdout, stderr,
+                        failureListener, McpRuntimeFailureListener.Reason.ATTACH_DISCONNECTED, error);
             }
         };
+    }
+
+    private void completeFailure(DockerMcpStdioProcess process, McpDockerLaunchSpec spec,
+            String containerId, AtomicReference<ResultCallback.Adapter<Frame>> callbackRef,
+            PipedOutputStream stdin, BoundedPipe stdout, BoundedPipe stderr,
+            McpRuntimeFailureListener listener, McpRuntimeFailureListener.Reason reason, Throwable cause) {
+        submitFailure(process, spec, containerId, callbackRef, stdin, stdout, stderr, listener, () -> reason, cause);
+    }
+
+    private void completeCompletion(DockerMcpStdioProcess process, McpDockerLaunchSpec spec,
+            String containerId, AtomicReference<ResultCallback.Adapter<Frame>> callbackRef,
+            PipedOutputStream stdin, BoundedPipe stdout, BoundedPipe stderr,
+            McpRuntimeFailureListener listener) {
+        submitFailure(process, spec, containerId, callbackRef, stdin, stdout, stderr, listener,
+                () -> completionReason(containerId), new IOException("MCP stdio attach 已结束"));
+    }
+
+    private void submitFailure(DockerMcpStdioProcess process, McpDockerLaunchSpec spec,
+            String containerId, AtomicReference<ResultCallback.Adapter<Frame>> callbackRef,
+            PipedOutputStream stdin, BoundedPipe stdout, BoundedPipe stderr,
+            McpRuntimeFailureListener listener, Supplier<McpRuntimeFailureListener.Reason> reasonSupplier, Throwable cause) {
+        lifecycleLock.lock();
+        try {
+            if (!process.claimFailure()) return;
+            Runnable failureTask = () -> {
+                try {
+                    McpRuntimeFailureListener.Reason reason = reasonSupplier.get();
+                    cleanup(containerId, callbackRef.get(), stdin, stdout, stderr);
+                    processes.remove(process);
+                    notifyFailure(listener, new McpRuntimeFailureListener.Event(
+                            spec.installationId(), spec.snapshotId(), containerId, reason, cause));
+                } finally { cleanupTasks.arriveAndDeregister(); }
+            };
+            cleanupTasks.register();
+            try { cleanupExecutor.execute(failureTask); }
+            catch (RuntimeException exception) { Thread.startVirtualThread(failureTask); }
+        } finally { lifecycleLock.unlock(); }
     }
 
     private McpRuntimeFailureListener.Reason completionReason(String containerId) {
@@ -223,38 +269,58 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
     }
 
     @Override public void close() {
-        for (DockerMcpStdioProcess process : processes) process.destroy();
-        cleanupExecutor.shutdown();
+        lifecycleLock.lock();
+        try {
+            for (DockerMcpStdioProcess process : processes) process.destroy();
+            cleanupExecutor.shutdown();
+        } finally { lifecycleLock.unlock(); }
         try { if (!cleanupExecutor.awaitTermination(30, TimeUnit.SECONDS)) cleanupExecutor.shutdownNow(); }
         catch (InterruptedException exception) { Thread.currentThread().interrupt(); cleanupExecutor.shutdownNow(); }
+        cleanupTasks.arriveAndAwaitAdvance();
         try { docker.close(); } catch (IOException exception) { throw new IllegalStateException("关闭 Docker 客户端失败", exception); }
     }
 
     private static final class BoundedPipe implements AutoCloseable {
-        private static final byte[] END = new byte[0];
-        private final java.util.concurrent.BlockingQueue<byte[]> chunks = new java.util.concurrent.LinkedBlockingQueue<>();
+        private final java.util.ArrayDeque<byte[]> chunks = new java.util.ArrayDeque<>();
+        private final ReentrantLock lock = new ReentrantLock();
+        private final Condition available = lock.newCondition();
         private final int limit;
         private int unread;
         private boolean closed;
         private BoundedPipe(int limit) { this.limit = limit; }
-        synchronized boolean offer(byte[] payload) {
+        boolean offer(byte[] payload) {
+            lock.lock(); try {
             if (closed || (long) unread + payload.length > limit) return false;
-            unread += payload.length; chunks.offer(Arrays.copyOf(payload, payload.length)); return true;
+            unread += payload.length; chunks.addLast(Arrays.copyOf(payload, payload.length)); available.signal(); return true;
+            } finally { lock.unlock(); }
         }
         InputStream input() { return new InputStream() {
             private byte[] current; private int offset;
             @Override public int read() throws IOException { byte[] one = new byte[1]; int read = read(one, 0, 1); return read < 0 ? -1 : one[0] & 0xff; }
             @Override public int read(byte[] bytes, int off, int len) throws IOException {
+                Objects.checkFromIndexSize(off, len, bytes.length);
                 if (len == 0) return 0;
                 try {
-                    synchronized (BoundedPipe.this) { if (closed) return -1; }
-                    while (current == null || offset == current.length) { synchronized (BoundedPipe.this) { if (closed) return -1; } current = chunks.take(); offset = 0; if (current == END) return -1; }
-                    int count = Math.min(len, current.length - offset); System.arraycopy(current, offset, bytes, off, count); offset += count;
-                    synchronized (BoundedPipe.this) { unread -= count; } return count;
+                    lock.lockInterruptibly();
+                    try {
+                        while (current == null || offset == current.length) {
+                            if (closed) return -1;
+                            while (!closed && chunks.isEmpty()) available.await();
+                            if (closed) return -1;
+                            current = chunks.removeFirst();
+                            offset = 0;
+                        }
+                        int count = Math.min(len, current.length - offset);
+                        System.arraycopy(current, offset, bytes, off, count);
+                        offset += count;
+                        unread -= count;
+                        return count;
+                    }
+                    finally { lock.unlock(); }
                 } catch (InterruptedException exception) { Thread.currentThread().interrupt(); throw new IOException("读取 MCP 输出被中断", exception); }
             }
             @Override public void close() { BoundedPipe.this.close(); }
         }; }
-        @Override public synchronized void close() { if (!closed) { closed = true; chunks.clear(); chunks.offer(END); } }
+        @Override public void close() { lock.lock(); try { closed = true; chunks.clear(); available.signalAll(); } finally { lock.unlock(); } }
     }
 }
