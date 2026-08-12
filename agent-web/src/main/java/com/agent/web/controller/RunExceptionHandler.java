@@ -11,6 +11,7 @@ import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspaceImportService;
 import com.agent.web.mcp.installation.McpInstallationService;
 import com.agent.web.skill.GitHubSkillInstallationService;
+import com.agent.web.skill.SkillInstallationConflictException;
 import com.agent.web.audit.AuditTextRedactor;
 import org.springframework.core.codec.DecodingException;
 import org.springframework.dao.DuplicateKeyException;
@@ -144,6 +145,14 @@ public final class RunExceptionHandler {
     @ExceptionHandler(JdbcModelConfigurationRepository.ModelConfigurationConflictException.class)
     public ResponseEntity<ProblemDetail> modelConfigurationConflict(
             RuntimeException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);
+    }
+
+    /** 映射 Skill 安装的乐观锁与生命周期冲突。 */
+    @ExceptionHandler(SkillInstallationConflictException.class)
+    public ResponseEntity<ProblemDetail> skillInstallationConflict(
+            SkillInstallationConflictException exception,
             ServerWebExchange exchange) {
         return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);
     }

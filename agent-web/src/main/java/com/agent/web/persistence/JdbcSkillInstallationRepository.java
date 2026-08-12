@@ -5,6 +5,7 @@ import com.agent.web.skill.GitHubSkillSnapshot;
 import com.agent.web.skill.SkillInstallationRecord;
 import com.agent.web.skill.SkillInstallationRepository;
 import com.agent.web.skill.SkillInstallationStatus;
+import com.agent.web.skill.SkillInstallationConflictException;
 import com.agent.web.skill.SkillSnapshotRecord;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -118,7 +119,7 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
                   and ((scope = 'WORKSPACE' and workspace_id = :workspaceId) or scope = 'USER_GLOBAL')
                 """).param("id", skillInstallationId).param("actorUserId", actorUserId)
                 .param("workspaceId", workspaceId).param("expectedVersion", expectedVersion).update();
-            if (updated != 1) throw new IllegalStateException("Skill 安装版本或状态冲突");
+            if (updated != 1) throw new SkillInstallationConflictException(skillInstallationId, expectedVersion);
             insertAudit(auditEvent);
             return findInstallation(skillInstallationId).orElseThrow();
         }), "Skill 删除聚合事务返回值不能为空");
@@ -139,7 +140,7 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
                     where skill_installation_id = :id and version = :expectedVersion and status = :from
                     """).param("to", to.name()).param("id", skillInstallationId)
                     .param("expectedVersion", expectedVersion).param("from", from.name()).update();
-            if (updated != 1) throw new IllegalStateException("Skill 安装版本或状态冲突");
+            if (updated != 1) throw new SkillInstallationConflictException(skillInstallationId, expectedVersion);
             return findInstallation(skillInstallationId).orElseThrow();
         }), "Skill 状态迁移事务返回值不能为空");
     }
