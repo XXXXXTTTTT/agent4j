@@ -62,11 +62,11 @@ Skill 记录字段：`skillId`、`repositoryUrl`、`repository`、`commitSha`、
 
 ## 6. CLI 工作台与专用 Run
 
-新增 `GET /api/workspaces/{workspaceId}/cli/commands` 返回：`name`、`description`、`fixedArguments`、`arguments`、`riskLevel`、`requiredCapabilities`、`approvalMode`。为满足该合同，扩展 `CliCommandDefinition` 增加不可变 `description` 和结构化 `arguments`；所有现有构造调用与生产命令定义同步迁移。
+现有 `CliCommandDefinition` 的精确字段为：`name`、`executable`、`fixedArguments`、`riskLevel`、`requiredCapabilities`。本期不扩展该核心 record，也不引入未经现有源码验证的描述、命名参数或参数类型字段。命令目录 API 返回上述五个字段，并增加由服务根据 `CliCommandIntent` 上限返回的 `maxArguments=64`。前端按 `riskLevel` 展示审批状态：`READ_ONLY` 为自动允许，`MUTATING` 为等待用户批准；`DESTRUCTIVE` 不出现在首期目录。`fixedArguments` 是不可变的字符串 token 列表，按定义顺序渲染在 executable 之后。
 
-新增 `POST /api/workspaces/{workspaceId}/cli/runs` 请求字段：`commandName`、`arguments`、`timeoutSeconds`、`approval`。拒绝 `shell`、`bashCommand`、未声明字段和工作区外路径。服务构造 `CliCommandIntent`，使用当前 `WorkspaceAccessService` 返回的 `workspacePath` 和 `WorkspaceTerminalTargetResolver`，调用 `CliCommandCatalog.authorize`。
+CLI Run 请求字段精确为：`commandName`、`arguments`、`timeoutSeconds`。其中 `arguments` 是与 `CliCommandIntent.arguments` 相同的有序 `List<String>`；每个元素都是一个完整 token，不允许 null、空 token、控制字符或 Shell 控制字符（`;`、`&`、`|`、`<`、`>`、反引号、`$`），最多 64 个元素，服务不得把它解释为 Shell 片段。请求拒绝 `approval`、`shell`、`bashCommand`、未声明字段和工作区外路径。服务使用当前 `WorkspaceAccessService` 返回的 `workspacePath` 和 `WorkspaceTerminalTargetResolver` 构造 `CliCommandIntent`，并把唯一授权入口交给 `CliCommandCatalog.authorize`。
 
-新增专用 graphId `governed-cli`，初始状态使用 `OpsNode.COMMAND_NAME_KEY`、`OpsNode.COMMAND_ARGUMENTS_KEY`、`CoderNode.WORKSPACE_PATH_KEY`、`PlannerNode.REQUIRED_CAPABILITIES_KEY`。READ_ONLY 直接运行；MUTATING 创建 `WAITING_APPROVAL`；DESTRUCTIVE 首期不进入目录，直到两阶段审批实现。批准后由现有 `AgentRunService.decide` 恢复，日志继续由 `RunTerminalController` 的 `/api/runs/{runId}/logs` 和 Trace `/api/runs/{runId}/events` 提供。
+专用 graphId 精确为 `governed-cli`，图只注册现有 `ops` 节点：入口为 `ops`，执行完成后到 `StateGraph.END`。创建 Run 前写入以下已存在的状态变量：`OpsNode.COMMAND_NAME_KEY` (`ops.commandName`)、`OpsNode.COMMAND_ARGUMENTS_KEY` (`ops.commandArguments`，JSON 字符串数组)、`CoderNode.WORKSPACE_PATH_KEY` (`coder.workspacePath`) 和 `PlannerNode.REQUIRED_CAPABILITIES_KEY` (`planner.requiredCapabilities`，由命令定义的 `requiredCapabilities` 按 `RequiredCapability` 枚举声明顺序连接为逗号分隔名称)。进入 `ops` 前由 `CliApprovalInterruptPolicy.evaluate` 调用目录授权：`READ_ONLY` 直接运行；`MUTATING` 产生 `RunStatus.WAITING_APPROVAL`；目录不得注册 `DESTRUCTIVE` 命令。中断详情使用现有 `InterruptRequest` 字段，至少包含 `commandName`、`commandArguments`、渲染后的 `command`、`riskLevel`、`commandSha256` 和 `authorizationReason`。批准/拒绝只能调用现有 `POST /api/runs/{runId}/approval`，提交 `ApprovalRequest { decision, expectedVersion, reason, variableUpdates }` 并由 `AgentRunService.decide` 处理；本期 `variableUpdates` 必须为空。批准恢复 `ops`，拒绝得到 `RunStatus.REJECTED`。日志继续由 `RunTerminalController` 的 `/api/runs/{runId}/logs` 和 Trace `/api/runs/{runId}/events` 提供。
 
 ## 7. 精确管理 API
 

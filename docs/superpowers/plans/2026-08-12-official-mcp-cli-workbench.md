@@ -43,11 +43,12 @@
 
 ## Task 5: 专用 `governed-cli` Graph 与结构化 CLI Run API
 
-文件：新增 CLI Controller/View/Request、CLI GraphFactory/Node、配置与测试；扩展 `CliCommandDefinition` 的 `description/arguments` 并迁移全部构造调用。
+文件：新增 CLI Controller/View/Request、CLI GraphFactory/Node、配置与测试；保持现有 `CliCommandDefinition` record 字段和所有构造调用不变。
 
-- [ ] 目录 API 只读返回真实命令字段；请求只允许 `commandName/arguments/timeoutSeconds/approval`，拒绝 `shell/bashCommand`、未知字段和工作区外路径。
-- [ ] 新增精确 graphId `governed-cli`，状态写入 `OpsNode.COMMAND_NAME_KEY`、`OpsNode.COMMAND_ARGUMENTS_KEY`、`CoderNode.WORKSPACE_PATH_KEY`、`PlannerNode.REQUIRED_CAPABILITIES_KEY`。
-- [ ] READ_ONLY 直接执行；MUTATING 使用现有 `CliApprovalInterruptPolicy` 生成 `WAITING_APPROVAL`，批准后使用 `AgentRunService.decide`。DESTRUCTIVE 首期从目录排除并测试拒绝。
+- [ ] 目录 API 返回 `CliCommandDefinition` 的精确字段：`name`、`executable`、`fixedArguments`、`riskLevel`、`requiredCapabilities`，以及 `maxArguments=64`。前端只按 `riskLevel` 映射审批状态；不得添加 `description`、命名参数、参数类型或其他未在核心 record 中存在的字段。
+- [ ] 请求只允许 `commandName`、`arguments`、`timeoutSeconds`；`arguments` 精确为有序 `List<String>`，最多 64 项。通过构造 `CliCommandIntent` 并调用 `CliCommandCatalog.authorize` 触发现有 token 校验；拒绝 `approval`、`shell`、`bashCommand`、未知字段和工作区外路径。
+- [ ] 新增精确 graphId `governed-cli`，只注册 `ops` 节点并从 `ops` 进入 `StateGraph.END`；状态写入 `OpsNode.COMMAND_NAME_KEY`、`OpsNode.COMMAND_ARGUMENTS_KEY`（JSON 数组字符串）、`CoderNode.WORKSPACE_PATH_KEY`、`PlannerNode.REQUIRED_CAPABILITIES_KEY`（命令要求能力按枚举声明顺序连接）。
+- [ ] `CliApprovalInterruptPolicy` 在 `ops` 前执行唯一授权：`READ_ONLY` 直接执行；`MUTATING` 生成现有 `RunStatus.WAITING_APPROVAL` 和 `InterruptRequest`；`DESTRUCTIVE` 不注册到首期目录并测试目录查找失败。批准/拒绝只调用 `POST /api/runs/{runId}/approval`，本期 `variableUpdates` 为空；批准恢复 `ops`，拒绝为 `RunStatus.REJECTED`。
 - [ ] 绑定 `RunTerminalController` `/api/runs/{runId}/logs`、`RunTraceController` `/api/runs/{runId}/events`，新增管理审计事件。
 - [ ] 运行 `mvn -pl agent-web -am -Dtest=CliCommandControllerTest -Dsurefire.failIfNoSpecifiedTests=false test`，提交 `feat(cli): add governed cli workbench api`。
 
