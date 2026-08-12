@@ -47,13 +47,17 @@
 **Files:**
 - Create: `agent-sandbox/src/main/java/com/agent/sandbox/docker/McpDockerLaunchSpec.java`
 - Create: `agent-sandbox/src/main/java/com/agent/sandbox/docker/WorkspaceMountMode.java`
+- Create: `agent-sandbox/src/main/java/com/agent/sandbox/mcp/McpStdioProcess.java`
 - Create: `agent-sandbox/src/main/java/com/agent/sandbox/docker/DockerMcpStdioRunner.java`
 - Create: `agent-sandbox/src/main/java/com/agent/sandbox/docker/DockerMcpStdioProcess.java`
+- Modify: `agent-core/src/main/java/com/agent/core/tool/mcp/McpStdioTransport.java` (import sandbox SPI)
+- Delete: `agent-core/src/main/java/com/agent/core/tool/mcp/McpStdioProcess.java` (moved to sandbox)
 - Test: `agent-sandbox/src/test/java/com/agent/sandbox/docker/DockerMcpStdioRunnerTest.java`
 - Test: `agent-core/src/test/java/com/agent/core/tool/mcp/McpStdioTransportTest.java`
 
 - [ ] 写 runner contract test，使用固定 `installationId` 和固定 `snapshotId` 构造 launch spec，精确断言 create 参数包含 stdin/stdout/stderr attach、stdin open、TTY false、network `none`、readonly rootfs、非 privileged、memory/nano CPUs/pids、受控 bind，以及分别来自 `spec.installationId()`、`spec.snapshotId()` 的四个管理标签。
 - [ ] 写流测试：docker `Frame` 的 STDOUT/STDERR 分离；stdin 字节传到 attach 输入；并发响应、帧/错误输出上限、attach 断开、容器退出、重复 destroy 均确定完成。
+- [ ] 先完成 SPI 移动以保持 Maven 单向依赖：新增 `com.agent.sandbox.mcp.McpStdioProcess`（仅 JDK 三流与生命周期方法），删除 core 中旧接口并修改 `McpStdioTransport` 的 import；`agent-sandbox/pom.xml` 不得新增 `agent-core` 依赖，`agent-core/pom.xml` 继续单向依赖 `agent-sandbox`。不得创建第二份同名 SPI 或新公共模块。
 - [ ] 实现不可变 `McpDockerLaunchSpec`，只接受规范第 4 节字段（包括必填 `snapshotId`）和 `NONE/READ_ONLY/READ_WRITE`；command/arguments 直接传 `withCmd`，禁止 `bash -lc`、`ProcessBuilder` 和字符串拼接 shell。Task 2 测试直接传入固定 `snapshotId`；Task 4 生命周期服务必须从已持久化的 `McpInstallationRecord.snapshotId()` 取得该值，按它读取并校验固定 `McpSourceSnapshot` 后构造 spec，禁止重新生成、从目录元数据推导或由启动请求覆盖。
 - [ ] 实现 `DockerMcpStdioRunner.start` 和 `DockerMcpStdioProcess`，复用 `DockerCommandExecutor` 已验证的 Windows/container bind source 解析逻辑，但不改变一次性 executor 的 finally-delete 语义。
 - [ ] 在测试中 inspect 实际容器并断言 mount access、HostConfig、labels 和容器销毁；Docker 不可用时测试明确 SKIP，不能伪造 PASS。
