@@ -1,4 +1,4 @@
-import { Activity, Code2, Globe2, RefreshCw, Terminal } from 'lucide-react'
+import { Activity, Code2, Globe2, RefreshCw, ShieldCheck, Terminal } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
 import { useEffect } from 'react'
 
@@ -11,6 +11,7 @@ import { RunLauncher } from './RunLauncher'
 import { TerminalPanel, type TerminalPanelHandle } from './TerminalPanel'
 import { TraceTimeline } from './TraceTimeline'
 import type { UseConversationWorkspaceResult } from '../hooks/useConversationWorkspace'
+import { CapabilityWorkbenchRuntime } from './CapabilityWorkbenchRuntime'
 
 const CodeDiffPanel = lazy(() => import('./CodeDiffPanel').then((module) => ({
   default: module.CodeDiffPanel,
@@ -25,13 +26,14 @@ interface WorkbenchProps {
   conversation?: UseConversationWorkspaceResult
 }
 
-type WorkbenchTab = 'code' | 'terminal' | 'review' | 'trace'
+type WorkbenchTab = 'code' | 'terminal' | 'review' | 'trace' | 'capability'
 
 const TABS: Array<{ id: WorkbenchTab; label: string; icon: typeof Code2 }> = [
   { id: 'code', label: '代码变更', icon: Code2 },
   { id: 'terminal', label: '终端', icon: Terminal },
   { id: 'review', label: '浏览器', icon: Globe2 },
   { id: 'trace', label: 'Trace', icon: Activity },
+  { id: 'capability', label: '能力', icon: ShieldCheck },
 ]
 
 /** 编排对话式任务流与执行证据检查器。 */
@@ -144,6 +146,9 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
                   : { trace: null, terminal: null }}
                 persistedNodes={run?.state.trace ?? []}
               />
+            </div>
+            <div id="capability-view" role="tabpanel" hidden={activeTab !== 'capability'}>
+              {conversation?.activeWorkspace === undefined ? <div className="empty-tool-state">请选择工作区后管理能力</div> : <CapabilityWorkbenchRuntime workspaceId={conversation.activeWorkspace.workspaceId} />}
             </div>
           </div>
         </aside>

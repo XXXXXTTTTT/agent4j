@@ -452,6 +452,28 @@ code, pre { font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
 .file-select select { background: #fff; border: 1px solid #ccd3cf; border-radius: 4px; color: #39433e; font-family: "Cascadia Mono", Consolas, monospace; font-size: 10px; min-width: 0; padding: 5px 7px; width: 100%; }
 .code-panel > .monaco-diff-editor, .code-panel > div:not(.tool-panel-bar) { flex: 1; min-height: 0; }
 .empty-tool-state, .panel-message { align-items: center; color: #858d89; display: flex; flex: 1; font-size: 12px; justify-content: center; padding: 28px; text-align: center; }
+.capability-panel { height: 100%; overflow: auto; }
+.capability-section { border-bottom: 1px solid #dfe3e0; padding: 14px; }
+.capability-heading { align-items: center; display: flex; gap: 10px; justify-content: space-between; margin-bottom: 10px; }
+.capability-heading h3 { color: #3b4741; font-size: 12px; margin: 0; }
+.capability-heading code, .capability-row small, .capability-metadata dd code { color: #78827d; font-family: "Cascadia Mono", Consolas, monospace; font-size: 9px; overflow-wrap: anywhere; }
+.capability-heading form { display: flex; gap: 5px; max-width: 260px; }
+.capability-heading form input, .capability-scope select { background: #fff; border: 1px solid #ccd3cf; border-radius: 4px; color: #39433e; font-size: 10px; min-height: 28px; padding: 5px 7px; }
+.capability-heading form button, .capability-row button, .capability-preview button { align-items: center; border: 1px solid #cbd3ce; border-radius: 4px; display: inline-flex; font-size: 10px; gap: 5px; justify-content: center; min-height: 28px; padding: 5px 8px; }
+.capability-scope { color: #66716b; display: inline-flex; font-size: 10px; gap: 6px; margin-bottom: 10px; }
+.capability-row { align-items: center; border-top: 1px solid #e6e9e6; display: flex; gap: 10px; justify-content: space-between; padding: 10px 0; }
+.capability-row strong { color: #35423b; font-size: 11px; }
+.capability-row p { color: #68736d; font-size: 10px; margin: 3px 0; overflow-wrap: anywhere; }
+.capability-row button { flex: 0 0 auto; }
+.capability-preview { background: #fff9ed; border: 1px solid #e8cf99; border-radius: 6px; margin: 12px 14px; padding: 12px; }
+.capability-metadata { display: grid; gap: 7px; margin: 0; }
+.capability-metadata div { display: grid; gap: 8px; grid-template-columns: 65px minmax(0, 1fr); }
+.capability-metadata dt { color: #8b7a57; font-size: 10px; }
+.capability-metadata dd { font-size: 10px; margin: 0; overflow-wrap: anywhere; }
+.capability-metadata a { color: #1e694f; overflow-wrap: anywhere; }
+.capability-preview .approval-actions { margin-top: 12px; }
+.capability-preview .approval-actions button:first-child { background: #247253; border-color: #247253; color: #fff; }
+.capability-preview .approval-actions button:last-child { background: transparent; }
 .panel-message.is-error { color: #a43843; flex: none; }
 .terminal-panel { background: #111614; color: #dce9e2; position: relative; }
 .terminal-bar { background: #1c2420; border-bottom-color: #313b36; }
