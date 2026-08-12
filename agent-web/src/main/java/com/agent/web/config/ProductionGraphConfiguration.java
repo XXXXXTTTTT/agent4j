@@ -354,6 +354,25 @@ public class ProductionGraphConfiguration {
                 browserSessions);
     }
 
+    /** 注册只含受治理 Ops 节点的 CLI 专用执行图。 */
+    @Bean("governed-cli")
+    GraphFactory governedCliGraph(
+            ProductionAgentProperties properties,
+            SandboxTerminalService terminalService,
+            RunLogPublisher logPublisher,
+            CliApprovalInterruptPolicy approvalPolicy,
+            HarnessHookChain harness) {
+        Objects.requireNonNull(properties, "properties 不能为空");
+        Objects.requireNonNull(terminalService, "terminalService 不能为空");
+        Objects.requireNonNull(logPublisher, "logPublisher 不能为空");
+        Objects.requireNonNull(approvalPolicy, "approvalPolicy 不能为空");
+        Objects.requireNonNull(harness, "harness 不能为空");
+        return () -> new StateGraph(properties.executionBudget(), approvalPolicy, harness)
+                .addNode("ops", new OpsNode(terminalService, approvalPolicy, logPublisher))
+                .setEntryPoint("ops")
+                .addEdge("ops", StateGraph.END);
+    }
+
     /** 声明精确关联 `code-agent` 图的生产 Profile。 */
     @Bean
     AgentProfile codeAgentProfile(ProductionAgentProperties properties) {

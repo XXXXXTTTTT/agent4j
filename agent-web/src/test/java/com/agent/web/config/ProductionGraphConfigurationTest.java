@@ -10,6 +10,12 @@ import com.agent.core.nodes.CoderNode;
 import com.agent.core.nodes.ReviewerNode;
 import com.agent.core.trace.RunLogPublisher;
 import com.agent.core.cli.WorkspaceTerminalTargetResolver;
+import com.agent.core.cli.CliApprovalInterruptPolicy;
+import com.agent.core.cli.CliCommandCatalog;
+import com.agent.core.cli.CliCommandDefinition;
+import com.agent.core.cli.CliRiskLevel;
+import com.agent.core.harness.HarnessHookChain;
+import com.agent.core.intent.RequiredCapability;
 import com.agent.sandbox.ast.AstService;
 import com.agent.sandbox.ast.WorkspaceSnapshotService;
 import com.agent.sandbox.browser.BrowserAutomation;
@@ -24,6 +30,8 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
+import java.util.Set;
 
 import static org.mockito.Mockito.mock;
 
@@ -142,6 +150,34 @@ class ProductionGraphConfigurationTest {
         var maven = catalog.find("mvn").orElseThrow();
         assertThat(maven.executable()).isEqualTo("mvn");
         assertThat(maven.fixedArguments()).isEmpty();
+    }
+
+    @Test
+    void createsGovernedCliGraphWithOnlyOpsAndEnd() throws Exception {
+        Path bash = Files.createFile(workspace.resolve("governed-cli-bash.exe"));
+        ProductionAgentProperties properties = properties("PTY", "", "");
+        CliCommandCatalog catalog = new CliCommandCatalog(List.of(new CliCommandDefinition(
+                "test.maven", "mvn", List.of("test"), CliRiskLevel.READ_ONLY,
+                Set.of(RequiredCapability.TERMINAL))));
+        CliApprovalInterruptPolicy policy = new CliApprovalInterruptPolicy(
+                catalog,
+                new PtyTarget(bash, workspace),
+                Duration.ofSeconds(30),
+                new com.fasterxml.jackson.databind.ObjectMapper());
+
+        GraphFactory factory = new ProductionGraphConfiguration().governedCliGraph(
+                properties,
+                mock(SandboxTerminalService.class),
+                RunLogPublisher.noop(),
+                policy,
+                HarnessHookChain.noop());
+
+        try (StateGraph graph = factory.create()) {
+            assertThat(graph.entryPoint()).isEqualTo("ops");
+            assertThat(graph.inspectTopology().nodeNames()).containsExactly("ops");
+            assertThat(graph.inspectTopology().outgoingTargets().get("ops"))
+                    .containsExactly(StateGraph.END);
+        }
     }
 
     @Test
