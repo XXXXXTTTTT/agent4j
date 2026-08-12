@@ -91,12 +91,12 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                         installation_id, snapshot_id, scope, workspace_id, actor_user_id, status,
                         confirmation_token_sha256, created_at, confirmed_at, updated_at,
                         risk_level, required_capabilities, workspace_mount_mode, network_mode,
-                        runtime_image, container_id, runtime_error, version
+                        runtime_image, runtime_image_confirmed, runtime_workspace_id, container_id, runtime_error, version
                     ) values (
                         :installationId, :snapshotId, :scope, :workspaceId, :actorUserId, :status,
                         :confirmationTokenSha256, :createdAt, :confirmedAt, :updatedAt,
                         :riskLevel, cast(:requiredCapabilities as jsonb), :workspaceMountMode, :networkMode,
-                        :runtimeImage, :containerId, :runtimeError, :version
+                        :runtimeImage, :runtimeImageConfirmed, :runtimeWorkspaceId, :containerId, :runtimeError, :version
                     )
                     """)
                     .param("installationId", installation.installationId())
@@ -114,6 +114,8 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                     .param("workspaceMountMode", installation.workspaceMountMode().name())
                     .param("networkMode", installation.networkMode().name())
                     .param("runtimeImage", installation.runtimeImage())
+                    .param("runtimeImageConfirmed", installation.runtimeImageConfirmed())
+                    .param("runtimeWorkspaceId", installation.runtimeWorkspaceId())
                     .param("containerId", installation.containerId())
                     .param("runtimeError", installation.runtimeError())
                     .param("version", installation.version())
@@ -127,7 +129,7 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                 installation.confirmationTokenSha256(), installation.createdAt(), installation.confirmedAt(),
                 installation.updatedAt(), installation.riskLevel(), installation.requiredCapabilities(),
                 installation.workspaceMountMode(), installation.networkMode(), installation.runtimeImage(),
-                installation.containerId(), installation.runtimeError(), installation.version());
+                installation.runtimeImageConfirmed(), installation.runtimeWorkspaceId(), installation.containerId(), installation.runtimeError(), installation.version());
     }
 
     @Override
@@ -137,7 +139,7 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                 select installation_id, snapshot_id, scope, workspace_id, actor_user_id, status,
                        confirmation_token_sha256, created_at, confirmed_at, updated_at,
                        risk_level, required_capabilities, workspace_mount_mode, network_mode,
-                       runtime_image, container_id, runtime_error, version
+                       runtime_image, runtime_image_confirmed, runtime_workspace_id, container_id, runtime_error, version
                 from agent_mcp_installations
                 where actor_user_id = :actorUserId
                   and ((scope = 'WORKSPACE' and workspace_id = :workspaceId)
@@ -177,19 +179,150 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
     }
 
     @Override
-    public McpInstallationRecord transition(UUID installationId, long expectedVersion, McpInstallationStatus from,
-                                            McpInstallationStatus to, String runtimeError, String containerId) {
+    public java.util.Optional<com.agent.web.mcp.installation.McpInstallationAggregate> findInstallation(
+            UUID installationId, String actorUserId, UUID requestWorkspaceId) {
+        Objects.requireNonNull(installationId, "installationId 不能为空");
+        Objects.requireNonNull(actorUserId, "actorUserId 不能为空");
+        Objects.requireNonNull(requestWorkspaceId, "requestWorkspaceId 不能为空");
+        return jdbc.sql("""
+                select i.installation_id, i.snapshot_id, i.scope, i.workspace_id, i.actor_user_id, i.status,
+                       i.confirmation_token_sha256, i.created_at, i.confirmed_at, i.updated_at,
+                       i.risk_level, i.required_capabilities, i.workspace_mount_mode, i.network_mode,
+                       i.runtime_image, i.runtime_image_confirmed, i.runtime_workspace_id, i.container_id, i.runtime_error, i.version
+                from agent_mcp_installations i
+                where i.installation_id = :installationId and i.actor_user_id = :actorUserId
+                  and ((i.scope = 'WORKSPACE' and i.workspace_id = :workspaceId) or i.scope = 'USER_GLOBAL')
+                """).param("installationId", installationId).param("actorUserId", actorUserId)
+                .param("workspaceId", requestWorkspaceId).query(this::mapInstallation).optional()
+                .map(this::aggregate);
+    }
+
+    @Override
+    public List<com.agent.web.mcp.installation.McpInstallationAggregate> findRecoverableInstallations() {
+        return jdbc.sql("""
+                select installation_id, snapshot_id, scope, workspace_id, actor_user_id, status,
+                       confirmation_token_sha256, created_at, confirmed_at, updated_at,
+                       risk_level, required_capabilities, workspace_mount_mode, network_mode,
+                       runtime_image, runtime_image_confirmed, runtime_workspace_id, container_id, runtime_error, version
+                from agent_mcp_installations
+                where status in ('INSTALLING', 'RUNNING', 'STOPPING')
+                order by updated_at, installation_id
+                """).query(this::mapInstallation).list().stream().map(this::aggregate).toList();
+    }
+
+    @Override
+    public McpInstallationRecord beginStart(UUID installationId, String actorUserId, UUID requestWorkspaceId,
+                                            UUID runtimeWorkspaceId, long expectedVersion,
+                                            com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+        Objects.requireNonNull(runtimeWorkspaceId, "runtimeWorkspaceId 不能为空");
+        return Objects.requireNonNull(transactions.execute(status -> {
+            int updated = jdbc.sql("""
+                    update agent_mcp_installations set status = 'INSTALLING', runtime_workspace_id = :runtimeWorkspaceId,
+                           runtime_error = null, container_id = null, updated_at = current_timestamp, version = version + 1
+                    where installation_id = :id and actor_user_id = :actorUserId and version = :expectedVersion
+                      and status in ('STOPPED', 'FAILED')
+                      and ((scope = 'WORKSPACE' and workspace_id = :requestWorkspaceId
+                            and workspace_id = :runtimeWorkspaceId) or scope = 'USER_GLOBAL')
+                    """).param("id", installationId).param("actorUserId", actorUserId)
+                    .param("requestWorkspaceId", requestWorkspaceId).param("runtimeWorkspaceId", runtimeWorkspaceId)
+                    .param("expectedVersion", expectedVersion).update();
+            if (updated != 1) throw new McpInstallationConflictException(installationId, expectedVersion);
+            insertAudit(auditEvent);
+            return findInstallation(installationId).orElseThrow();
+        }), "MCP 启动开始聚合事务返回值不能为空");
+    }
+
+    @Override
+    public McpInstallationRecord completeStart(com.agent.web.mcp.installation.McpRuntimeStartCompletion completion) {
+        Objects.requireNonNull(completion, "completion 不能为空");
+        return Objects.requireNonNull(transactions.execute(status -> {
+            int updated = jdbc.sql("""
+                    update agent_mcp_installations set status = 'RUNNING', container_id = :containerId,
+                           runtime_workspace_id = :runtimeWorkspaceId,
+                           runtime_error = null, updated_at = current_timestamp, version = version + 1
+                    where installation_id = :id and version = :expectedVersion and status = 'INSTALLING'
+                    """).param("id", completion.installationId()).param("expectedVersion", completion.expectedVersion())
+                    .param("containerId", completion.containerId()).param("runtimeWorkspaceId", completion.runtimeWorkspaceId()).update();
+            if (updated != 1) throw new McpInstallationConflictException(completion.installationId(), completion.expectedVersion());
+            jdbc.sql("delete from agent_mcp_tool_bindings where installation_id = :id")
+                    .param("id", completion.installationId()).update();
+            for (com.agent.web.mcp.installation.McpToolBindingRecord binding : completion.bindings()) {
+                jdbc.sql("""
+                        insert into agent_mcp_tool_bindings (
+                            installation_id, local_tool_name, remote_tool_name, risk_level, required_capabilities, created_at)
+                        values (:installationId, :localToolName, :remoteToolName, :riskLevel,
+                            cast(:requiredCapabilities as jsonb), :createdAt)
+                        """).param("installationId", binding.installationId()).param("localToolName", binding.localToolName())
+                        .param("remoteToolName", binding.remoteToolName()).param("riskLevel", binding.riskLevel().name())
+                        .param("requiredCapabilities", json(binding.requiredCapabilities().stream().map(Enum::name).toList()))
+                        .param("createdAt", timestamp(binding.createdAt())).update();
+            }
+            insertAudit(completion.auditEvent());
+            return findInstallation(completion.installationId()).orElseThrow();
+        }), "MCP 启动完成聚合事务返回值不能为空");
+    }
+
+    @Override
+    public McpInstallationRecord completeFailure(com.agent.web.mcp.installation.McpRuntimeFailureCompletion completion) {
+        Objects.requireNonNull(completion, "completion 不能为空");
+        return Objects.requireNonNull(transactions.execute(status -> {
+            int updated = jdbc.sql("""
+                    update agent_mcp_installations set status = 'FAILED', container_id = null, runtime_workspace_id = null,
+                           runtime_error = :runtimeError, updated_at = current_timestamp, version = version + 1
+                    where installation_id = :id and version = :expectedVersion and status in ('INSTALLING', 'RUNNING', 'STOPPING')
+                    """).param("id", completion.installationId()).param("expectedVersion", completion.expectedVersion())
+                    .param("runtimeError", completion.runtimeError()).update();
+            if (updated != 1) throw new McpInstallationConflictException(completion.installationId(), completion.expectedVersion());
+            jdbc.sql("delete from agent_mcp_tool_bindings where installation_id = :id")
+                    .param("id", completion.installationId()).update();
+            insertAudit(completion.auditEvent());
+            return findInstallation(completion.installationId()).orElseThrow();
+        }), "MCP 失败完成聚合事务返回值不能为空");
+    }
+
+    @Override
+    public McpInstallationRecord beginStop(UUID installationId, String actorUserId, UUID requestWorkspaceId,
+                                           long expectedVersion,
+                                           com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+        return transition(installationId, actorUserId, requestWorkspaceId, expectedVersion,
+                List.of(McpInstallationStatus.RUNNING), McpInstallationStatus.STOPPING, null, null, auditEvent);
+    }
+
+    @Override
+    public McpInstallationRecord completeStop(com.agent.web.mcp.installation.McpRuntimeStopCompletion completion) {
+        Objects.requireNonNull(completion, "completion 不能为空");
+        return Objects.requireNonNull(transactions.execute(status -> {
+            int updated = jdbc.sql("""
+                    update agent_mcp_installations set status = 'STOPPED', container_id = null, runtime_workspace_id = null,
+                           runtime_error = null, updated_at = current_timestamp, version = version + 1
+                    where installation_id = :id and version = :expectedVersion and status = 'STOPPING'
+                    """).param("id", completion.installationId()).param("expectedVersion", completion.expectedVersion()).update();
+            if (updated != 1) throw new McpInstallationConflictException(completion.installationId(), completion.expectedVersion());
+            jdbc.sql("delete from agent_mcp_tool_bindings where installation_id = :id")
+                    .param("id", completion.installationId()).update();
+            insertAudit(completion.auditEvent());
+            return findInstallation(completion.installationId()).orElseThrow();
+        }), "MCP 停止完成聚合事务返回值不能为空");
+    }
+
+    private McpInstallationRecord transition(UUID installationId, String actorUserId, UUID workspaceId,
+                                             long expectedVersion, List<McpInstallationStatus> from,
+                                             McpInstallationStatus to, String runtimeError, String containerId,
+                                             com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
         return Objects.requireNonNull(transactions.execute(status -> {
             int updated = jdbc.sql("""
                     update agent_mcp_installations set status = :to, runtime_error = :runtimeError,
                            container_id = :containerId, updated_at = current_timestamp, version = version + 1
-                    where installation_id = :id and version = :expectedVersion and status = :from
-                    """).param("to", to.name()).param("runtimeError", runtimeError)
-                    .param("containerId", containerId).param("id", installationId)
-                    .param("expectedVersion", expectedVersion).param("from", from.name()).update();
+                    where installation_id = :id and actor_user_id = :actorUserId and version = :expectedVersion
+                      and status = any(cast(:statuses as varchar[]))
+                      and ((scope = 'WORKSPACE' and workspace_id = :workspaceId) or scope = 'USER_GLOBAL')
+                    """).param("to", to.name()).param("runtimeError", runtimeError).param("containerId", containerId)
+                    .param("id", installationId).param("actorUserId", actorUserId).param("expectedVersion", expectedVersion)
+                    .param("statuses", from.stream().map(Enum::name).toArray(String[]::new)).param("workspaceId", workspaceId).update();
             if (updated != 1) throw new McpInstallationConflictException(installationId, expectedVersion);
+            insertAudit(auditEvent);
             return findInstallation(installationId).orElseThrow();
-        }), "MCP 状态迁移事务返回值不能为空");
+        }), "MCP 生命周期开始聚合事务返回值不能为空");
     }
 
     private java.util.Optional<McpSourceSnapshot> findSnapshot(String serverKey, String commitSha, String metadataSha256) {
@@ -209,10 +342,52 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                 select installation_id, snapshot_id, scope, workspace_id, actor_user_id, status,
                        confirmation_token_sha256, created_at, confirmed_at, updated_at,
                        risk_level, required_capabilities, workspace_mount_mode, network_mode,
-                       runtime_image, container_id, runtime_error, version
+                       runtime_image, runtime_image_confirmed, runtime_workspace_id, container_id, runtime_error, version
                 from agent_mcp_installations where installation_id = :installationId
                 """)
                 .param("installationId", installationId).query(this::mapInstallation).optional();
+    }
+
+    private com.agent.web.mcp.installation.McpInstallationAggregate aggregate(McpInstallationRecord installation) {
+        McpSourceSnapshot snapshot = findSnapshotById(installation.snapshotId()).orElseThrow(
+                () -> new IllegalStateException("MCP 安装快照不存在: " + installation.snapshotId()));
+        return new com.agent.web.mcp.installation.McpInstallationAggregate(
+                installation, snapshot, findPreparedMaterial(snapshot.snapshotId()).orElse(null),
+                findBindings(installation.installationId()));
+    }
+
+    private java.util.Optional<McpSourceSnapshot> findSnapshotById(UUID snapshotId) {
+        return jdbc.sql("""
+                select snapshot_id, server_key, repository_path, source_url, commit_sha, blob_shas,
+                       metadata_sha256, version, description, license, command, arguments, launch_bin,
+                       environment_variable_names, readme_summary, created_at
+                from agent_mcp_installation_snapshots where snapshot_id = :snapshotId
+                """).param("snapshotId", snapshotId).query(this::mapSnapshot).optional();
+    }
+
+    @Override
+    public java.util.Optional<com.agent.web.mcp.installation.McpPreparedMaterialRecord> findPreparedMaterial(UUID snapshotId) {
+        return jdbc.sql("""
+                select material_directory, material_sha256, material_command, material_arguments, material_prepared_at
+                from agent_mcp_installation_snapshots where snapshot_id = :snapshotId
+                  and material_directory is not null
+                """).param("snapshotId", snapshotId).query((rs, row) ->
+                new com.agent.web.mcp.installation.McpPreparedMaterialRecord(
+                        java.nio.file.Path.of(rs.getString("material_directory")), rs.getString("material_sha256"),
+                        rs.getString("material_command"), readList(rs.getString("material_arguments")),
+                        rs.getTimestamp("material_prepared_at").toInstant())).optional();
+    }
+
+    private List<com.agent.web.mcp.installation.McpToolBindingRecord> findBindings(UUID installationId) {
+        return jdbc.sql("""
+                select installation_id, local_tool_name, remote_tool_name, risk_level, required_capabilities, created_at
+                from agent_mcp_tool_bindings where installation_id = :installationId order by local_tool_name
+                """).param("installationId", installationId).query((rs, row) ->
+                new com.agent.web.mcp.installation.McpToolBindingRecord(
+                        rs.getObject("installation_id", UUID.class), rs.getString("local_tool_name"),
+                        rs.getString("remote_tool_name"), ToolRiskLevel.valueOf(rs.getString("risk_level")),
+                        readCapabilities(rs.getString("required_capabilities")),
+                        rs.getTimestamp("created_at").toInstant())).list();
     }
 
     private McpSourceSnapshot mapSnapshot(java.sql.ResultSet rs, int row) throws java.sql.SQLException {
@@ -232,7 +407,7 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                 rs.getTimestamp("confirmed_at").toInstant(), rs.getTimestamp("updated_at").toInstant(),
                 ToolRiskLevel.valueOf(rs.getString("risk_level")), readCapabilities(rs.getString("required_capabilities")),
                 WorkspaceMountMode.valueOf(rs.getString("workspace_mount_mode")), McpNetworkMode.valueOf(rs.getString("network_mode")),
-                rs.getString("runtime_image"), rs.getString("container_id"), rs.getString("runtime_error"), rs.getLong("version"));
+                rs.getString("runtime_image"), rs.getBoolean("runtime_image_confirmed"), rs.getObject("runtime_workspace_id", UUID.class), rs.getString("container_id"), rs.getString("runtime_error"), rs.getLong("version"));
     }
 
     private void insertAudit(com.agent.web.capability.CapabilityManagementAuditEvent event) {

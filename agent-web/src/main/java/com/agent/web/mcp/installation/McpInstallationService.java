@@ -32,6 +32,7 @@ public final class McpInstallationService {
     private final Clock clock;
     private final Duration previewTtl;
     private final Supplier<UUID> uuidSupplier;
+    private final String runtimeImage;
     private final Map<UUID, PendingPreview> previews = new ConcurrentHashMap<>();
 
     public McpInstallationService(
@@ -42,6 +43,19 @@ public final class McpInstallationService {
             Clock clock,
             Duration previewTtl,
             Supplier<UUID> uuidSupplier) {
+        this(actorResolver, workspaceAccess, repository, auditSink, clock, previewTtl, uuidSupplier, "");
+    }
+
+    /** 创建确认服务并冻结经运行时配置校验的 Docker 镜像。 */
+    public McpInstallationService(
+            ActorResolver actorResolver,
+            WorkspaceAccessService workspaceAccess,
+            McpInstallationRepository repository,
+            CapabilityManagementAuditSink auditSink,
+            Clock clock,
+            Duration previewTtl,
+            Supplier<UUID> uuidSupplier,
+            String runtimeImage) {
         this.actorResolver = Objects.requireNonNull(actorResolver, "actorResolver 不能为空");
         this.workspaceAccess = Objects.requireNonNull(workspaceAccess, "workspaceAccess 不能为空");
         this.repository = Objects.requireNonNull(repository, "repository 不能为空");
@@ -49,6 +63,7 @@ public final class McpInstallationService {
         this.clock = Objects.requireNonNull(clock, "clock 不能为空");
         this.previewTtl = positive(previewTtl, "previewTtl");
         this.uuidSupplier = Objects.requireNonNull(uuidSupplier, "uuidSupplier 不能为空");
+        this.runtimeImage = runtimeImage == null ? "" : runtimeImage.trim();
     }
 
     /** 创建预览，不写库、不下载、不启动进程。 */
@@ -89,6 +104,11 @@ public final class McpInstallationService {
         McpInstallationRecord installation = new McpInstallationRecord(
                 uuidSupplier.get(), snapshot.snapshotId(), target.scope(), target.workspaceId(), actor.userId(),
                 McpInstallationStatus.STOPPED, sha256(confirmationToken), now, now, now);
+        installation = new McpInstallationRecord(installation.installationId(), installation.snapshotId(), installation.scope(),
+                installation.workspaceId(), installation.actorUserId(), installation.status(), installation.confirmationTokenSha256(),
+                installation.createdAt(), installation.confirmedAt(), installation.updatedAt(), installation.riskLevel(),
+                installation.requiredCapabilities(), installation.workspaceMountMode(), installation.networkMode(), runtimeImage,
+                !runtimeImage.isBlank(), null, null, null, 0);
         repository.confirmInstallation(new McpInstallationCommand(snapshot, installation,
                 new CapabilityManagementAuditEvent("MCP_INSTALLATION_CONFIRMED", actor.userId(),
                         requestWorkspaceId, installation.installationId(), null, null, snapshot.commitSha(), "SUCCESS", now)));

@@ -118,6 +118,65 @@ class JdbcMcpInstallationRepositoryTest {
                 .containsExactly(installation);
     }
 
+    @Test
+    void completesStartAndStopAsSingleVersionedAggregate() {
+        McpSourceSnapshot snapshot = snapshot();
+        McpInstallationRecord installation = installation(snapshot, McpInstallationStatus.STOPPED, 0);
+        repository.confirmInstallation(new com.agent.web.mcp.installation.McpInstallationCommand(snapshot, installation,
+                audit(installation, snapshot, "MCP_INSTALLATION_CONFIRMED", "STOPPED", "STOPPED")));
+
+        McpInstallationRecord installing = repository.beginStart(installation.installationId(), "mcp-test-user", WORKSPACE_ID,
+                WORKSPACE_ID, 0, audit(installation, snapshot, "MCP_INSTALLATION_STARTING", "STOPPED", "INSTALLING"));
+        assertThat(installing.status()).isEqualTo(McpInstallationStatus.INSTALLING);
+        assertThat(installing.version()).isEqualTo(1);
+        assertThat(installing.runtimeWorkspaceId()).isEqualTo(WORKSPACE_ID);
+        var binding = new com.agent.web.mcp.installation.McpToolBindingRecord(installation.installationId(),
+                "mcp.9169db66a55544dda1e92ff4b1633ea6.echo", "echo", com.agent.core.tool.ToolRiskLevel.HIGH,
+                java.util.Set.of(com.agent.core.intent.RequiredCapability.TOOL), NOW);
+        McpInstallationRecord running = repository.completeStart(new com.agent.web.mcp.installation.McpRuntimeStartCompletion(
+                installation.installationId(), 1, WORKSPACE_ID, "container-1", List.of(binding),
+                audit(installation, snapshot, "MCP_INSTALLATION_STARTED", "INSTALLING", "RUNNING")));
+        assertThat(running.status()).isEqualTo(McpInstallationStatus.RUNNING);
+        assertThat(running.runtimeWorkspaceId()).isEqualTo(WORKSPACE_ID);
+        assertThat(repository.findInstallation(installation.installationId(), "mcp-test-user", WORKSPACE_ID))
+                .get().extracting(value -> value.bindings()).asList().hasSize(1);
+
+        McpInstallationRecord stopping = repository.beginStop(installation.installationId(), "mcp-test-user", WORKSPACE_ID,
+                2, audit(installation, snapshot, "MCP_INSTALLATION_STOPPING", "RUNNING", "STOPPING"));
+        McpInstallationRecord stopped = repository.completeStop(new com.agent.web.mcp.installation.McpRuntimeStopCompletion(
+                installation.installationId(), stopping.version(),
+                audit(installation, snapshot, "MCP_INSTALLATION_STOPPED", "STOPPING", "STOPPED")));
+        assertThat(stopped.status()).isEqualTo(McpInstallationStatus.STOPPED);
+        assertThat(stopped.runtimeWorkspaceId()).isNull();
+        assertThat(stopped.containerId()).isNull();
+        assertThat(repository.findInstallation(installation.installationId(), "mcp-test-user", WORKSPACE_ID)
+                .orElseThrow().bindings()).isEmpty();
+    }
+
+    private McpSourceSnapshot snapshot() {
+        OfficialMcpServerRecord server = new OfficialMcpServerRecord(
+                "filesystem", "src/filesystem", URI.create("https://raw.githubusercontent.com/modelcontextprotocol/servers/main/src/filesystem"),
+                "0123456789012345678901234567890123456789", Map.of("package.json", "abcdef0123456789"),
+                "0123456789012345678901234567890123456789012345678901234567890123", "1.0.0", "Filesystem MCP server",
+                "MIT", "npx", List.of("-y", "@modelcontextprotocol/server-filesystem"), "node", List.of(), "Official filesystem server");
+        return McpSourceSnapshot.from(UUID.randomUUID(), server, NOW);
+    }
+
+    private McpInstallationRecord installation(McpSourceSnapshot snapshot, McpInstallationStatus status, long version) {
+        return new McpInstallationRecord(UUID.randomUUID(), snapshot.snapshotId(), InstallationScope.WORKSPACE,
+                WORKSPACE_ID, "mcp-test-user", status, "a".repeat(64), NOW, NOW, NOW,
+                com.agent.core.tool.ToolRiskLevel.HIGH, java.util.Set.of(com.agent.core.intent.RequiredCapability.TOOL),
+                com.agent.web.mcp.installation.WorkspaceMountMode.NONE, com.agent.web.mcp.installation.McpNetworkMode.NONE,
+                "node:22-alpine", true, null, null, null, version);
+    }
+
+    private com.agent.web.capability.CapabilityManagementAuditEvent audit(
+            McpInstallationRecord installation, McpSourceSnapshot snapshot, String type, String from, String to) {
+        return new com.agent.web.capability.CapabilityManagementAuditEvent(type, "mcp-test-user", WORKSPACE_ID,
+                installation.installationId(), null, null, snapshot.commitSha(), "SUCCESS", NOW,
+                UUID.randomUUID(), from, to, "");
+    }
+
     private DataSource dataSource() {
         DriverManagerDataSource dataSource = new DriverManagerDataSource();
         dataSource.setDriverClassName(POSTGRES.getDriverClassName());

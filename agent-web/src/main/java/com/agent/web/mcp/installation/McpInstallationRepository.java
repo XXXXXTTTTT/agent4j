@@ -1,6 +1,7 @@
 package com.agent.web.mcp.installation;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /** MCP 安装持久化端口。 */
@@ -11,7 +12,49 @@ public interface McpInstallationRepository {
                                              long expectedVersion,
                                              com.agent.web.capability.CapabilityManagementAuditEvent auditEvent);
 
-    McpInstallationRecord transition(
-            UUID installationId, long expectedVersion, McpInstallationStatus from,
-            McpInstallationStatus to, String runtimeError, String containerId);
+
+    default Optional<McpInstallationAggregate> findInstallation(
+            UUID installationId, String actorUserId, UUID requestWorkspaceId) {
+        throw new UnsupportedOperationException("当前 MCP 仓储不支持安装聚合读取");
+    }
+
+    default List<McpInstallationAggregate> findRecoverableInstallations() {
+        throw new UnsupportedOperationException("当前 MCP 仓储不支持运行恢复");
+    }
+
+    /** 按固定快照标识读取已准备物料，供运行时在启动前重新校验。 */
+    default Optional<McpPreparedMaterialRecord> findPreparedMaterial(UUID snapshotId) {
+        throw new UnsupportedOperationException("当前 MCP 仓储不支持物料读取");
+    }
+
+    default McpInstallationRecord beginStart(UUID installationId, String actorUserId, UUID requestWorkspaceId,
+                                     UUID runtimeWorkspaceId, long expectedVersion,
+                                     com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+        throw new UnsupportedOperationException("当前 MCP 仓储不支持启动生命周期");
+    }
+
+    default McpInstallationRecord completeStart(McpRuntimeStartCompletion completion) {
+        throw new UnsupportedOperationException("当前 MCP 仓储不支持启动完成");
+    }
+
+    default McpInstallationRecord completeFailure(McpRuntimeFailureCompletion completion) {
+        throw new UnsupportedOperationException("当前 MCP 仓储不支持失败收敛");
+    }
+
+    default McpInstallationRecord beginStop(UUID installationId, String actorUserId, UUID requestWorkspaceId,
+                                    long expectedVersion,
+                                    com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+        throw new UnsupportedOperationException("当前 MCP 仓储不支持停止生命周期");
+    }
+
+    default McpInstallationRecord completeStop(McpRuntimeStopCompletion completion) {
+        throw new UnsupportedOperationException("当前 MCP 仓储不支持停止完成");
+    }
+
+    /** 过渡兼容旧测试适配器；生产实现不得使用该端口。 */
+    @Deprecated
+    default McpInstallationRecord transition(UUID installationId, long expectedVersion, McpInstallationStatus from,
+                                             McpInstallationStatus to, String runtimeError, String containerId) {
+        throw new UnsupportedOperationException("当前 MCP 仓储不支持旧状态迁移");
+    }
 }

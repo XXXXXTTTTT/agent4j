@@ -141,8 +141,10 @@ class CapabilityManagementControllerTest {
                 .jsonPath("$[0].status").isEqualTo("STOPPED")
                 .jsonPath("$[0].confirmationTokenSha256").doesNotExist();
 
-        client.delete().uri("/api/workspaces/{workspaceId}/mcp/installations/{installationId}",
-                        WORKSPACE_ID, INSTALLATION_ID)
+        client.delete().uri(uriBuilder -> uriBuilder
+                        .path("/api/workspaces/{workspaceId}/mcp/installations/{installationId}")
+                        .queryParam("expectedVersion", installation.version())
+                        .build(WORKSPACE_ID, INSTALLATION_ID))
                 .exchange().expectStatus().isOk();
         verify(mcpInstallations).uninstall(WORKSPACE_ID, INSTALLATION_ID);
     }

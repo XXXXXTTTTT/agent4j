@@ -51,17 +51,25 @@ class DockerMcpStdioRunnerTest {
     }
 
     @Test
-    void createsHardenedContainerWithLabelsAndReadOnlyWorkspace(@TempDir Path workspace) throws Exception {
+    void createsHardenedContainerWithReadOnlyMaterialAndWorkspace(@TempDir Path workspace) throws Exception {
         UUID installationId = UUID.randomUUID();
         UUID snapshotId = UUID.randomUUID();
+        Path material = java.nio.file.Files.createDirectory(workspace.resolve("material"));
+        Path entry = material.resolve("run.sh");
+        java.nio.file.Files.writeString(entry, "#!/bin/sh\nprintf ready\n");
+        try {
+            java.nio.file.Files.setPosixFilePermissions(entry, java.nio.file.attribute.PosixFilePermissions.fromString("r-xr-xr-x"));
+        } catch (UnsupportedOperationException ignored) {
+            // Docker Desktop 映射的 Windows bind 仍由容器挂载权限控制。
+        }
         McpDockerLaunchSpec spec = new McpDockerLaunchSpec(
-                installationId, snapshotId, IMAGE, "sh", List.of("-c", "printf ready"),
-                "/workspace", WorkspaceMountMode.READ_ONLY, "none",
+                installationId, snapshotId, IMAGE, "run.sh", List.of(),
+                "/mcp-material", "", "", "/workspace", WorkspaceMountMode.READ_ONLY, "none",
                 128L * 1024 * 1024, 100_000_000L, 64L,
                 4096, 4096, 4096, Set.of());
 
         try (DockerMcpStdioRunner runner = new DockerMcpStdioRunner()) {
-            var process = runner.start(spec, Map.of(), workspace, event -> { });
+            var process = runner.start(spec, Map.of(), workspace, material, event -> { });
             var containers = verificationClient.listContainersCmd().withShowAll(true)
                     .withLabelFilter(Map.of("com.agent.runtime.installation-id", installationId.toString())).exec();
             assertThat(containers).hasSize(1);
@@ -86,6 +94,12 @@ class DockerMcpStdioRunnerTest {
             assertThat(inspected.getMounts()).anySatisfy(mount -> {
                 assertThat(mount.getDestination()).isInstanceOf(Volume.class);
                 assertThat(mount.getDestination().getPath()).isEqualTo("/workspace");
+                assertThat(mount.getMode()).isEqualTo("ro");
+                assertThat(mount.getRW()).isFalse();
+            });
+            assertThat(inspected.getMounts()).anySatisfy(mount -> {
+                assertThat(mount.getDestination()).isInstanceOf(Volume.class);
+                assertThat(mount.getDestination().getPath()).isEqualTo("/mcp-material");
                 assertThat(mount.getMode()).isEqualTo("ro");
                 assertThat(mount.getRW()).isFalse();
             });

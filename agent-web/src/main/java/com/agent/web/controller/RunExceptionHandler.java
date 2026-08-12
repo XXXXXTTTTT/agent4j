@@ -11,6 +11,7 @@ import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspaceImportService;
 import com.agent.web.mcp.installation.McpInstallationService;
 import com.agent.web.mcp.installation.McpInstallationConflictException;
+import com.agent.web.mcp.runtime.McpMaterialNotPreparedException;
 import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.skill.SkillInstallationConflictException;
 import com.agent.web.audit.AuditTextRedactor;
@@ -164,6 +165,14 @@ public final class RunExceptionHandler {
             McpInstallationConflictException exception,
             ServerWebExchange exchange) {
         return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);
+    }
+
+    /** 物料未准备时仅返回稳定错误码，避免暴露目录和源地址。 */
+    @ExceptionHandler(McpMaterialNotPreparedException.class)
+    public ResponseEntity<ProblemDetail> mcpMaterialNotPrepared(
+            McpMaterialNotPreparedException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.CONFLICT, "MATERIAL_NOT_PREPARED", exchange);
     }
 
     /** 将数据库唯一约束冲突转换为稳定的客户端错误。 */

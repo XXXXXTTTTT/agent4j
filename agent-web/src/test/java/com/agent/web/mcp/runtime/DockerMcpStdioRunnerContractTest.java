@@ -184,6 +184,31 @@ class DockerMcpStdioRunnerContractTest {
     }
 
     @Test
+    void mountsMaterialReadOnlyAndExecutesOnlyFixedMaterialEntryPoint() throws Exception {
+        Path material = java.nio.file.Files.createTempDirectory("agent4j-mcp-material");
+        java.nio.file.Files.writeString(material.resolve("server.mjs"), "console.log('ready');");
+        McpDockerLaunchSpec materialSpec = new McpDockerLaunchSpec(
+                UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                UUID.fromString("00000000-0000-0000-0000-000000000002"), "alpine:3.20", "server.mjs", List.of("--stdio"),
+                "/mcp-material", "", "", "/workspace", WorkspaceMountMode.NONE, "none",
+                128L * 1024 * 1024, 100_000_000L, 64L, 4096, 8192, 4096, Set.of());
+        StartedRunner started = startableRunner(materialSpec);
+        try (DockerMcpStdioRunner runner = started.runner()) {
+            runner.start(materialSpec, Map.of(), Path.of("D:/agent4j"), material, event -> { });
+            var hostConfig = forClass(HostConfig.class);
+            verify(started.create()).withHostConfig(hostConfig.capture());
+            assertThat(hostConfig.getValue().getBinds()).singleElement().satisfies(bind -> {
+                assertThat(bind.getPath()).isEqualTo(material.toRealPath().toString());
+                assertThat(bind.getVolume().getPath()).isEqualTo("/mcp-material");
+                assertThat(bind.getAccessMode()).isEqualTo(AccessMode.ro);
+            });
+            var command = forClass(String[].class);
+            verify(started.create()).withCmd(command.capture());
+            assertThat(command.getValue()).containsExactly("/mcp-material/server.mjs", "--stdio");
+        }
+    }
+
+    @Test
     void preservesUnreadBytesUntilTheyAreActuallyRead() throws Exception {
         DockerClient docker = mock(DockerClient.class);
         CreateContainerCmd create = mock(CreateContainerCmd.class, RETURNS_SELF);
@@ -235,7 +260,7 @@ class DockerMcpStdioRunnerContractTest {
             var hostConfig = forClass(HostConfig.class);
             @SuppressWarnings("unchecked")
             var labels = forClass(Map.class);
-            verify(started.create()).withCmd("sh", "-c", "printf ready");
+            verify(started.create()).withCmd("/mcp-material/sh", "-c", "printf ready");
             verify(started.create()).withAttachStdin(true);
             verify(started.create()).withAttachStdout(true);
             verify(started.create()).withAttachStderr(true);
@@ -250,7 +275,11 @@ class DockerMcpStdioRunnerContractTest {
             assertThat(hostConfig.getValue().getMemory()).isEqualTo(128L * 1024 * 1024);
             assertThat(hostConfig.getValue().getNanoCPUs()).isEqualTo(100_000_000L);
             assertThat(hostConfig.getValue().getPidsLimit()).isEqualTo(64L);
-            assertThat(hostConfig.getValue().getBinds()).isEmpty();
+            assertThat(hostConfig.getValue().getBinds()).singleElement().satisfies(bind -> {
+                assertThat(bind.getPath()).isEqualTo(Path.of("D:/agent4j").toString());
+                assertThat(bind.getVolume().getPath()).isEqualTo("/mcp-material");
+                assertThat(bind.getAccessMode()).isEqualTo(AccessMode.ro);
+            });
             assertThat(labels.getValue()).containsExactlyInAnyOrderEntriesOf(Map.of(
                     "com.agent.runtime.managed", "true",
                     "com.agent.runtime.kind", "mcp",
@@ -624,7 +653,13 @@ class DockerMcpStdioRunnerContractTest {
             runner.start(mounted, Map.of(), Path.of("D:/agent4j"), event -> { });
             var hostConfig = forClass(HostConfig.class);
             verify(started.create()).withHostConfig(hostConfig.capture());
-            assertThat(hostConfig.getValue().getBinds()).singleElement().satisfies(bind -> {
+            assertThat(hostConfig.getValue().getBinds()).hasSize(2);
+            assertThat(hostConfig.getValue().getBinds()[0]).satisfies(bind -> {
+                assertThat(bind.getPath()).isEqualTo(Path.of("D:/agent4j").toString());
+                assertThat(bind.getVolume().getPath()).isEqualTo("/mcp-material");
+                assertThat(bind.getAccessMode()).isEqualTo(AccessMode.ro);
+            });
+            assertThat(hostConfig.getValue().getBinds()[1]).satisfies(bind -> {
                 assertThat(bind.getPath()).isEqualTo(Path.of("D:/agent4j").toString());
                 assertThat(bind.getVolume().getPath()).isEqualTo("/workspace");
                 assertThat(bind.getAccessMode()).isEqualTo(accessMode);

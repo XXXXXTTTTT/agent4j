@@ -6,6 +6,7 @@ import com.agent.web.mcp.catalog.OfficialMcpServerRecord;
 import com.agent.web.mcp.installation.McpInstallationPreview;
 import com.agent.web.mcp.installation.McpInstallationRecord;
 import com.agent.web.mcp.installation.McpInstallationService;
+import com.agent.web.mcp.runtime.McpInstallationRuntime;
 import com.agent.web.skill.GitHubSkillCatalogClient;
 import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.skill.GitHubSkillRepository;
@@ -37,15 +38,18 @@ public final class CapabilityManagementController {
     private final McpInstallationService mcpInstallations;
     private final GitHubSkillCatalogClient skillCatalog;
     private final GitHubSkillInstallationService skillInstallations;
+    private final McpInstallationRuntime mcpRuntime;
 
     public CapabilityManagementController(OfficialMcpCatalogClient mcpCatalog,
                                           McpInstallationService mcpInstallations,
                                           GitHubSkillCatalogClient skillCatalog,
-                                          GitHubSkillInstallationService skillInstallations) {
+                                          GitHubSkillInstallationService skillInstallations,
+                                          org.springframework.beans.factory.ObjectProvider<McpInstallationRuntime> mcpRuntimeProvider) {
         this.mcpCatalog = Objects.requireNonNull(mcpCatalog, "mcpCatalog 不能为空");
         this.mcpInstallations = Objects.requireNonNull(mcpInstallations, "mcpInstallations 不能为空");
         this.skillCatalog = Objects.requireNonNull(skillCatalog, "skillCatalog 不能为空");
         this.skillInstallations = Objects.requireNonNull(skillInstallations, "skillInstallations 不能为空");
+        this.mcpRuntime = mcpRuntimeProvider.getIfAvailable();
     }
 
     @GetMapping("/api/mcp/catalog")
@@ -82,8 +86,23 @@ public final class CapabilityManagementController {
     }
 
     @DeleteMapping("/api/workspaces/{workspaceId}/mcp/installations/{installationId}")
-    public InstallationView uninstallMcp(@PathVariable UUID workspaceId, @PathVariable UUID installationId) {
+    public InstallationView uninstallMcp(@PathVariable UUID workspaceId, @PathVariable UUID installationId,
+                                         @RequestParam long expectedVersion) {
         return InstallationView.from(mcpInstallations.uninstall(workspaceId, installationId));
+    }
+
+    @PostMapping("/api/workspaces/{workspaceId}/mcp/installations/{installationId}/start")
+    public InstallationView startMcp(@PathVariable UUID workspaceId, @PathVariable UUID installationId,
+                                     @Valid @RequestBody LifecycleRequest request) {
+        return InstallationView.from(runtime().start(workspaceId, installationId,
+                new McpInstallationRuntime.LifecycleRequest(request.expectedVersion(), request.targetWorkspaceId(), request.environment())));
+    }
+
+    @PostMapping("/api/workspaces/{workspaceId}/mcp/installations/{installationId}/stop")
+    public InstallationView stopMcp(@PathVariable UUID workspaceId, @PathVariable UUID installationId,
+                                    @Valid @RequestBody LifecycleRequest request) {
+        return InstallationView.from(runtime().stop(workspaceId, installationId,
+                new McpInstallationRuntime.LifecycleRequest(request.expectedVersion(), request.targetWorkspaceId(), request.environment())));
     }
 
     @GetMapping("/api/skills/search")
@@ -118,6 +137,8 @@ public final class CapabilityManagementController {
     public record McpPreviewRequest(@NotBlank String serverKey, InstallationScope scope, UUID targetWorkspaceId) { }
     public record ConfirmInstallationRequest(@NotNull UUID previewId, @NotBlank String confirmationToken,
                                               @NotNull InstallationScope scope, UUID targetWorkspaceId) { }
+    public record LifecycleRequest(long expectedVersion, @NotNull UUID targetWorkspaceId,
+                                   @NotNull java.util.Map<String, String> environment) { }
     public record SkillPreviewRequest(@NotBlank String repository, InstallationScope scope, UUID targetWorkspaceId) { }
     public record ConfirmSkillRequest(@NotNull UUID previewId, @NotBlank String confirmationToken,
                                       @NotNull InstallationScope scope, UUID targetWorkspaceId) { }
@@ -148,11 +169,22 @@ public final class CapabilityManagementController {
     public record InstallationView(UUID installationId, UUID snapshotId, InstallationScope scope,
                                    UUID workspaceId, String actorUserId, String status,
                                    java.time.Instant createdAt, java.time.Instant confirmedAt,
-                                   java.time.Instant updatedAt) {
+                                   java.time.Instant updatedAt, com.agent.core.tool.ToolRiskLevel riskLevel,
+                                   java.util.Set<com.agent.core.intent.RequiredCapability> requiredCapabilities,
+                                   com.agent.web.mcp.installation.WorkspaceMountMode workspaceMountMode,
+                                   com.agent.web.mcp.installation.McpNetworkMode networkMode,
+                                   String runtimeState, String runtimeError, long version) {
         static InstallationView from(McpInstallationRecord value) {
             return new InstallationView(value.installationId(), value.snapshotId(), value.scope(), value.workspaceId(),
-                    value.actorUserId(), value.status().name(), value.createdAt(), value.confirmedAt(), value.updatedAt());
+                    value.actorUserId(), value.status().name(), value.createdAt(), value.confirmedAt(), value.updatedAt(),
+                    value.riskLevel(), value.requiredCapabilities(), value.workspaceMountMode(), value.networkMode(),
+                    value.status().name(), value.runtimeError(), value.version());
         }
+    }
+
+    private McpInstallationRuntime runtime() {
+        if (mcpRuntime == null) throw new IllegalStateException("MCP Docker 运行时未配置");
+        return mcpRuntime;
     }
 
     public record SkillInstallationView(UUID skillInstallationId, UUID skillSnapshotId, InstallationScope scope,

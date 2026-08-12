@@ -28,6 +28,12 @@ import com.agent.web.workspace.WorkspaceImportService;
 import com.agent.web.mcp.catalog.OfficialMcpCatalogClient;
 import com.agent.web.mcp.installation.McpInstallationRepository;
 import com.agent.web.mcp.installation.McpInstallationService;
+import com.agent.web.mcp.runtime.DockerMcpStdioRunner;
+import com.agent.web.mcp.runtime.FileSystemMcpRuntimeMaterialProvider;
+import com.agent.web.mcp.runtime.McpInstallationRuntime;
+import com.agent.web.mcp.runtime.McpRuntimeMaterialProvider;
+import com.agent.web.mcp.runtime.McpRuntimeSecretProvider;
+import com.agent.web.mcp.runtime.McpRuntimeRecovery;
 import com.agent.web.persistence.JdbcMcpInstallationRepository;
 import com.agent.web.persistence.JdbcSkillInstallationRepository;
 import com.agent.web.persistence.JdbcCapabilityManagementAuditSink;
@@ -64,7 +70,7 @@ import com.agent.rag.memory.RunBadCaseAttributor;
 
 /** 装配 Harness 的持久化、图注册、Trace 与运行服务。 */
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties({ProductionAgentProperties.class, WorkspaceImportProperties.class})
+@EnableConfigurationProperties({ProductionAgentProperties.class, WorkspaceImportProperties.class, McpRuntimeProperties.class})
 public class HarnessConfiguration {
 
     /** 提供持久化 Checkpoint 使用的 UTC 时钟。 */
@@ -168,9 +174,64 @@ public class HarnessConfiguration {
     @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
     McpInstallationService mcpInstallationService(
             ActorResolver actorResolver, WorkspaceAccessService workspaceAccess,
-            McpInstallationRepository repository, CapabilityManagementAuditSink auditSink, Clock harnessClock) {
+            McpInstallationRepository repository, CapabilityManagementAuditSink auditSink, Clock harnessClock,
+            McpRuntimeProperties runtimeProperties) {
         return new McpInstallationService(actorResolver, workspaceAccess, repository,
-                auditSink, harnessClock, Duration.ofMinutes(5), UUID::randomUUID);
+                auditSink, harnessClock, Duration.ofMinutes(5), UUID::randomUUID, runtimeProperties.image());
+    }
+
+    /** 以持久化物料记录和受配置根目录构造 MCP 运行物料校验端口。 */
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    McpRuntimeMaterialProvider mcpRuntimeMaterialProvider(
+            McpRuntimeProperties properties, McpInstallationRepository repository) {
+        return new FileSystemMcpRuntimeMaterialProvider(properties.materialRoot(),
+                snapshot -> repository.findPreparedMaterial(snapshot.snapshotId())
+                        .map(value -> new McpRuntimeMaterialProvider.PreparedMaterial(
+                                value.directory(), value.sha256(), value.command(), value.arguments()))
+                        .orElse(null));
+    }
+
+    /** 默认只传递快照显式声明的环境变量名。 */
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    McpRuntimeSecretProvider mcpRuntimeSecretProvider() {
+        return McpRuntimeSecretProvider.declaredNamesOnly();
+    }
+
+    /** Docker stdio 运行器由 Spring 在应用关闭时统一关闭。 */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    DockerMcpStdioRunner dockerMcpStdioRunner() {
+        return new DockerMcpStdioRunner();
+    }
+
+    /** 将受确认安装接入 MCP Docker 生命周期服务。 */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    @ConditionalOnBean(ToolRegistry.class)
+    McpInstallationRuntime mcpInstallationRuntime(
+            ActorResolver actorResolver, WorkspaceAccessService workspaceAccess,
+            McpInstallationRepository repository, McpRuntimeMaterialProvider materialProvider,
+            McpRuntimeSecretProvider secretProvider, DockerMcpStdioRunner runner, ToolRegistry toolRegistry,
+            ObjectMapper objectMapper, McpRuntimeProperties properties, McpGatewayProperties gatewayProperties,
+            Clock harnessClock) {
+        return new McpInstallationRuntime(actorResolver, workspaceAccess, repository, materialProvider, secretProvider,
+                runner, toolRegistry, objectMapper, new McpInstallationRuntime.McpRuntimeConfiguration(
+                        gatewayProperties.protocolVersion(), gatewayProperties.clientName(), gatewayProperties.clientVersion(),
+                        properties.materialContainerDirectory(), properties.materialSourceContainer(), properties.materialSourcePath(),
+                        properties.containerWorkingDirectory(), properties.memoryBytes(), properties.nanoCpus(), properties.pidsLimit(),
+                        properties.maxStdoutFrameBytes(), properties.maxStdoutBufferedBytes(), properties.maxStderrBytes(),
+                        properties.requestTimeout(), properties.toolTimeout(), properties.drainTimeout()), harnessClock);
+    }
+
+    /** 应用就绪后恢复已中断的 MCP 容器生命周期。 */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    @ConditionalOnBean(McpInstallationRuntime.class)
+    McpRuntimeRecovery mcpRuntimeRecovery(
+            McpInstallationRepository repository, DockerMcpStdioRunner runner, McpInstallationRuntime runtime) {
+        return new McpRuntimeRecovery(repository, runner, runtime);
     }
 
     @Bean

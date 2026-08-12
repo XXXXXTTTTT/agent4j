@@ -57,6 +57,9 @@ services:
       AGENT_CODE_WORKSPACE_SOURCE_CONTAINER: agent4j-web-local
       AGENT_CODE_WORKSPACE_SOURCE_PATH: /agent-workspace
       AGENT_LOG_DIR: /app/logs
+      AGENT_MCP_RUNTIME_MATERIAL_ROOT: /app/mcp-materials
+      AGENT_MCP_RUNTIME_MATERIAL_SOURCE_CONTAINER: agent4j-web-local
+      AGENT_MCP_RUNTIME_MATERIAL_SOURCE_PATH: /app/mcp-materials
     volumes:
       - type: bind
         source: ${AGENT_CODE_HOST_WORKSPACE:-.}
@@ -65,6 +68,9 @@ services:
       - type: bind
         source: ${AGENT_LOG_HOST_DIR:-./logs}
         target: /app/logs
+      - type: bind
+        source: ${AGENT_MCP_MATERIAL_HOST_DIR:-./tmp/mcp-materials}
+        target: /app/mcp-materials
 
 volumes:
   agent4j-postgres-data:
