@@ -116,7 +116,24 @@ public final class GitHubSkillInstallationService {
     public List<SkillInstallationRecord> list(UUID workspaceId) {
         Actor actor = actorResolver.current();
         workspaceAccess.requireWorkspace(workspaceId, actor.userId(), WorkspacePermission.VIEWER);
-        return repository.findInstallations(actor.userId(), workspaceId, InstallationScope.WORKSPACE);
+        return repository.findInstallations(actor.userId(), workspaceId);
+    }
+
+    /** 撤销当前主体可管理范围内的 Skill 安装。 */
+    public SkillInstallationRecord uninstall(UUID workspaceId, UUID skillInstallationId) {
+        Objects.requireNonNull(skillInstallationId, "skillInstallationId 不能为空");
+        Actor actor = actorResolver.current();
+        workspaceAccess.requireWorkspace(workspaceId, actor.userId(), WorkspacePermission.OPERATOR);
+        SkillInstallationRecord installation = repository.findInstallations(actor.userId(), workspaceId).stream()
+                .filter(value -> value.skillInstallationId().equals(skillInstallationId))
+                .findFirst()
+                .orElseThrow(() -> new InstallationNotFoundException(skillInstallationId));
+        if (!repository.deleteInstallation(skillInstallationId, actor.userId(), workspaceId)) {
+            throw new InstallationNotFoundException(skillInstallationId);
+        }
+        auditSink.record(new CapabilityManagementAuditEvent("SKILL_INSTALLATION_REMOVED", actor.userId(),
+                workspaceId, null, skillInstallationId, null, "", "SUCCESS", clock.instant()));
+        return installation;
     }
 
     private ScopeTarget resolveTarget(Actor actor, UUID requestWorkspaceId, InstallationScope requestedScope, UUID targetWorkspaceId) {
@@ -146,5 +163,12 @@ public final class GitHubSkillInstallationService {
 
     public static final class InvalidConfirmationException extends RuntimeException {
         public InvalidConfirmationException() { super("Skill 安装确认无效或已过期"); }
+    }
+
+    /** 当前主体范围内不存在该 Skill 安装。 */
+    public static final class InstallationNotFoundException extends RuntimeException {
+        public InstallationNotFoundException(UUID skillInstallationId) {
+            super("Skill 安装不存在或当前用户无权访问: " + skillInstallationId);
+        }
     }
 }

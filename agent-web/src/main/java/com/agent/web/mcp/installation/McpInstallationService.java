@@ -16,6 +16,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -94,6 +95,30 @@ public final class McpInstallationService {
         return installation;
     }
 
+    /** 返回当前主体在工作区和其用户全局范围内的安装。 */
+    public List<McpInstallationRecord> list(UUID workspaceId) {
+        Actor actor = actorResolver.current();
+        workspaceAccess.requireWorkspace(workspaceId, actor.userId(), WorkspacePermission.VIEWER);
+        return repository.findInstallations(actor.userId(), workspaceId);
+    }
+
+    /** 撤销当前主体可管理范围内的安装记录，不启动或停止运行时。 */
+    public McpInstallationRecord uninstall(UUID workspaceId, UUID installationId) {
+        Objects.requireNonNull(installationId, "installationId 不能为空");
+        Actor actor = actorResolver.current();
+        workspaceAccess.requireWorkspace(workspaceId, actor.userId(), WorkspacePermission.OPERATOR);
+        McpInstallationRecord installation = repository.findInstallations(actor.userId(), workspaceId).stream()
+                .filter(value -> value.installationId().equals(installationId))
+                .findFirst()
+                .orElseThrow(() -> new InstallationNotFoundException(installationId));
+        if (!repository.deleteInstallation(installationId, actor.userId(), workspaceId)) {
+            throw new InstallationNotFoundException(installationId);
+        }
+        auditSink.record(new CapabilityManagementAuditEvent("MCP_INSTALLATION_REMOVED", actor.userId(),
+                workspaceId, installationId, null, null, "", "SUCCESS", clock.instant()));
+        return installation;
+    }
+
     private ScopeTarget resolveTarget(
             Actor actor,
             UUID requestWorkspaceId,
@@ -141,6 +166,13 @@ public final class McpInstallationService {
     public static final class InvalidConfirmationException extends RuntimeException {
         public InvalidConfirmationException() {
             super("MCP 安装确认无效或已过期");
+        }
+    }
+
+    /** 当前主体范围内不存在该安装。 */
+    public static final class InstallationNotFoundException extends RuntimeException {
+        public InstallationNotFoundException(UUID installationId) {
+            super("MCP 安装不存在或当前用户无权访问: " + installationId);
         }
     }
 }

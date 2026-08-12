@@ -98,6 +98,7 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
         }), "MCP 安装保存事务返回值不能为空");
     }
 
+    @Override
     public List<McpInstallationRecord> findInstallations(String actorUserId, UUID workspaceId) {
         Objects.requireNonNull(actorUserId, "actorUserId 不能为空");
         return jdbc.sql("""
@@ -115,8 +116,9 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                 .list();
     }
 
-    public void deleteInstallation(UUID installationId, String actorUserId, UUID workspaceId) {
-        jdbc.sql("""
+    @Override
+    public boolean deleteInstallation(UUID installationId, String actorUserId, UUID workspaceId) {
+        return jdbc.sql("""
                 delete from agent_mcp_installations
                 where installation_id = :installationId
                   and actor_user_id = :actorUserId
@@ -125,7 +127,7 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                 .param("installationId", installationId)
                 .param("actorUserId", actorUserId)
                 .param("workspaceId", workspaceId)
-                .update();
+                .update() > 0;
     }
 
     private java.util.Optional<McpSourceSnapshot> findSnapshot(String serverKey, String commitSha, String metadataSha256) {

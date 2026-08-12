@@ -44,6 +44,11 @@ public final class GitHubSkillCatalogClient {
         this.maxBytes = maxBytes;
     }
 
+    /** 创建 JDK HTTP 实现的生产客户端。 */
+    public GitHubSkillCatalogClient(ObjectMapper objectMapper, URI apiBase, Duration timeout, int maxBytes) {
+        this(new JdkHttpExchange(), objectMapper, apiBase, timeout, maxBytes);
+    }
+
     /** 搜索公开 GitHub 仓库；不完整结果不得作为安装来源。 */
     public List<GitHubSkillRepository> search(String query) {
         String normalized = required(query, "query").strip();
@@ -205,5 +210,29 @@ public final class GitHubSkillCatalogClient {
 
     /** GitHub HTTP 响应。 */
     public record HttpResponse(int statusCode, String body) {
+    }
+
+    private static final class JdkHttpExchange implements HttpExchange {
+        private final java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
+
+        @Override
+        public HttpResponse exchange(URI uri, Duration timeout, int maxBytes) {
+            try {
+                java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder(uri)
+                        .timeout(timeout).header("Accept", "application/vnd.github+json")
+                        .header("User-Agent", "agent4j").GET().build();
+                java.net.http.HttpResponse<String> response = client.send(request,
+                        java.net.http.HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                if (response.body().getBytes(StandardCharsets.UTF_8).length > maxBytes) {
+                    throw new IllegalArgumentException("GitHub HTTP 响应超过大小限制");
+                }
+                return new HttpResponse(response.statusCode(), response.body());
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("GitHub HTTP 请求被中断", exception);
+            } catch (java.io.IOException exception) {
+                throw new IllegalStateException("GitHub HTTP 请求失败", exception);
+            }
+        }
     }
 }

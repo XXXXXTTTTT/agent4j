@@ -25,6 +25,16 @@ import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspaceBootstrap;
 import com.agent.web.workspace.WorkspaceDirectoryBrowser;
 import com.agent.web.workspace.WorkspaceImportService;
+import com.agent.web.mcp.catalog.OfficialMcpCatalogClient;
+import com.agent.web.mcp.installation.McpInstallationRepository;
+import com.agent.web.mcp.installation.McpInstallationService;
+import com.agent.web.persistence.JdbcMcpInstallationRepository;
+import com.agent.web.persistence.JdbcSkillInstallationRepository;
+import com.agent.web.skill.GitHubSkillCatalogClient;
+import com.agent.web.skill.GitHubSkillInstallationService;
+import com.agent.web.skill.SkillInstallationRepository;
+import com.agent.web.capability.CapabilityManagementAuditSink;
+import com.agent.core.tool.ToolRegistry;
 import com.agent.web.trace.InMemoryTraceEventBus;
 import com.agent.web.trace.RunLifecycleEventPublisher;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -41,6 +51,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.core.env.Environment;
 
 import java.time.Clock;
+import java.time.Duration;
+import java.net.URI;
+import java.util.UUID;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -111,6 +124,54 @@ public class HarnessConfiguration {
             ActorResolver actorResolver,
             Clock harnessClock) {
         return new ModelConfigurationService(repository, actorResolver, harnessClock);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    OfficialMcpCatalogClient officialMcpCatalogClient(ObjectMapper objectMapper) {
+        return new OfficialMcpCatalogClient(objectMapper,
+                URI.create("https://api.github.com/repos/modelcontextprotocol/servers/"),
+                "main", Duration.ofSeconds(10), 2_000_000, Duration.ofMinutes(10));
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    GitHubSkillCatalogClient gitHubSkillCatalogClient(ObjectMapper objectMapper) {
+        return new GitHubSkillCatalogClient(objectMapper, URI.create("https://api.github.com/"),
+                Duration.ofSeconds(10), 512_000);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    McpInstallationRepository mcpInstallationRepository(
+            JdbcClient jdbcClient, PlatformTransactionManager transactionManager, ObjectMapper objectMapper) {
+        return new JdbcMcpInstallationRepository(jdbcClient, new TransactionTemplate(transactionManager), objectMapper);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    SkillInstallationRepository skillInstallationRepository(
+            JdbcClient jdbcClient, PlatformTransactionManager transactionManager, ObjectMapper objectMapper) {
+        return new JdbcSkillInstallationRepository(jdbcClient, new TransactionTemplate(transactionManager), objectMapper);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    McpInstallationService mcpInstallationService(
+            ActorResolver actorResolver, WorkspaceAccessService workspaceAccess,
+            McpInstallationRepository repository, Clock harnessClock) {
+        return new McpInstallationService(actorResolver, workspaceAccess, repository,
+                CapabilityManagementAuditSink.noop(), harnessClock, Duration.ofMinutes(5), UUID::randomUUID);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    @ConditionalOnBean(ToolRegistry.class)
+    GitHubSkillInstallationService gitHubSkillInstallationService(
+            GitHubSkillCatalogClient client, ToolRegistry toolRegistry, ActorResolver actorResolver,
+            WorkspaceAccessService workspaceAccess, SkillInstallationRepository repository, Clock harnessClock) {
+        return new GitHubSkillInstallationService(client, toolRegistry, actorResolver, workspaceAccess,
+                repository, CapabilityManagementAuditSink.noop(), harnessClock, Duration.ofMinutes(5), UUID::randomUUID);
     }
 
     /** 将 PostgreSQL 完成轮次组装为核心短期上下文。 */

@@ -154,6 +154,8 @@ class McpInstallationServiceTest {
 
         @Override public McpSourceSnapshot saveSnapshot(McpSourceSnapshot snapshot) { savedSnapshots.add(snapshot); return snapshot; }
         @Override public McpInstallationRecord saveInstallation(McpInstallationRecord installation) { savedInstallations.add(installation); return installation; }
+        @Override public List<McpInstallationRecord> findInstallations(String actorUserId, UUID workspaceId) { return List.copyOf(savedInstallations); }
+        @Override public boolean deleteInstallation(UUID installationId, String actorUserId, UUID workspaceId) { return savedInstallations.removeIf(value -> value.installationId().equals(installationId)); }
         @Override public Optional<WorkspaceRecord> findWorkspace(UUID workspaceId, String userId) { return Optional.ofNullable(workspaces.get(workspaceId)); }
         @Override public List<WorkspaceRecord> findWorkspaces(String userId) { return List.of(); }
         @Override public WorkspaceRecord createWorkspace(UUID workspaceId, Actor owner, String displayName, Path workspacePath, String repositoryId, Instant now) { throw new UnsupportedOperationException(); }

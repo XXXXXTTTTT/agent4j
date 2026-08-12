@@ -9,5 +9,6 @@ import java.util.UUID;
 public interface SkillInstallationRepository {
     SkillSnapshotRecord saveSnapshot(SkillSnapshotRecord snapshot);
     SkillInstallationRecord saveInstallation(SkillInstallationRecord installation);
-    List<SkillInstallationRecord> findInstallations(String actorUserId, UUID workspaceId, InstallationScope scope);
+    List<SkillInstallationRecord> findInstallations(String actorUserId, UUID workspaceId);
+    boolean deleteInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId);
 }
