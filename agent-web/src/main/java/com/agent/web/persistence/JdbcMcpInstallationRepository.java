@@ -147,17 +147,35 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
     }
 
     @Override
-    public boolean deleteInstallation(UUID installationId, String actorUserId, UUID workspaceId) {
+    public boolean deleteInstallation(UUID installationId, String actorUserId, UUID workspaceId, long expectedVersion) {
         return jdbc.sql("""
                 delete from agent_mcp_installations
                 where installation_id = :installationId
                   and actor_user_id = :actorUserId
+                  and version = :expectedVersion
                   and ((scope = 'WORKSPACE' and workspace_id = :workspaceId) or scope = 'USER_GLOBAL')
                 """)
                 .param("installationId", installationId)
                 .param("actorUserId", actorUserId)
                 .param("workspaceId", workspaceId)
+                .param("expectedVersion", expectedVersion)
                 .update() > 0;
+    }
+
+    @Override
+    public McpInstallationRecord transition(UUID installationId, long expectedVersion, McpInstallationStatus from,
+                                            McpInstallationStatus to, String runtimeError, String containerId) {
+        return Objects.requireNonNull(transactions.execute(status -> {
+            int updated = jdbc.sql("""
+                    update agent_mcp_installations set status = :to, runtime_error = :runtimeError,
+                           container_id = :containerId, updated_at = current_timestamp, version = version + 1
+                    where installation_id = :id and version = :expectedVersion and status = :from
+                    """).param("to", to.name()).param("runtimeError", runtimeError)
+                    .param("containerId", containerId).param("id", installationId)
+                    .param("expectedVersion", expectedVersion).param("from", from.name()).update();
+            if (updated != 1) throw new IllegalStateException("MCP 安装版本或状态冲突");
+            return findInstallation(installationId).orElseThrow();
+        }), "MCP 状态迁移事务返回值不能为空");
     }
 
     private java.util.Optional<McpSourceSnapshot> findSnapshot(String serverKey, String commitSha, String metadataSha256) {

@@ -85,13 +85,13 @@ public final class McpInstallationService {
             throw new InvalidConfirmationException();
         }
         Instant now = clock.instant();
-        McpSourceSnapshot snapshot = repository.saveSnapshot(
-                McpSourceSnapshot.from(uuidSupplier.get(), pending.server(), now));
-        McpInstallationRecord installation = repository.saveInstallation(new McpInstallationRecord(
+        McpSourceSnapshot snapshot = McpSourceSnapshot.from(uuidSupplier.get(), pending.server(), now);
+        McpInstallationRecord installation = new McpInstallationRecord(
                 uuidSupplier.get(), snapshot.snapshotId(), target.scope(), target.workspaceId(), actor.userId(),
-                McpInstallationStatus.STOPPED, sha256(confirmationToken), now, now, now));
-        auditSink.record(new CapabilityManagementAuditEvent("MCP_INSTALLATION_CONFIRMED", actor.userId(),
-                requestWorkspaceId, installation.installationId(), null, null, snapshot.commitSha(), "SUCCESS", now));
+                McpInstallationStatus.STOPPED, sha256(confirmationToken), now, now, now);
+        repository.confirmInstallation(new McpInstallationCommand(snapshot, installation,
+                new CapabilityManagementAuditEvent("MCP_INSTALLATION_CONFIRMED", actor.userId(),
+                        requestWorkspaceId, installation.installationId(), null, null, snapshot.commitSha(), "SUCCESS", now)));
         previews.remove(previewId, pending);
         return installation;
     }
@@ -112,7 +112,7 @@ public final class McpInstallationService {
                 .filter(value -> value.installationId().equals(installationId))
                 .findFirst()
                 .orElseThrow(() -> new InstallationNotFoundException(installationId));
-        if (!repository.deleteInstallation(installationId, actor.userId(), workspaceId)) {
+        if (!repository.deleteInstallation(installationId, actor.userId(), workspaceId, installation.version())) {
             throw new InstallationNotFoundException(installationId);
         }
         auditSink.record(new CapabilityManagementAuditEvent("MCP_INSTALLATION_REMOVED", actor.userId(),

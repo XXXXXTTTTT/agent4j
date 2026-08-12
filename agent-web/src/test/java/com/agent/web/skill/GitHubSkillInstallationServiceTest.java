@@ -88,8 +88,10 @@ class GitHubSkillInstallationServiceTest {
         private FakeRepository(WorkspaceRecord workspace) { this.workspace = workspace; }
         public SkillSnapshotRecord saveSnapshot(SkillSnapshotRecord snapshot) { return snapshot; }
         public SkillInstallationRecord saveInstallation(SkillInstallationRecord installation) { return installation; }
+        public SkillInstallationRecord confirmSkill(SkillSnapshotRecord snapshot, SkillInstallationRecord installation, com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) { return installation; }
         public List<SkillInstallationRecord> findInstallations(String actorUserId, UUID workspaceId) { return List.of(); }
-        public boolean deleteInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId) { return false; }
+        public boolean deleteInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId, long expectedVersion) { return false; }
+        public SkillInstallationRecord transition(UUID skillInstallationId, long expectedVersion, SkillInstallationStatus from, SkillInstallationStatus to) { throw new UnsupportedOperationException(); }
         public Optional<WorkspaceRecord> findWorkspace(UUID id, String userId) { return WORKSPACE.equals(id) && "user".equals(userId) ? Optional.of(workspace) : Optional.empty(); }
         public List<WorkspaceRecord> findWorkspaces(String userId) { return List.of(workspace); }
         public WorkspaceRecord createWorkspace(UUID id, Actor owner, String displayName, Path path, String repositoryId, Instant now) { throw new UnsupportedOperationException(); }

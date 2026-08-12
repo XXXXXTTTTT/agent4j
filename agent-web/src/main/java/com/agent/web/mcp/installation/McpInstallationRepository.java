@@ -5,19 +5,13 @@ import java.util.UUID;
 
 /** MCP 安装持久化端口。 */
 public interface McpInstallationRepository {
-    default McpInstallationRecord confirmInstallation(McpInstallationCommand command) {
-        saveSnapshot(command.snapshot());
-        McpInstallationRecord result = saveInstallation(command.installation());
-        return result;
-    }
+    McpInstallationRecord confirmInstallation(McpInstallationCommand command);
     McpSourceSnapshot saveSnapshot(McpSourceSnapshot snapshot);
     McpInstallationRecord saveInstallation(McpInstallationRecord installation);
     List<McpInstallationRecord> findInstallations(String actorUserId, UUID workspaceId);
-    boolean deleteInstallation(UUID installationId, String actorUserId, UUID workspaceId);
+    boolean deleteInstallation(UUID installationId, String actorUserId, UUID workspaceId, long expectedVersion);
 
-    default McpInstallationRecord transition(
+    McpInstallationRecord transition(
             UUID installationId, long expectedVersion, McpInstallationStatus from,
-            McpInstallationStatus to, String runtimeError, String containerId) {
-        throw new UnsupportedOperationException("MCP 状态迁移未实现");
-    }
+            McpInstallationStatus to, String runtimeError, String containerId);
 }

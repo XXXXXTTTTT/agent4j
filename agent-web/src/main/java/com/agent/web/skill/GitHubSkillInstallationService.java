@@ -99,15 +99,15 @@ public final class GitHubSkillInstallationService {
             throw new InvalidConfirmationException();
         }
         Instant now = clock.instant();
-        SkillSnapshotRecord snapshot = repository.saveSnapshot(new SkillSnapshotRecord(
+        SkillSnapshotRecord snapshot = new SkillSnapshotRecord(
                 uuidSupplier.get(), pending.snapshot().repositoryUrl(), pending.snapshot().repository(),
                 pending.snapshot().commitSha(), pending.snapshot().blobSha(), pending.snapshot().path(),
                 pending.snapshot().license(), pending.snapshot().contentSha256(), pending.snapshot().summary(),
-                pending.snapshot().requestedToolNames(), pending.snapshot().content(), now));
-        SkillInstallationRecord installation = repository.saveInstallation(new SkillInstallationRecord(
+                pending.snapshot().requestedToolNames(), pending.snapshot().content(), now);
+        SkillInstallationRecord installation = new SkillInstallationRecord(
                 uuidSupplier.get(), snapshot.skillSnapshotId(), target.scope(), target.workspaceId(), actor.userId(),
-                SkillInstallationStatus.APPROVED, sha256(confirmationToken), now, now, now));
-        auditSink.record(new CapabilityManagementAuditEvent("SKILL_INSTALLATION_CONFIRMED", actor.userId(),
+                SkillInstallationStatus.APPROVED, sha256(confirmationToken), now, now, now);
+        repository.confirmSkill(snapshot, installation, new CapabilityManagementAuditEvent("SKILL_INSTALLATION_CONFIRMED", actor.userId(),
                 requestWorkspaceId, null, installation.skillInstallationId(), null,
                 snapshot.commitSha(), "SUCCESS", now));
         previews.remove(previewId, pending);
@@ -129,7 +129,7 @@ public final class GitHubSkillInstallationService {
                 .filter(value -> value.skillInstallationId().equals(skillInstallationId))
                 .findFirst()
                 .orElseThrow(() -> new InstallationNotFoundException(skillInstallationId));
-        if (!repository.deleteInstallation(skillInstallationId, actor.userId(), workspaceId)) {
+        if (!repository.deleteInstallation(skillInstallationId, actor.userId(), workspaceId, installation.version())) {
             throw new InstallationNotFoundException(skillInstallationId);
         }
         auditSink.record(new CapabilityManagementAuditEvent("SKILL_INSTALLATION_REMOVED", actor.userId(),

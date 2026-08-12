@@ -31,7 +31,8 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
     }
 
     @Override
-    public SkillInstallationRecord confirmSkill(SkillSnapshotRecord snapshot, SkillInstallationRecord installation) {
+    public SkillInstallationRecord confirmSkill(SkillSnapshotRecord snapshot, SkillInstallationRecord installation,
+                                                com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
         Objects.requireNonNull(snapshot, "snapshot 不能为空");
         Objects.requireNonNull(installation, "installation 不能为空");
         return Objects.requireNonNull(transactions.execute(status -> {
@@ -122,13 +123,29 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
     }
 
     @Override
-    public boolean deleteInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId) {
+    public boolean deleteInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId, long expectedVersion) {
         return jdbc.sql("""
                 delete from agent_skill_installations
-                where skill_installation_id = :id and actor_user_id = :actorUserId
+                  where skill_installation_id = :id and actor_user_id = :actorUserId
+                  and version = :expectedVersion
                   and ((scope = 'WORKSPACE' and workspace_id = :workspaceId) or scope = 'USER_GLOBAL')
                 """).param("id", skillInstallationId).param("actorUserId", actorUserId)
-                .param("workspaceId", workspaceId).update() > 0;
+                .param("workspaceId", workspaceId).param("expectedVersion", expectedVersion).update() > 0;
+    }
+
+    @Override
+    public SkillInstallationRecord transition(UUID skillInstallationId, long expectedVersion,
+                                               SkillInstallationStatus from, SkillInstallationStatus to) {
+        return Objects.requireNonNull(transactions.execute(status -> {
+            int updated = jdbc.sql("""
+                    update agent_skill_installations set status = :to, updated_at = current_timestamp,
+                           version = version + 1
+                    where skill_installation_id = :id and version = :expectedVersion and status = :from
+                    """).param("to", to.name()).param("id", skillInstallationId)
+                    .param("expectedVersion", expectedVersion).param("from", from.name()).update();
+            if (updated != 1) throw new IllegalStateException("Skill 安装版本或状态冲突");
+            return findInstallation(skillInstallationId).orElseThrow();
+        }), "Skill 状态迁移事务返回值不能为空");
     }
 
     private SkillSnapshotRecord mapSnapshot(java.sql.ResultSet rs, int row) throws java.sql.SQLException {
