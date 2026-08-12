@@ -10,8 +10,10 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -184,6 +186,95 @@ class ToolRegistryOwnershipTest {
         } finally {
             allowAuditReturn.countDown();
         }
+    }
+
+    @Test
+    void releasesOwnerWhenTimedOutTaskIsCancelledBeforeHandlerStarts() throws Exception {
+        ManualExecutor executor = new ManualExecutor();
+        try (DefaultToolRegistry registry = registry(executor)) {
+            registry.registerOwned("installation-a", List.of(new ToolDefinition(
+                    "queued.tool", "排队工具", JsonNodeFactory.instance.objectNode().put("type", "object"), Set.of(),
+                    ToolRiskLevel.LOW, Duration.ofMillis(20), (call, context) -> JsonNodeFactory.instance.objectNode())));
+
+            ToolResult result = registry.execute(call("queued", "queued.tool"), context());
+            assertThat(result.status()).isEqualTo(ToolResultStatus.TIMED_OUT);
+            assertThat(executor.submitted.await(1, TimeUnit.SECONDS)).isTrue();
+            registry.beginDrain("installation-a");
+            registry.unregisterOwned("installation-a", Duration.ZERO);
+
+            assertThat(registry.find("queued.tool")).isEmpty();
+        }
+    }
+
+    @Test
+    void doesNotReleaseOwnerWhenTimedOutHandlerHasStartedAndIgnoresInterrupt() throws Exception {
+        ManualExecutor executor = new ManualExecutor();
+        CountDownLatch handlerStarted = new CountDownLatch(1);
+        CountDownLatch allowHandlerExit = new CountDownLatch(1);
+        try (DefaultToolRegistry registry = registry(executor);
+             var callers = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            registry.registerOwned("installation-a", List.of(new ToolDefinition(
+                    "started.tool", "已启动工具", JsonNodeFactory.instance.objectNode().put("type", "object"), Set.of(),
+                    ToolRiskLevel.LOW, Duration.ofMillis(20), (call, context) -> {
+                        handlerStarted.countDown();
+                        while (allowHandlerExit.getCount() > 0) {
+                            try {
+                                allowHandlerExit.await();
+                            } catch (InterruptedException ignored) {
+                                // 测试 handler 忽略取消中断，直到显式允许退出。
+                            }
+                        }
+                        return JsonNodeFactory.instance.objectNode();
+                    })));
+
+            Future<ToolResult> result = callers.submit(() -> registry.execute(call("started", "started.tool"), context()));
+            assertThat(executor.submitted.await(1, TimeUnit.SECONDS)).isTrue();
+            executor.startNext();
+            assertThat(handlerStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(result.get(1, TimeUnit.SECONDS).status()).isEqualTo(ToolResultStatus.TIMED_OUT);
+            registry.beginDrain("installation-a");
+            registry.unregisterOwned("installation-a", Duration.ofMillis(20));
+            assertThat(registry.find("started.tool")).isPresent();
+
+            allowHandlerExit.countDown();
+            registry.unregisterOwned("installation-a", Duration.ofSeconds(1));
+            assertThat(registry.find("started.tool")).isEmpty();
+        }
+    }
+
+    private DefaultToolRegistry registry(ManualExecutor executor) {
+        return new DefaultToolRegistry(new JacksonToolSchemaValidator(), new DefaultToolAuthorizer(), ToolAuditSink.noop(),
+                new ObjectMapper(), System::nanoTime, new com.agent.core.security.DefaultToolParameterPolicy(java.util.Map.of()),
+                new com.agent.core.security.DefaultOutputRedactor(), com.agent.core.security.SecurityViolationSink.noop(), executor);
+    }
+
+    private static final class ManualExecutor extends AbstractExecutorService {
+        private final CountDownLatch submitted = new CountDownLatch(1);
+        private final java.util.concurrent.BlockingQueue<Runnable> tasks = new java.util.concurrent.LinkedBlockingQueue<>();
+        private final AtomicBoolean shutdown = new AtomicBoolean();
+
+        @Override
+        public void execute(Runnable command) {
+            if (shutdown.get()) {
+                throw new java.util.concurrent.RejectedExecutionException("执行器已关闭");
+            }
+            tasks.add(command);
+            submitted.countDown();
+        }
+
+        void startNext() throws InterruptedException {
+            Runnable task = tasks.poll(1, TimeUnit.SECONDS);
+            if (task == null) {
+                throw new AssertionError("没有待执行任务");
+            }
+            Thread.startVirtualThread(task);
+        }
+
+        @Override public void shutdown() { shutdown.set(true); }
+        @Override public java.util.List<Runnable> shutdownNow() { shutdown.set(true); return java.util.List.copyOf(tasks); }
+        @Override public boolean isShutdown() { return shutdown.get(); }
+        @Override public boolean isTerminated() { return shutdown.get(); }
+        @Override public boolean awaitTermination(long timeout, TimeUnit unit) { return shutdown.get(); }
     }
 
     private ToolDefinition definition(String name) {

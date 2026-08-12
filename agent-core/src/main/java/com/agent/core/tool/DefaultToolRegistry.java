@@ -59,7 +59,7 @@ public final class DefaultToolRegistry implements ToolRegistry {
 
     private final Object lifecycleMonitor = new Object();
     private volatile RegistrySnapshot snapshot = RegistrySnapshot.empty();
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService executor;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     /** 使用默认确定性治理组件创建注册表。 */
@@ -92,6 +92,21 @@ public final class DefaultToolRegistry implements ToolRegistry {
             ToolParameterPolicy parameterPolicy,
             OutputRedactor outputRedactor,
             SecurityViolationSink securityViolationSink) {
+        this(schemaValidator, authorizer, auditSink, objectMapper, nanoTime, parameterPolicy, outputRedactor,
+                securityViolationSink, Executors.newVirtualThreadPerTaskExecutor());
+    }
+
+    /** 注入执行器以隔离超时与取消时序测试。 */
+    DefaultToolRegistry(
+            ToolSchemaValidator schemaValidator,
+            ToolAuthorizer authorizer,
+            ToolAuditSink auditSink,
+            ObjectMapper objectMapper,
+            LongSupplier nanoTime,
+            ToolParameterPolicy parameterPolicy,
+            OutputRedactor outputRedactor,
+            SecurityViolationSink securityViolationSink,
+            ExecutorService executor) {
         this.schemaValidator = Objects.requireNonNull(schemaValidator, "schemaValidator 不能为空");
         this.authorizer = Objects.requireNonNull(authorizer, "authorizer 不能为空");
         this.auditSink = Objects.requireNonNull(auditSink, "auditSink 不能为空");
@@ -101,6 +116,7 @@ public final class DefaultToolRegistry implements ToolRegistry {
         this.outputRedactor = Objects.requireNonNull(outputRedactor, "outputRedactor 不能为空");
         this.securityViolationSink = Objects.requireNonNull(
                 securityViolationSink, "securityViolationSink 不能为空");
+        this.executor = Objects.requireNonNull(executor, "executor 不能为空");
     }
 
     @Override
@@ -285,6 +301,7 @@ public final class DefaultToolRegistry implements ToolRegistry {
                     NullNode.getInstance(), exception, started, false, argumentsSha256);
         }
 
+        InvocationLease invocationLease = new InvocationLease(ownerId);
         boolean handlerSubmitted = false;
         try {
             try {
@@ -342,10 +359,13 @@ public final class DefaultToolRegistry implements ToolRegistry {
             }
 
             Future<JsonNode> future = executor.submit(() -> {
+                if (!invocationLease.beginHandler()) {
+                    return NullNode.getInstance();
+                }
                 try {
                     return definition.handler().execute(call, context);
                 } finally {
-                    releaseOwnerCall(ownerId);
+                    invocationLease.release();
                 }
             });
             handlerSubmitted = true;
@@ -368,12 +388,14 @@ public final class DefaultToolRegistry implements ToolRegistry {
                         redactedOutput, null, started, false, argumentsSha256);
             } catch (TimeoutException exception) {
                 boolean cancellationRequested = future.cancel(true);
+                releaseCancelledBeforeHandlerStart(cancellationRequested, invocationLease);
                 ToolTimeoutException timeout = new ToolTimeoutException(definition.name(), definition.timeout());
                 return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.TIMED_OUT,
                         NullNode.getInstance(), timeout, started, cancellationRequested, argumentsSha256);
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
                 boolean cancellationRequested = future.cancel(true);
+                releaseCancelledBeforeHandlerStart(cancellationRequested, invocationLease);
                 return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
                         NullNode.getInstance(), exception, started, cancellationRequested, argumentsSha256);
             } catch (CancellationException exception) {
@@ -389,7 +411,7 @@ public final class DefaultToolRegistry implements ToolRegistry {
             }
         } finally {
             if (!handlerSubmitted) {
-                releaseOwnerCall(ownerId);
+                invocationLease.release();
             }
         }
     }
@@ -518,6 +540,14 @@ public final class DefaultToolRegistry implements ToolRegistry {
         }
     }
 
+    private static void releaseCancelledBeforeHandlerStart(
+            boolean cancellationRequested,
+            InvocationLease invocationLease) {
+        if (cancellationRequested) {
+            invocationLease.releaseIfNotStarted();
+        }
+    }
+
     private static void validateOwnerId(String ownerId) {
         if (ownerId == null || ownerId.isBlank()) {
             throw new IllegalArgumentException("ownerId 不能为空");
@@ -529,6 +559,44 @@ public final class DefaultToolRegistry implements ToolRegistry {
         if (BUILTIN_OWNER_ID.equals(ownerId)) {
             throw new IllegalArgumentException("builtin 工具不可停止或撤销");
         }
+    }
+
+    /** 使取消路径与 handler 结束路径对 owner 在途计数只释放一次。 */
+    private final class InvocationLease {
+        private final String ownerId;
+        private InvocationState state = InvocationState.QUEUED;
+
+        private InvocationLease(String ownerId) {
+            this.ownerId = ownerId;
+        }
+
+        private synchronized boolean beginHandler() {
+            if (state != InvocationState.QUEUED) {
+                return false;
+            }
+            state = InvocationState.RUNNING;
+            return true;
+        }
+
+        private synchronized void releaseIfNotStarted() {
+            if (state == InvocationState.QUEUED) {
+                state = InvocationState.RELEASED;
+                releaseOwnerCall(ownerId);
+            }
+        }
+
+        private synchronized void release() {
+            if (state != InvocationState.RELEASED) {
+                state = InvocationState.RELEASED;
+                releaseOwnerCall(ownerId);
+            }
+        }
+    }
+
+    private enum InvocationState {
+        QUEUED,
+        RUNNING,
+        RELEASED
     }
 
     /** 一次性发布工具定义、owner 状态和在途计数。 */
