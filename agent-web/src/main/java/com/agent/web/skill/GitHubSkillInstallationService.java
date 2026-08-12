@@ -129,12 +129,13 @@ public final class GitHubSkillInstallationService {
                 .filter(value -> value.skillInstallationId().equals(skillInstallationId))
                 .findFirst()
                 .orElseThrow(() -> new InstallationNotFoundException(skillInstallationId));
-        if (!repository.removeInstallation(skillInstallationId, actor.userId(), workspaceId, installation.version(),
-                new CapabilityManagementAuditEvent("SKILL_INSTALLATION_REMOVED", actor.userId(), workspaceId,
-                        null, skillInstallationId, null, "", "SUCCESS", clock.instant()))) {
+        try {
+            return repository.removeInstallation(skillInstallationId, actor.userId(), workspaceId, installation.version(),
+                    new CapabilityManagementAuditEvent("SKILL_INSTALLATION_REMOVED", actor.userId(), workspaceId,
+                            null, skillInstallationId, null, "", "SUCCESS", clock.instant()));
+        } catch (IllegalStateException exception) {
             throw new InstallationNotFoundException(skillInstallationId);
         }
-        return installation;
     }
 
     private ScopeTarget resolveTarget(Actor actor, UUID requestWorkspaceId, InstallationScope requestedScope, UUID targetWorkspaceId) {

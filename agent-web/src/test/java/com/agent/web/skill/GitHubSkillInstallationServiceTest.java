@@ -86,11 +86,9 @@ class GitHubSkillInstallationServiceTest {
     private static final class FakeRepository implements SkillInstallationRepository, com.agent.web.workspace.WorkspaceRepository {
         private final WorkspaceRecord workspace;
         private FakeRepository(WorkspaceRecord workspace) { this.workspace = workspace; }
-        public SkillSnapshotRecord saveSnapshot(SkillSnapshotRecord snapshot) { return snapshot; }
-        public SkillInstallationRecord saveInstallation(SkillInstallationRecord installation) { return installation; }
         public SkillInstallationRecord confirmSkill(SkillSnapshotRecord snapshot, SkillInstallationRecord installation, com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) { return installation; }
         public List<SkillInstallationRecord> findInstallations(String actorUserId, UUID workspaceId) { return List.of(); }
-        public boolean deleteInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId, long expectedVersion) { return false; }
+        public SkillInstallationRecord removeInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId, long expectedVersion, com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) { throw new IllegalStateException(); }
         public SkillInstallationRecord transition(UUID skillInstallationId, long expectedVersion, SkillInstallationStatus from, SkillInstallationStatus to) { throw new UnsupportedOperationException(); }
         public Optional<WorkspaceRecord> findWorkspace(UUID id, String userId) { return WORKSPACE.equals(id) && "user".equals(userId) ? Optional.of(workspace) : Optional.empty(); }
         public List<WorkspaceRecord> findWorkspaces(String userId) { return List.of(workspace); }

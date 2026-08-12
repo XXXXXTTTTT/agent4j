@@ -10,8 +10,9 @@ public interface SkillInstallationRepository {
     SkillInstallationRecord confirmSkill(SkillSnapshotRecord snapshot, SkillInstallationRecord installation,
                                          com.agent.web.capability.CapabilityManagementAuditEvent auditEvent);
     List<SkillInstallationRecord> findInstallations(String actorUserId, UUID workspaceId);
-    boolean removeInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId, long expectedVersion,
-                               com.agent.web.capability.CapabilityManagementAuditEvent auditEvent);
+    SkillInstallationRecord removeInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId,
+                                               long expectedVersion,
+                                               com.agent.web.capability.CapabilityManagementAuditEvent auditEvent);
 
     SkillInstallationRecord transition(
             UUID skillInstallationId, long expectedVersion, SkillInstallationStatus from,

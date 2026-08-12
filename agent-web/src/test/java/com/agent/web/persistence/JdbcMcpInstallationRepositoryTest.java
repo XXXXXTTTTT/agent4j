@@ -106,13 +106,14 @@ class JdbcMcpInstallationRepositoryTest {
                 "Official filesystem server");
         McpSourceSnapshot snapshot = McpSourceSnapshot.from(UUID.randomUUID(), server, NOW);
 
-        assertThat(repository.saveSnapshot(snapshot)).isEqualTo(snapshot);
-
         McpInstallationRecord installation = new McpInstallationRecord(
                 UUID.randomUUID(), snapshot.snapshotId(), InstallationScope.WORKSPACE,
                 WORKSPACE_ID, "mcp-test-user", McpInstallationStatus.STOPPED,
                 "a".repeat(64), NOW, NOW, NOW);
-        assertThat(repository.saveInstallation(installation)).isEqualTo(installation);
+        assertThat(repository.confirmInstallation(new com.agent.web.mcp.installation.McpInstallationCommand(
+                snapshot, installation, new com.agent.web.capability.CapabilityManagementAuditEvent(
+                        "MCP_INSTALLATION_CONFIRMED", "mcp-test-user", WORKSPACE_ID,
+                        installation.installationId(), null, null, snapshot.commitSha(), "SUCCESS", NOW)))).isEqualTo(installation);
         assertThat(repository.findInstallations("mcp-test-user", WORKSPACE_ID))
                 .containsExactly(installation);
     }

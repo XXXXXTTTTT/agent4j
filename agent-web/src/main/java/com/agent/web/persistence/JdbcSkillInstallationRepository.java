@@ -105,19 +105,22 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
     }
 
     @Override
-    public boolean removeInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId, long expectedVersion, com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+    public SkillInstallationRecord removeInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId,
+                                                      long expectedVersion,
+                                                      com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
         return Objects.requireNonNull(transactions.execute(status -> {
-            int deleted = jdbc.sql("""
-                delete from agent_skill_installations
-                  where skill_installation_id = :id and actor_user_id = :actorUserId
+            int updated = jdbc.sql("""
+                update agent_skill_installations
+                   set status = 'REMOVED', updated_at = current_timestamp, version = version + 1
+                 where skill_installation_id = :id and actor_user_id = :actorUserId
                   and version = :expectedVersion
-                  and status in ('APPROVED', 'REJECTED', 'REMOVED')
+                  and status in ('APPROVED', 'REJECTED')
                   and ((scope = 'WORKSPACE' and workspace_id = :workspaceId) or scope = 'USER_GLOBAL')
                 """).param("id", skillInstallationId).param("actorUserId", actorUserId)
                 .param("workspaceId", workspaceId).param("expectedVersion", expectedVersion).update();
-            if (deleted != 1) return false;
+            if (updated != 1) throw new IllegalStateException("Skill 安装版本或状态冲突");
             insertAudit(auditEvent);
-            return true;
+            return findInstallation(skillInstallationId).orElseThrow();
         }), "Skill 删除聚合事务返回值不能为空");
     }
 
