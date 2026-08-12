@@ -1,71 +1,140 @@
-# Official MCP, GitHub Skill and Governed CLI Workbench Implementation Plan
+# MCP and Skill Runtime Completion Implementation Plan
 
-> 仅在本计划审查通过后实施。每项任务先写测试，再实现；禁止修改未列出的无关模块。
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Each task requires implementation, spec review, then code-quality review.
 
-## Task 1: 固定 SHA 的官方目录客户端
+**Goal:** 让已经确认并持久化的官方 MCP 与 GitHub Skill 真正按用户/工作区边界进入 Agent 运行时，并完成可停止、可撤销、可恢复、可审计的产品闭环。
 
-文件：`agent-web/src/main/java/com/agent/web/mcp/catalog/OfficialMcpCatalogClient.java`、`OfficialMcpServerRecord.java`、测试与固定 JSON fixtures。
+**Architecture:** 保留现有官方目录、预览确认、V7、管理 API、CLI 与 `McpStdioTransport`。新增 docker-java 持续 stdio 运行器、owner-scoped 工具注册、V8 乐观锁事务、按请求解析的 Skill 目录和前端生命周期控制；任何运行时能力都从固定快照恢复，不从公网即时执行。
 
-- [ ] 先测试根/`src/` Contents、commit SHA 与 blob SHA、ETag/304、响应大小、TTL、限流和未知字段拒绝。
-- [ ] 实现固定 commit ref 的 Contents/Raw 读取；按实际目录枚举，不把七个名称硬编码为成功条件。
-- [ ] 结构化解析 TypeScript `package.json` 的 `name/version/description/license/bin`；Python `pyproject.toml` 的 `[project]` 和 `[project.scripts]`。README 仅保存摘要和展示证据。
-- [ ] 使用 `Executors.newVirtualThreadPerTaskExecutor()`，配置连接/读取超时与最大字节数；刷新失败返回 stale cache 或 `CATALOG_UNAVAILABLE`。
-- [ ] 运行 `mvn -pl agent-web -am -Dtest=OfficialMcpCatalogClientTest -Dsurefire.failIfNoSpecifiedTests=false test`，提交 `feat(mcp): add fixed-sha catalog client`。
+**Tech Stack:** Java 21、Spring Boot 3.3、docker-java 3.7.1、PostgreSQL/Flyway、React/TypeScript、JUnit 5、Testcontainers。
 
-## Task 2: MCP/Skill 缓存、安装记录与独立管理审计
+---
 
-文件：`V7__create_mcp_catalog_installations.sql`、新增 MCP/Skill record/repository/service、管理审计端口及测试。
+## 已交付基线
 
-- [ ] 表使用 `agent_mcp_catalog_snapshots`、`agent_mcp_installations`、`agent_skill_snapshots`、`agent_skill_installations`、`agent_capability_management_audit`；UTC `timestamptz`、状态 check、workspace/user 索引、SHA 唯一约束。
-- [ ] 安装 scope 精确为 `WORKSPACE`/`USER_GLOBAL`；工作区默认绑定 `workspaceId + actorUserId`，全局必须显式选择且 `workspaceId` 为空。
-- [ ] 测试 preview 无写入/下载/启动，确认 token 一次性，固定 commit/blob/SHA-256 快照不可变，环境变量只保存名称。
-- [ ] Skill 搜索仅使用 GitHub API；读取固定 commit 的 `SKILL.md`，拒绝超限、非 UTF-8、未知工具、提示词注入和可执行附加文件。
-- [ ] 运行 focused tests，提交 `feat(capabilities): persist governed mcp and skills`。
+以下代码已有实现，本计划只在需要运行时契约时修改，不重新开发：
 
-## Task 3: Docker 隔离 MCP stdio 与按安装注册撤销
+- `OfficialMcpCatalogClient`、`GitHubSkillCatalogClient`
+- `McpInstallationService`、`GitHubSkillInstallationService`
+- `V7__create_mcp_catalog_installations.sql`
+- `CapabilityManagementController`、`CapabilityWorkbenchRuntime`
+- `McpStdioTransport`、`McpStdioProcess`
+- `CliCommandController` 和聊天 `/` 命令选择器
 
-文件：新增 `McpStdioTransport`（实现现有 `McpTransport`）、Docker 运行器、安装运行时及测试。
+### Task 1: V8 原子安装聚合与治理元数据
 
-- [ ] 测试 stdout JSON-RPC 帧、stderr 分离、通知、响应 ID 并发、未知 ID、超时、进程退出、输出上限和清理。
-- [ ] 运行器只接受已确认 `LaunchSpec`；通过 Docker API 启动，工作区挂载限定到 `WorkspaceAccessService` 返回路径，默认无网络，固定资源上限；禁止本机 `ProcessBuilder`。
-- [ ] 增加 `ToolRegistry` 安装实例绑定/撤销端口；启动发现失败整批回滚，停止先拒绝新调用并等待在途调用，再撤销绑定、关闭 client/container。
-- [ ] 启动时恢复 `INSTALLING/RUNNING`，保证幂等；退出/协议错误置 `FAILED` 并写管理审计。
-- [ ] 运行 core/web focused tests，提交 `feat(mcp): run approved servers in docker`。
+**Files:**
+- Create: `agent-web/src/main/resources/db/migration/V8__complete_capability_runtime.sql`
+- Create: `agent-web/src/main/java/com/agent/web/mcp/installation/McpInstallationCommand.java`
+- Modify: `agent-web/src/main/java/com/agent/web/mcp/installation/McpInstallationRecord.java`
+- Modify: `agent-web/src/main/java/com/agent/web/mcp/installation/McpSourceSnapshot.java`
+- Modify: `agent-web/src/main/java/com/agent/web/mcp/installation/McpInstallationRepository.java`
+- Modify: `agent-web/src/main/java/com/agent/web/skill/SkillInstallationRepository.java`
+- Modify: `agent-web/src/main/java/com/agent/web/persistence/JdbcMcpInstallationRepository.java`
+- Modify: `agent-web/src/main/java/com/agent/web/persistence/JdbcSkillInstallationRepository.java`
+- Test: `agent-web/src/test/java/com/agent/web/persistence/JdbcMcpInstallationRepositoryTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/persistence/JdbcSkillInstallationRepositoryTest.java`
 
-## Task 4: MCP 与 Skill 管理 API 和前端挂载
+- [ ] 写 PostgreSQL 集成测试：快照、安装、审计在同一事务提交；审计插入失败时三者全部回滚；相同 `expectedVersion` 只有一次状态迁移成功。
+- [ ] 新增 V8：MCP 安装增加 `risk_level`、`required_capabilities`、`workspace_mount_mode`、`network_mode`、`runtime_image`、`container_id`、`runtime_error`、`version`；Skill 安装增加 `version`；创建 `agent_mcp_tool_bindings`；审计增加 `operation_id`、`from_status`、`to_status`、`detail_sha256`。
+- [ ] 把 repository 契约改为事务聚合方法 `confirmInstallation`、`transition`、`confirmSkill`、`removeSkill`；状态 SQL 必须带 installation id、expected version 和 allowed status。
+- [ ] 修改两个 confirm service：事务成功后才移除一次性 preview；回滚后同一未过期 token 可重试。禁止业务写事务再调用独立审计事务。
+- [ ] 运行 `mvn -pl agent-web -am -Dtest=JdbcMcpInstallationRepositoryTest,JdbcSkillInstallationRepositoryTest,McpInstallationServiceTest,GitHubSkillInstallationServiceTest -Dsurefire.failIfNoSpecifiedTests=false test`，预期全部 PASS。
+- [ ] 提交 `feat(capabilities): make installation changes atomic`。
 
-文件：新增 Controller/View，修改 `conversationApi.ts`、`contracts.ts`，新增 `McpCatalogPanel.tsx` 和测试，修改 `Workbench.tsx`。
+### Task 2: docker-java 持续 MCP stdio 运行器
 
-- [ ] 严格实现设计文档第 7 节 DTO、未知字段拒绝、HTTP 状态码和工作区权限。
-- [ ] 预览展示来源、commit/blob SHA、许可证、启动配置、环境变量名、风险、工具/Skill 权限和确认状态。
-- [ ] 面板由 `Workbench.tsx` 实际挂载，覆盖搜索、预览、确认、卸载、失败恢复和全局显式选择。
-- [ ] 运行前端 focused tests，提交 `feat(web): mount capability workbench`。
+**Files:**
+- Create: `agent-sandbox/src/main/java/com/agent/sandbox/docker/McpDockerLaunchSpec.java`
+- Create: `agent-sandbox/src/main/java/com/agent/sandbox/docker/WorkspaceMountMode.java`
+- Create: `agent-sandbox/src/main/java/com/agent/sandbox/docker/DockerMcpStdioRunner.java`
+- Create: `agent-sandbox/src/main/java/com/agent/sandbox/docker/DockerMcpStdioProcess.java`
+- Test: `agent-sandbox/src/test/java/com/agent/sandbox/docker/DockerMcpStdioRunnerTest.java`
+- Test: `agent-core/src/test/java/com/agent/core/tool/mcp/McpStdioTransportTest.java`
 
-## Task 5: 专用 `governed-cli` Graph 与结构化 CLI Run API
+- [ ] 写 runner contract test，精确断言 create 参数包含 stdin/stdout/stderr attach、stdin open、TTY false、network `none`、readonly rootfs、非 privileged、memory/nano CPUs/pids、受控 bind 和四个管理标签。
+- [ ] 写流测试：docker `Frame` 的 STDOUT/STDERR 分离；stdin 字节传到 attach 输入；并发响应、帧/错误输出上限、attach 断开、容器退出、重复 destroy 均确定完成。
+- [ ] 实现不可变 `McpDockerLaunchSpec`，只接受规范第 4 节字段和 `NONE/READ_ONLY/READ_WRITE`；command/arguments 直接传 `withCmd`，禁止 `bash -lc`、`ProcessBuilder` 和字符串拼接 shell。
+- [ ] 实现 `DockerMcpStdioRunner.start` 和 `DockerMcpStdioProcess`，复用 `DockerCommandExecutor` 已验证的 Windows/container bind source 解析逻辑，但不改变一次性 executor 的 finally-delete 语义。
+- [ ] 在测试中 inspect 实际容器并断言 mount access、HostConfig、labels 和容器销毁；Docker 不可用时测试明确 SKIP，不能伪造 PASS。
+- [ ] 运行 `mvn -pl agent-sandbox -am -Dtest=DockerMcpStdioRunnerTest,McpStdioTransportTest -Dsurefire.failIfNoSpecifiedTests=false test`，预期全部 PASS 或只有带原因的 Docker SKIP。
+- [ ] 提交 `feat(mcp): add persistent docker stdio runner`。
 
-文件：新增 CLI Controller/View/Request、CLI GraphFactory/Node、配置与测试；保持现有 `CliCommandDefinition` record 字段和所有构造调用不变。
+### Task 3: 按安装 owner 注册、drain 与撤销工具
 
-- [ ] 目录 API 返回 `CliCommandDefinition` 的精确字段：`name`、`executable`、`fixedArguments`、`riskLevel`、`requiredCapabilities`，以及 `maxArguments=64`。前端只按 `riskLevel` 映射审批状态；不得添加 `description`、命名参数、参数类型或其他未在核心 record 中存在的字段。
-- [ ] 请求只允许 `commandName`、`arguments`、`timeoutSeconds`；`arguments` 精确为有序 `List<String>`，最多 64 项。通过构造 `CliCommandIntent` 并调用 `CliCommandCatalog.authorize` 触发现有 token 校验；拒绝 `approval`、`shell`、`bashCommand`、未知字段和工作区外路径。
-- [ ] 新增精确 graphId `governed-cli`，只注册 `ops` 节点并从 `ops` 进入 `StateGraph.END`；状态写入 `OpsNode.COMMAND_NAME_KEY`、`OpsNode.COMMAND_ARGUMENTS_KEY`（JSON 数组字符串）、`CoderNode.WORKSPACE_PATH_KEY`、`PlannerNode.REQUIRED_CAPABILITIES_KEY`（命令要求能力按枚举声明顺序连接）。
-- [ ] `CliApprovalInterruptPolicy` 在 `ops` 前执行唯一授权：`READ_ONLY` 直接执行；`MUTATING` 生成现有 `RunStatus.WAITING_APPROVAL` 和 `InterruptRequest`；`DESTRUCTIVE` 不注册到首期目录并测试目录查找失败。批准/拒绝只调用 `POST /api/runs/{runId}/approval`，本期 `variableUpdates` 为空；批准恢复 `ops`，拒绝为 `RunStatus.REJECTED`。
-- [ ] 绑定 `RunTerminalController` `/api/runs/{runId}/logs`、`RunTraceController` `/api/runs/{runId}/events`，新增管理审计事件。
-- [ ] 运行 `mvn -pl agent-web -am -Dtest=CliCommandControllerTest -Dsurefire.failIfNoSpecifiedTests=false test`，提交 `feat(cli): add governed cli workbench api`。
+**Files:**
+- Modify: `agent-core/src/main/java/com/agent/core/tool/ToolRegistry.java`
+- Modify: `agent-core/src/main/java/com/agent/core/tool/DefaultToolRegistry.java`
+- Modify: `agent-core/src/main/java/com/agent/core/tool/mcp/McpToolRegistryAdapter.java`
+- Create: `agent-core/src/main/java/com/agent/core/tool/ToolOwnerState.java`
+- Test: `agent-core/src/test/java/com/agent/core/tool/ToolRegistryOwnershipTest.java`
+- Test: `agent-core/src/test/java/com/agent/core/tool/mcp/McpToolRegistryAdapterTest.java`
 
-## Task 6: 聊天 `/` 命令选择器
+- [ ] 先测试 `registerOwned(ownerId, definitions)` 全批原子、跨 owner 名称冲突、`beginDrain` 后拒绝新调用、在途调用归零后撤销、超时保持 DRAINING、不能撤销 `builtin`。
+- [ ] 在 `ToolRegistry` 增加 `registerOwned(String,List<ToolDefinition>)`、`beginDrain(String)`、`unregisterOwned(String,Duration)` 和只读 `revision()`；现有 register 方法委托 `builtin`。
+- [ ] `DefaultToolRegistry.execute` 在选择定义时原子增加 owner 在途计数，并在所有成功/失败/超时路径 finally 减少；定义、owner、状态作为单一不可变发布快照更新。
+- [ ] `McpToolRegistryAdapter` 返回发现的 local/remote binding，并用 owner 注册；本地名精确使用 `mcp.<UUID去连字符>.<remoteName>`，超过 64 字符直接失败。
+- [ ] 运行 `mvn -pl agent-core -Dtest=ToolRegistryOwnershipTest,McpToolRegistryAdapterTest,ToolRegistryConcurrencyTest test`，预期全部 PASS。
+- [ ] 提交 `feat(tools): support installation scoped lifecycle`。
 
-文件：修改 `ConversationComposer.tsx`、`Workbench.css`、前端 API/contracts；新增组件测试。
+### Task 4: MCP 启停、失败收敛与重启恢复
 
-- [ ] `/` 和 `/` 后缀触发当前 workspace 命令目录；键盘选择、参数输入、风险/审批状态和错误提示可访问。
-- [ ] 选中命令后调用 `POST /api/workspaces/{workspaceId}/cli/runs`，使用返回 `runId` 接入现有 `useRunWorkbench.followRun`；普通会话提交回归测试。
-- [ ] 运行 `Set-Location agent-web/src/main/frontend; .\.frontend\node\npm.cmd run test:run`，提交 `feat(web): add slash cli picker`。
+**Files:**
+- Create: `agent-web/src/main/java/com/agent/web/mcp/runtime/McpInstallationRuntime.java`
+- Create: `agent-web/src/main/java/com/agent/web/mcp/runtime/McpRuntimeRecovery.java`
+- Create: `agent-web/src/main/java/com/agent/web/mcp/runtime/McpRuntimeSecretProvider.java`
+- Modify: `agent-web/src/main/java/com/agent/web/mcp/installation/McpInstallationService.java`
+- Modify: `agent-web/src/main/java/com/agent/web/controller/CapabilityManagementController.java`
+- Modify: `agent-web/src/main/java/com/agent/web/config/HarnessConfiguration.java`
+- Test: `agent-web/src/test/java/com/agent/web/mcp/runtime/McpInstallationRuntimeTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/mcp/runtime/McpRuntimeRecoveryTest.java`
+- Test: `agent-web/src/test/java/com/agent/web/controller/CapabilityManagementControllerTest.java`
 
-## Task 7: 集成、真实 EDD 与交付审查
+- [ ] 写生命周期测试覆盖 `STOPPED -> INSTALLING -> RUNNING -> STOPPING -> STOPPED`、每一步失败到 FAILED、expectedVersion 冲突、未准备物料 `MATERIAL_NOT_PREPARED`、secret 名称白名单和值不落库。
+- [ ] 启动时重新校验 actor/workspace 权限和固定 snapshot/material SHA，创建 runner/client，握手分页发现，应用已确认 risk/capabilities，owner 注册成功后在一个事务写 binding、container id、RUNNING 和审计。
+- [ ] 停止时先状态迁移，再 drain、撤销、关闭 client、销毁容器，最后事务置 STOPPED；卸载拒绝运行态。
+- [ ] 恢复测试覆盖带匹配标签容器的 RUNNING 重连、缺失容器转 FAILED、INSTALLING 清理重启、STOPPING 继续停止、重复 ApplicationReadyEvent 幂等、应用正常关闭不记 FAILED。
+- [ ] API 增加 start/stop 和 expectedVersion；响应增加风险、能力、挂载、网络、runtime state/error/version。错误响应不含 secret 值、stderr 或完整栈。
+- [ ] 运行 `mvn -pl agent-web -am -Dtest=McpInstallationRuntimeTest,McpRuntimeRecoveryTest,CapabilityManagementControllerTest -Dsurefire.failIfNoSpecifiedTests=false test`，预期全部 PASS。
+- [ ] 提交 `feat(mcp): complete installation runtime lifecycle`。
 
-文件：新增 MCP/CLI 集成测试、`agent-eval/src/test/resources/benchmarks/mcp-cli-workbench.json`、README 更新。
+### Task 5: 已安装 Skill 按用户和工作区进入 Agent
 
-- [ ] 使用内置 Docker stdio fixture 验证握手、分页、工具调用、停止撤销、重启恢复和审计/Trace。
-- [ ] EDD 场景覆盖目录刷新失败、未确认安装拒绝、确认工作区安装、Skill 供应链拒绝、CLI slash 提交、MUTATING 审批、失败恢复。
-- [ ] 运行确定性 EDD：`mvn -pl agent-eval -am -Dgroups=edd -Dtest=McpToolAdapterEddTest,SkillCatalogEddTest,CliCapabilityEddTest,CliAgentWorkflowEddTest test`。
-- [ ] Docker 与真实模型验收严格使用 README 的 `pwsh .agent4j/acceptance/run-real-agent.ps1`、`pwsh .agent4j/acceptance/run-conversation-continuity.ps1` 和 `mvn -pl agent-eval -am -Dgroups=edd -Dtest=LlmEddTest test`；报告必须含真实 HTTP、`modelCallAttempts > 0`、Run/Trace/Audit 证据。
-- [ ] 运行 `mvn clean verify`、前端测试、`git diff --check`、`git status --short`，确认不提交 `.env`、日志或 target；完成 Sol high 规格/质量复审后提交 `feat(mcp): deliver governed capability workbench`。
+**Files:**
+- Modify: `agent-web/src/main/java/com/agent/web/skill/GitHubSkillContent.java`
+- Modify: `agent-web/src/main/java/com/agent/web/skill/SkillSnapshotRecord.java`
+- Modify: `agent-web/src/main/java/com/agent/web/skill/SkillInstallationRepository.java`
+- Create: `agent-core/src/main/java/com/agent/core/skill/SkillCatalogProvider.java`
+- Create: `agent-web/src/main/java/com/agent/web/skill/InstalledSkillCatalogProvider.java`
+- Modify: `agent-core/src/main/java/com/agent/core/nodes/ToolAgentNode.java`
+- Modify: `agent-web/src/main/java/com/agent/web/config/ProductionGraphConfiguration.java`
+- Test: `agent-web/src/test/java/com/agent/web/skill/InstalledSkillCatalogProviderTest.java`
+- Test: `agent-core/src/test/java/com/agent/core/nodes/ToolAgentNodeTest.java`
+
+- [ ] 扩展受控 SKILL.md parser 测试：只接受 `name/version/description/triggers/tools`，正文作为 promptFragment；未知字段、非法 semver、重复 trigger、提示词注入、未注册工具全部拒绝。
+- [ ] repository 增加一次查询当前 actor 的 WORKSPACE APPROVED 与 USER_GLOBAL APPROVED 安装及快照；不返回其他用户或其他工作区记录。
+- [ ] 实现 `InstalledSkillCatalogProvider.resolve(actorUserId, workspaceId)`：校验 content SHA，组合内置与已安装 definition，冲突时隔离外部目录并审计；缓存键含 actor、workspace、安装更新时间和 `ToolRegistry.revision()`。
+- [ ] `ToolAgentNode` 用 provider 读取精确状态键 `planner.userId` 和 `conversation.workspaceId`；Run 启动后持有不可变目录快照，安装/卸载不改变进行中的提示词和工具集。
+- [ ] 测试 A 用户/A 工作区 Skill 不出现在 B 上下文；卸载后下一 Run 不再发现；Skill 激活只暴露声明工具且调用仍经过 ToolRegistry 治理。
+- [ ] 运行 `mvn -pl agent-web -am -Dtest=InstalledSkillCatalogProviderTest,ToolAgentNodeTest,SkillMcpIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`，预期全部 PASS。
+- [ ] 提交 `feat(skill): load approved installations into agents`。
+
+### Task 6: 生命周期 UI、端到端与真实 EDD
+
+**Files:**
+- Modify: `agent-web/src/main/frontend/src/api/capabilityApi.ts`
+- Modify: `agent-web/src/main/frontend/src/components/CapabilityWorkbenchPanel.tsx`
+- Modify: `agent-web/src/main/frontend/src/components/CapabilityWorkbenchRuntime.tsx`
+- Test: `agent-web/src/main/frontend/src/components/CapabilityWorkbenchPanel.test.tsx`
+- Test: `agent-web/src/test/java/com/agent/web/ProductWorkbenchLifecycleIntegrationTest.java`
+- Create: `agent-eval/src/test/resources/benchmarks/mcp-skill-runtime.json`
+- Modify: `README.md`
+
+- [ ] 前端 decoder 先测试精确的新 DTO 字段和未知字段拒绝；面板测试状态按钮、expectedVersion、风险/能力/挂载显示、secret 输入提交后清空、旧 version 响应不覆盖新状态。
+- [ ] 实现安装列表、启动/停止/重试/卸载；仅合法状态显示动作。Skill 列表显示 scope、commit、工具和当前 Agent 可用状态。
+- [ ] 用受控 fixture 镜像完成 Docker E2E：确认安装、启动、真实 tools/list、Agent function call、工具 Trace/Audit、停止后不可调用、应用重启恢复、卸载。
+- [ ] 用两个用户和两个工作区完成 Skill 隔离 E2E；断言激活证据 `skill.active`、`skill.fingerprint` 和工具调用均来自固定快照。
+- [ ] 运行前端 `Set-Location agent-web/src/main/frontend; .\.frontend\node\npm.cmd run test:run`，运行后端 `mvn clean verify`。
+- [ ] 使用已配置 LLM 执行 `pwsh .agent4j/acceptance/run-real-agent.ps1` 与 `mvn -pl agent-eval -am -Dgroups=edd -Dtest=LlmEddTest test`；报告必须有 `modelCallAttempts > 0`、真实 HTTP、MCP tool call、Run/Trace/Audit，缺少配置只能 SKIP。
+- [ ] 运行 `git diff --check` 和 `git status --short`，确认不提交 `.env`、日志、target；完成 Sol high 规格审查与质量复审。
+- [ ] 提交 `feat(web): deliver mcp and skill runtime workbench`。
