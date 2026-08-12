@@ -13,6 +13,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 
 /** 将 MCP 远程工具转换为本地受治理工具定义。 */
 public final class McpToolRegistryAdapter {
@@ -53,6 +54,52 @@ public final class McpToolRegistryAdapter {
         }
 
         registry.registerAll(definitions);
+    }
+
+    /** 按安装 owner 注册 MCP 工具并返回稳定的本地与远端名称绑定。 */
+    public synchronized List<ToolBinding> registerDiscoveredTools(
+            UUID installationId,
+            ToolRiskLevel riskLevel,
+            Set<RequiredCapability> capabilities,
+            Duration timeout) {
+        Objects.requireNonNull(installationId, "installationId 不能为空");
+        Objects.requireNonNull(riskLevel, "riskLevel 不能为空");
+        capabilities = Set.copyOf(Objects.requireNonNull(capabilities, "capabilities 不能为空"));
+        Objects.requireNonNull(timeout, "timeout 不能为空");
+
+        client.initialize();
+        List<McpRemoteTool> remoteTools = client.listTools();
+        List<ToolDefinition> definitions = new ArrayList<>(remoteTools.size());
+        List<ToolBinding> bindings = new ArrayList<>(remoteTools.size());
+        Set<String> names = new HashSet<>();
+        String ownerId = installationId.toString();
+        String namespace = "mcp." + ownerId.replace("-", "");
+        for (McpRemoteTool remoteTool : remoteTools) {
+            String localName = namespace + "." + remoteTool.name();
+            if (localName.length() > 64) {
+                throw new IllegalArgumentException("MCP 本地工具名称不能超过 64 个字符: " + localName);
+            }
+            SCHEMA_VALIDATOR.validateSchema(remoteTool.inputSchema());
+            if (!names.add(localName)) {
+                throw new IllegalArgumentException("MCP 本地工具名称重复: " + localName);
+            }
+            definitions.add(definition(localName, remoteTool, riskLevel, capabilities, timeout));
+            bindings.add(new ToolBinding(localName, remoteTool.name()));
+        }
+        registry.registerOwned(ownerId, definitions);
+        return List.copyOf(bindings);
+    }
+
+    /** MCP 注册后的稳定名称绑定。 */
+    public record ToolBinding(String localToolName, String remoteToolName) {
+        public ToolBinding {
+            if (localToolName == null || localToolName.isBlank()) {
+                throw new IllegalArgumentException("localToolName 不能为空");
+            }
+            if (remoteToolName == null || remoteToolName.isBlank()) {
+                throw new IllegalArgumentException("remoteToolName 不能为空");
+            }
+        }
     }
 
     private ToolDefinition definition(

@@ -22,6 +22,7 @@ import org.slf4j.LoggerFactory;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -54,7 +55,10 @@ public final class DefaultToolRegistry implements ToolRegistry {
     private final ToolParameterPolicy parameterPolicy;
     private final OutputRedactor outputRedactor;
     private final SecurityViolationSink securityViolationSink;
-    private volatile Map<String, ToolDefinition> definitions = Map.of();
+    private static final String BUILTIN_OWNER_ID = "builtin";
+
+    private final Object lifecycleMonitor = new Object();
+    private volatile RegistrySnapshot snapshot = RegistrySnapshot.empty();
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -102,38 +106,131 @@ public final class DefaultToolRegistry implements ToolRegistry {
     @Override
     public void register(ToolDefinition definition) {
         Objects.requireNonNull(definition, "definition 不能为空");
-        registerAll(List.of(definition));
+        registerOwned(BUILTIN_OWNER_ID, List.of(definition));
     }
 
     @Override
-    public synchronized void registerAll(List<ToolDefinition> inputDefinitions) {
+    public void registerAll(List<ToolDefinition> inputDefinitions) {
+        registerOwned(BUILTIN_OWNER_ID, inputDefinitions);
+    }
+
+    @Override
+    public void registerOwned(String ownerId, List<ToolDefinition> inputDefinitions) {
         ensureOpen();
+        validateOwnerId(ownerId);
         Objects.requireNonNull(inputDefinitions, "definitions 不能为空");
         List<ToolDefinition> batch = List.copyOf(inputDefinitions);
-        java.util.HashSet<String> batchNames = new java.util.HashSet<>();
-        for (ToolDefinition definition : batch) {
-            if (!batchNames.add(definition.name())) {
-                throw new ToolRegistrationException(
-                        definition.name(), "批量工具名称重复: " + definition.name(), null);
+        synchronized (lifecycleMonitor) {
+            RegistrySnapshot current = snapshot;
+            ToolOwnerState currentOwnerState = current.ownerStates().get(ownerId);
+            if (currentOwnerState == ToolOwnerState.DRAINING) {
+                throw new IllegalStateException("工具 owner 正在停止: " + ownerId);
             }
-            if (definitions.containsKey(definition.name())) {
-                throw new ToolRegistrationException(
-                        definition.name(), "工具名称已注册: " + definition.name(), null);
-            }
-            try {
-                schemaValidator.validateSchema(definition.inputSchema());
-            } catch (Throwable exception) {
-                if (exception instanceof ToolRegistrationException registrationException) {
-                    throw registrationException;
+            java.util.HashSet<String> batchNames = new java.util.HashSet<>();
+            for (ToolDefinition definition : batch) {
+                if (!batchNames.add(definition.name())) {
+                    throw new ToolRegistrationException(
+                            definition.name(), "批量工具名称重复: " + definition.name(), null);
                 }
-                throw new ToolRegistrationException(definition.name(), "工具 Schema 注册校验失败", exception);
+                if (current.definitions().containsKey(definition.name())) {
+                    throw new ToolRegistrationException(
+                            definition.name(), "工具名称已注册: " + definition.name(), null);
+                }
+                try {
+                    schemaValidator.validateSchema(definition.inputSchema());
+                } catch (Throwable exception) {
+                    if (exception instanceof ToolRegistrationException registrationException) {
+                        throw registrationException;
+                    }
+                    throw new ToolRegistrationException(definition.name(), "工具 Schema 注册校验失败", exception);
+                }
             }
+            if (batch.isEmpty()) {
+                return;
+            }
+            HashMap<String, ToolDefinition> nextDefinitions = new HashMap<>(current.definitions());
+            HashMap<String, String> nextOwners = new HashMap<>(current.owners());
+            HashMap<String, ToolOwnerState> nextStates = new HashMap<>(current.ownerStates());
+            HashMap<String, Integer> nextInFlight = new HashMap<>(current.inFlight());
+            for (ToolDefinition definition : batch) {
+                nextDefinitions.put(definition.name(), definition);
+                nextOwners.put(definition.name(), ownerId);
+            }
+            nextStates.put(ownerId, ToolOwnerState.ACTIVE);
+            nextInFlight.putIfAbsent(ownerId, 0);
+            snapshot = new RegistrySnapshot(nextDefinitions, nextOwners, nextStates, nextInFlight,
+                    current.revision() + 1);
         }
-        HashMap<String, ToolDefinition> next = new HashMap<>(definitions);
-        for (ToolDefinition definition : batch) {
-            next.put(definition.name(), definition);
+    }
+
+    @Override
+    public void beginDrain(String ownerId) {
+        ensureOpen();
+        validateManagedOwnerId(ownerId);
+        synchronized (lifecycleMonitor) {
+            RegistrySnapshot current = snapshot;
+            ToolOwnerState state = current.ownerStates().get(ownerId);
+            if (state == null) {
+                throw new IllegalArgumentException("工具 owner 未注册: " + ownerId);
+            }
+            if (state == ToolOwnerState.DRAINING) {
+                return;
+            }
+            snapshot = current.withOwnerState(ownerId, ToolOwnerState.DRAINING);
+            lifecycleMonitor.notifyAll();
         }
-        definitions = Map.copyOf(next);
+    }
+
+    @Override
+    public void unregisterOwned(String ownerId, Duration timeout) {
+        ensureOpen();
+        validateManagedOwnerId(ownerId);
+        Objects.requireNonNull(timeout, "timeout 不能为空");
+        if (timeout.isNegative()) {
+            throw new IllegalArgumentException("timeout 不能为负数");
+        }
+        long remainingNanos = timeout.toNanos();
+        synchronized (lifecycleMonitor) {
+            RegistrySnapshot current = snapshot;
+            if (current.ownerStates().get(ownerId) != ToolOwnerState.DRAINING) {
+                throw new IllegalStateException("工具 owner 未处于 DRAINING 状态: " + ownerId);
+            }
+            while (snapshot.inFlight().getOrDefault(ownerId, 0) > 0) {
+                if (remainingNanos <= 0) {
+                    return;
+                }
+                long started = System.nanoTime();
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(lifecycleMonitor, remainingNanos);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                remainingNanos -= Math.max(0, System.nanoTime() - started);
+            }
+            RegistrySnapshot ready = snapshot;
+            HashMap<String, ToolDefinition> nextDefinitions = new HashMap<>(ready.definitions());
+            HashMap<String, String> nextOwners = new HashMap<>(ready.owners());
+            ready.owners().forEach((name, registeredOwner) -> {
+                if (ownerId.equals(registeredOwner)) {
+                    nextDefinitions.remove(name);
+                    nextOwners.remove(name);
+                }
+            });
+            HashMap<String, ToolOwnerState> nextStates = new HashMap<>(ready.ownerStates());
+            HashMap<String, Integer> nextInFlight = new HashMap<>(ready.inFlight());
+            nextStates.remove(ownerId);
+            nextInFlight.remove(ownerId);
+            snapshot = new RegistrySnapshot(nextDefinitions, nextOwners, nextStates, nextInFlight,
+                    ready.revision() + 1);
+            lifecycleMonitor.notifyAll();
+        }
+    }
+
+    @Override
+    public long revision() {
+        ensureOpen();
+        return snapshot.revision();
     }
 
     @Override
@@ -142,13 +239,13 @@ public final class DefaultToolRegistry implements ToolRegistry {
         if (name == null || name.isBlank()) {
             return Optional.empty();
         }
-        return Optional.ofNullable(definitions.get(name));
+        return Optional.ofNullable(snapshot.definitions().get(name));
     }
 
     @Override
     public List<ToolDefinition> list() {
         ensureOpen();
-        List<ToolDefinition> result = new ArrayList<>(definitions.values());
+        List<ToolDefinition> result = new ArrayList<>(snapshot.definitions().values());
         result.sort(Comparator.comparing(ToolDefinition::name));
         return List.copyOf(result);
     }
@@ -160,7 +257,23 @@ public final class DefaultToolRegistry implements ToolRegistry {
         Objects.requireNonNull(context, "context 不能为空");
         long started = nanoTime.getAsLong();
         String argumentsSha256 = sha256(call.arguments());
-        ToolDefinition definition = definitions.get(call.name());
+        ToolDefinition definition;
+        String ownerId;
+        synchronized (lifecycleMonitor) {
+            RegistrySnapshot current = snapshot;
+            definition = current.definitions().get(call.name());
+            if (definition == null) {
+                ownerId = null;
+            } else {
+                ownerId = current.owners().get(call.name());
+                if (current.ownerStates().get(ownerId) == ToolOwnerState.DRAINING) {
+                    ToolException exception = new ToolException("工具 owner 正在停止: " + ownerId);
+                    return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
+                            NullNode.getInstance(), exception, started, false, argumentsSha256);
+                }
+                snapshot = current.withInFlight(ownerId, current.inFlight().getOrDefault(ownerId, 0) + 1);
+            }
+        }
         if (definition == null) {
             ToolNotFoundException exception = new ToolNotFoundException(call.name());
             return finish(call, context, Optional.empty(), ToolResultStatus.FAILED,
@@ -168,96 +281,100 @@ public final class DefaultToolRegistry implements ToolRegistry {
         }
 
         try {
-            schemaValidator.validateArguments(definition.inputSchema(), call.arguments());
-        } catch (Throwable exception) {
-            return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.DENIED,
-                    NullNode.getInstance(), exception, started, false, argumentsSha256);
-        }
-
-        ToolParameterDecision parameterDecision;
-        try {
-            parameterDecision = Objects.requireNonNull(
-                    parameterPolicy.inspect(definition, call, context),
-                    "参数策略不得返回 null");
-        } catch (Throwable exception) {
-            recordViolation(context, Optional.of(definition.name()), SecurityViolationType.TOOL_PARAMETER,
-                    SecuritySeverity.HIGH, "security.tool-parameter-policy-failure",
-                    "工具参数策略执行失败");
-            return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.DENIED,
-                    NullNode.getInstance(), exception, started, false, argumentsSha256);
-        }
-        if (parameterDecision.decision() != SecurityDecision.ALLOW) {
-            recordViolation(context, Optional.of(definition.name()), SecurityViolationType.TOOL_PARAMETER,
-                    SecuritySeverity.HIGH, parameterDecision.ruleId(), parameterDecision.summary());
-            ToolException exception = new ToolAuthorizationException(
-                    definition.name(), parameterDecision.summary());
-            return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.DENIED,
-                    NullNode.getInstance(), exception, started, false, argumentsSha256);
-        }
-
-        ToolAuthorization authorization;
-        try {
-            authorization = Objects.requireNonNull(
-                    authorizer.authorize(definition, call, context), "授权器不得返回 null");
-        } catch (Throwable exception) {
-            return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.DENIED,
-                    NullNode.getInstance(), exception, started, false, argumentsSha256);
-        }
-        if (authorization.decision() != ToolAuthorizationDecision.ALLOWED) {
-            SecuritySeverity severity = authorization.decision() == ToolAuthorizationDecision.DENIED
-                    ? SecuritySeverity.HIGH : SecuritySeverity.MEDIUM;
-            String ruleId = authorization.decision() == ToolAuthorizationDecision.DENIED
-                    ? "security.tool-authorization-denied" : "security.tool-approval-required";
-            String summary = authorization.decision() == ToolAuthorizationDecision.DENIED
-                    ? "工具权限校验拒绝调用" : "工具调用需要人工审批";
-            recordViolation(context, Optional.of(definition.name()), SecurityViolationType.AUTHORIZATION,
-                    severity, ruleId, summary);
-            ToolException exception = authorization.decision() == ToolAuthorizationDecision.DENIED
-                    ? new ToolAuthorizationException(definition.name(), authorization.reason())
-                    : new ToolApprovalRequiredException(definition.name(), authorization.reason());
-            ToolResultStatus status = authorization.decision() == ToolAuthorizationDecision.DENIED
-                    ? ToolResultStatus.DENIED : ToolResultStatus.APPROVAL_REQUIRED;
-            return finish(call, context, Optional.of(definition.riskLevel()), status,
-                    NullNode.getInstance(), exception, started, false, argumentsSha256);
-        }
-
-        Future<JsonNode> future = executor.submit(() -> definition.handler().execute(call, context));
-        try {
-            JsonNode output = future.get(definition.timeout().toNanos(), TimeUnit.NANOSECONDS);
-            if (output == null || (!output.isObject() && !output.isArray())) {
-                throw new IllegalArgumentException("工具 handler 必须返回 JSON object 或 array");
-            }
-            JsonNode redactedOutput;
             try {
-                redactedOutput = outputRedactor.redact(definition.name(), output);
+                schemaValidator.validateArguments(definition.inputSchema(), call.arguments());
             } catch (Throwable exception) {
-                recordViolation(context, Optional.of(definition.name()),
-                        SecurityViolationType.OUTPUT_REDACTION, SecuritySeverity.CRITICAL,
-                        "security.output-redaction-failure", "工具输出脱敏失败");
+                return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.DENIED,
+                        NullNode.getInstance(), exception, started, false, argumentsSha256);
+            }
+
+            ToolParameterDecision parameterDecision;
+            try {
+                parameterDecision = Objects.requireNonNull(
+                        parameterPolicy.inspect(definition, call, context),
+                        "参数策略不得返回 null");
+            } catch (Throwable exception) {
+                recordViolation(context, Optional.of(definition.name()), SecurityViolationType.TOOL_PARAMETER,
+                        SecuritySeverity.HIGH, "security.tool-parameter-policy-failure",
+                        "工具参数策略执行失败");
+                return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.DENIED,
+                        NullNode.getInstance(), exception, started, false, argumentsSha256);
+            }
+            if (parameterDecision.decision() != SecurityDecision.ALLOW) {
+                recordViolation(context, Optional.of(definition.name()), SecurityViolationType.TOOL_PARAMETER,
+                        SecuritySeverity.HIGH, parameterDecision.ruleId(), parameterDecision.summary());
+                ToolException exception = new ToolAuthorizationException(
+                        definition.name(), parameterDecision.summary());
+                return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.DENIED,
+                        NullNode.getInstance(), exception, started, false, argumentsSha256);
+            }
+
+            ToolAuthorization authorization;
+            try {
+                authorization = Objects.requireNonNull(
+                        authorizer.authorize(definition, call, context), "授权器不得返回 null");
+            } catch (Throwable exception) {
+                return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.DENIED,
+                        NullNode.getInstance(), exception, started, false, argumentsSha256);
+            }
+            if (authorization.decision() != ToolAuthorizationDecision.ALLOWED) {
+                SecuritySeverity severity = authorization.decision() == ToolAuthorizationDecision.DENIED
+                        ? SecuritySeverity.HIGH : SecuritySeverity.MEDIUM;
+                String ruleId = authorization.decision() == ToolAuthorizationDecision.DENIED
+                        ? "security.tool-authorization-denied" : "security.tool-approval-required";
+                String summary = authorization.decision() == ToolAuthorizationDecision.DENIED
+                        ? "工具权限校验拒绝调用" : "工具调用需要人工审批";
+                recordViolation(context, Optional.of(definition.name()), SecurityViolationType.AUTHORIZATION,
+                        severity, ruleId, summary);
+                ToolException exception = authorization.decision() == ToolAuthorizationDecision.DENIED
+                        ? new ToolAuthorizationException(definition.name(), authorization.reason())
+                        : new ToolApprovalRequiredException(definition.name(), authorization.reason());
+                ToolResultStatus status = authorization.decision() == ToolAuthorizationDecision.DENIED
+                        ? ToolResultStatus.DENIED : ToolResultStatus.APPROVAL_REQUIRED;
+                return finish(call, context, Optional.of(definition.riskLevel()), status,
+                        NullNode.getInstance(), exception, started, false, argumentsSha256);
+            }
+
+            Future<JsonNode> future = executor.submit(() -> definition.handler().execute(call, context));
+            try {
+                JsonNode output = future.get(definition.timeout().toNanos(), TimeUnit.NANOSECONDS);
+                if (output == null || (!output.isObject() && !output.isArray())) {
+                    throw new IllegalArgumentException("工具 handler 必须返回 JSON object 或 array");
+                }
+                JsonNode redactedOutput;
+                try {
+                    redactedOutput = outputRedactor.redact(definition.name(), output);
+                } catch (Throwable exception) {
+                    recordViolation(context, Optional.of(definition.name()),
+                            SecurityViolationType.OUTPUT_REDACTION, SecuritySeverity.CRITICAL,
+                            "security.output-redaction-failure", "工具输出脱敏失败");
+                    return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
+                            NullNode.getInstance(), exception, started, false, argumentsSha256);
+                }
+                return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.SUCCEEDED,
+                        redactedOutput, null, started, false, argumentsSha256);
+            } catch (TimeoutException exception) {
+                boolean cancellationRequested = future.cancel(true);
+                ToolTimeoutException timeout = new ToolTimeoutException(definition.name(), definition.timeout());
+                return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.TIMED_OUT,
+                        NullNode.getInstance(), timeout, started, cancellationRequested, argumentsSha256);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
+                        NullNode.getInstance(), exception, started, future.cancel(true), argumentsSha256);
+            } catch (CancellationException exception) {
+                return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
+                        NullNode.getInstance(), exception, started, false, argumentsSha256);
+            } catch (ExecutionException exception) {
+                Throwable cause = exception.getCause() == null ? exception : exception.getCause();
+                return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
+                        NullNode.getInstance(), cause, started, false, argumentsSha256);
+            } catch (Throwable exception) {
                 return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
                         NullNode.getInstance(), exception, started, false, argumentsSha256);
             }
-            return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.SUCCEEDED,
-                    redactedOutput, null, started, false, argumentsSha256);
-        } catch (TimeoutException exception) {
-            boolean cancellationRequested = future.cancel(true);
-            ToolTimeoutException timeout = new ToolTimeoutException(definition.name(), definition.timeout());
-            return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.TIMED_OUT,
-                    NullNode.getInstance(), timeout, started, cancellationRequested, argumentsSha256);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
-                    NullNode.getInstance(), exception, started, future.cancel(true), argumentsSha256);
-        } catch (CancellationException exception) {
-            return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
-                    NullNode.getInstance(), exception, started, false, argumentsSha256);
-        } catch (ExecutionException exception) {
-            Throwable cause = exception.getCause() == null ? exception : exception.getCause();
-            return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
-                    NullNode.getInstance(), cause, started, false, argumentsSha256);
-        } catch (Throwable exception) {
-            return finish(call, context, Optional.of(definition.riskLevel()), ToolResultStatus.FAILED,
-                    NullNode.getInstance(), exception, started, false, argumentsSha256);
+        } finally {
+            releaseOwnerCall(ownerId);
         }
     }
 
@@ -368,6 +485,65 @@ public final class DefaultToolRegistry implements ToolRegistry {
     private void ensureOpen() {
         if (closed.get()) {
             throw new IllegalStateException("ToolRegistry 已关闭");
+        }
+    }
+
+    private void releaseOwnerCall(String ownerId) {
+        if (ownerId == null) {
+            return;
+        }
+        synchronized (lifecycleMonitor) {
+            RegistrySnapshot current = snapshot;
+            int currentInFlight = current.inFlight().getOrDefault(ownerId, 0);
+            if (currentInFlight > 0) {
+                snapshot = current.withInFlight(ownerId, currentInFlight - 1);
+                lifecycleMonitor.notifyAll();
+            }
+        }
+    }
+
+    private static void validateOwnerId(String ownerId) {
+        if (ownerId == null || ownerId.isBlank()) {
+            throw new IllegalArgumentException("ownerId 不能为空");
+        }
+    }
+
+    private static void validateManagedOwnerId(String ownerId) {
+        validateOwnerId(ownerId);
+        if (BUILTIN_OWNER_ID.equals(ownerId)) {
+            throw new IllegalArgumentException("builtin 工具不可停止或撤销");
+        }
+    }
+
+    /** 一次性发布工具定义、owner 状态和在途计数。 */
+    private record RegistrySnapshot(
+            Map<String, ToolDefinition> definitions,
+            Map<String, String> owners,
+            Map<String, ToolOwnerState> ownerStates,
+            Map<String, Integer> inFlight,
+            long revision) {
+
+        private RegistrySnapshot {
+            definitions = Map.copyOf(definitions);
+            owners = Map.copyOf(owners);
+            ownerStates = Map.copyOf(ownerStates);
+            inFlight = Map.copyOf(inFlight);
+        }
+
+        private static RegistrySnapshot empty() {
+            return new RegistrySnapshot(Map.of(), Map.of(), Map.of(), Map.of(), 0);
+        }
+
+        private RegistrySnapshot withOwnerState(String ownerId, ToolOwnerState state) {
+            HashMap<String, ToolOwnerState> nextStates = new HashMap<>(ownerStates);
+            nextStates.put(ownerId, state);
+            return new RegistrySnapshot(definitions, owners, nextStates, inFlight, revision + 1);
+        }
+
+        private RegistrySnapshot withInFlight(String ownerId, int count) {
+            HashMap<String, Integer> nextInFlight = new HashMap<>(inFlight);
+            nextInFlight.put(ownerId, count);
+            return new RegistrySnapshot(definitions, owners, ownerStates, nextInFlight, revision);
         }
     }
 }

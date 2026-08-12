@@ -30,7 +30,41 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class McpToolRegistryAdapterTest {
 
     private static final UUID RUN_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    private static final UUID INSTALLATION_ID = UUID.fromString("00000000-0000-0000-0000-000000000002");
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Test
+    void registersInstallationOwnedToolsWithStableMcpNamesAndReturnsBindings() {
+        RecordingTransport transport = initializedTransport();
+        transport.toolList = "{\"tools\":[{\"name\":\"echo\",\"description\":\"Echo\",\"inputSchema\":{\"type\":\"object\"}}]}";
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            List<McpToolRegistryAdapter.ToolBinding> bindings = new McpToolRegistryAdapter(client(transport), registry)
+                    .registerDiscoveredTools(INSTALLATION_ID, ToolRiskLevel.LOW, Set.of(), Duration.ofSeconds(1));
+
+            assertThat(bindings).containsExactly(new McpToolRegistryAdapter.ToolBinding(
+                    "mcp.00000000000000000000000000000002.echo", "echo"));
+            assertThat(registry.find("mcp.00000000000000000000000000000002.echo")).isPresent();
+            registry.beginDrain(INSTALLATION_ID.toString());
+            assertThat(registry.execute(new ToolCall("drained", "mcp.00000000000000000000000000000002.echo",
+                    objectMapper.createObjectNode()), context(Set.of(), false)).status()).isEqualTo(ToolResultStatus.FAILED);
+        }
+    }
+
+    @Test
+    void rejectsOverlongInstallationLocalNameBeforeRegisteringTools() {
+        RecordingTransport transport = initializedTransport();
+        transport.toolList = "{\"tools\":[{\"name\":\"" + "a".repeat(28)
+                + "\",\"description\":\"Echo\",\"inputSchema\":{\"type\":\"object\"}}]}";
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            McpToolRegistryAdapter adapter = new McpToolRegistryAdapter(client(transport), registry);
+
+            assertThatThrownBy(() -> adapter.registerDiscoveredTools(
+                    INSTALLATION_ID, ToolRiskLevel.LOW, Set.of(), Duration.ofSeconds(1)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("64");
+            assertThat(registry.list()).isEmpty();
+        }
+    }
 
     @Test
     void mapsNamespaceAndRemoteNameWithoutChangingEitherValue() {
