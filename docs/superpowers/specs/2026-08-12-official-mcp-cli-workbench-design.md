@@ -1,72 +1,98 @@
-# Agent4J 官方 MCP 清单与受治理 CLI 工作台设计
+# Agent4J 官方 MCP、外部 Skill 与受治理 CLI 工作台设计
 
-## 目标
+## 1. 目标与范围
 
-为 Agent4J 增加两条可审计的能力入口：
+本期交付三个可审计入口：
 
-1. 从官方 `modelcontextprotocol/servers` GitHub 仓库读取真实目录和版本元数据，按工作区执行检索、预览、确认安装，并在隔离运行环境中通过 MCP stdio 接入工具注册表。
-2. 在聊天输入框输入 `/` 时展示当前工作区受治理 CLI 命令目录，结构化填写参数，提交前展示风险和审批状态，批准后复用现有 Run、Terminal、Trace 执行链。
+1. 官方 MCP reference server 清单发现、预览、确认安装、Docker 隔离 stdio 运行和按安装实例注册工具。
+2. GitHub-only 外部 Skill 搜索、内容审查、工作区默认安装；用户明确选择后才允许用户全局安装。
+3. 聊天输入 `/` 时选择 `CliCommandCatalog` 中的受治理命令，以结构化参数创建专用 CLI Run，并复用现有审批、终端日志和 Trace。
 
-现有配置驱动的 HTTP/HTTPS MCP 连接继续保留，两种传输统一进入 `ToolRegistry`，不允许任意 Shell 文本或未审批的远程内容进入执行链。
+HTTP/HTTPS MCP 配置继续由现有 `McpGatewayProperties`、`McpRuntime` 提供。任何新安装都不得把未确认的远程内容、任意 shell 文本或 Skill 自带工具权限直接送入执行链。
 
-## 边界与安全策略
+本文件中的新类、表和 DTO 是本期新增契约；现有标识符只引用已读取源码中的精确名称。
 
-- 官方 MCP 发现源固定为 `https://api.github.com/repos/modelcontextprotocol/servers/contents` 及对应 raw 文件地址；仓库当前是参考实现集合，不视为生产服务目录。
-- 发现结果必须保存仓库路径、文件 SHA、版本、许可证和来源 URL。解析不到启动配置时只能生成安装预览，不得伪称已启用。
-- 安装目标分为工作区和用户全局。默认工作区安装绑定 `workspaceId` 与 `actor.userId`；全局安装必须由用户显式选择。
-- 安装前展示来源、版本/SHA、内容摘要、启动命令、环境变量名、风险级别和所需能力；用户确认后才持久化并启动。
-- stdio 服务只能由受治理的 MCP 运行器启动，命令和参数来自已解析且校验过的官方元数据，工作目录位于工作区隔离根目录。禁止把用户输入拼接为可执行命令。
-- MCP 工具仍由现有 `ToolRegistry`、能力掩码和审批策略控制。远程工具失败必须返回结构化错误并记录 Trace/Audit。
-- CLI 仅暴露 `CliCommandCatalog` 中的精确命令。前端提交结构化命令名和参数，不接受任意 shell 字符串。
+## 2. 现有边界（不可改变）
 
-## 组件设计
+- `McpTransport` 只有 `request(McpJsonRpcRequest)`、`notify(McpJsonRpcRequest)`、`close()`；stdio 适配器必须实现该接口。
+- `McpClient` 当前固定调用 `initialize`、`tools/list`、`tools/call`，并复用 `McpToolRegistryAdapter` 注册到 `ToolRegistry`。
+- `ToolRegistry` 当前没有撤销接口；本期增加按 `installationId` 原子注册/撤销端口，保留现有 `register/registerAll/find/list/execute` 行为。
+- `CliCommandCatalog` 的真实字段为 `name`、`executable`、`fixedArguments`、`riskLevel`、`requiredCapabilities`，其 `authorize(CliCommandIntent, CliAuthorizationContext)` 是唯一授权入口。
+- `AgentRunService.start` 只能启动 `GraphRegistry` 中已注册的精确 graphId。现有生产图精确为 `code-agent`，因此 CLI 必须增加独立 graphId `governed-cli`，不得把 CLI 请求伪装成普通对话。
+- `ConversationComposer.tsx` 当前只有 textarea、模型组 select 和普通会话提交；新增命令面板必须在 `Workbench.tsx` 的真实挂载路径中显示。
 
-### 官方 MCP 目录
+## 3. 官方 MCP 清单
 
-新增官方目录客户端，使用 Java 21 虚拟线程执行 GitHub HTTP 请求，具有超时、响应大小、缓存 TTL 和 GitHub 失败审计。客户端读取根目录、`src/` 服务目录、服务 README、`package.json` 或 `pyproject.toml`，按实际字段生成不可变服务记录。解析规则严格限定到已读取的字段：TypeScript 服务读取 `name/version/bin`，Python 服务读取 `project.name/project.version` 和 README 中的 `uvx`/`python -m` 示例。
+发现源固定为：
 
-### MCP 安装与运行
+- Contents API 根：`https://api.github.com/repos/modelcontextprotocol/servers/contents`
+- 固定提交后的 Contents/Raw 地址：将 `main` 替换为已解析的 commit SHA。
 
-新增安装预览、确认和卸载 API。安装记录包含安装范围、工作区/用户绑定、来源 commit SHA、包管理器、命令参数、环境变量名、状态和审计时间。确认后由工作区运行器在隔离目录创建配置快照并启动 stdio 进程；实现 `McpTransport` 的 stdio 适配器，复用 `McpClient`、`McpToolRegistryAdapter` 完成握手和工具发现。进程退出、协议错误、超时均关闭客户端并将状态置为失败。
+客户端先读取根 Contents 响应，再读取 `src/` Contents 响应。当前 README 列出的目录为 `everything`、`fetch`、`filesystem`、`git`、`memory`、`sequentialthinking`、`time`；实现必须按固定 commit 的实际 `src/` 响应枚举，不得硬编码为成功条件。
 
-### CLI 工作台
+每个条目保存：`serverKey`、`repositoryPath`、`commitSha`、`blobSha`、`sourceUrl`、`rawUrls`、`displayName`、`description`、`version`、`license`、`language`、`launchSpec`、`requiredEnvironmentNames`、`riskLevel`、`requiredCapabilities`、`contentSha256`。未知字段拒绝进入结构化记录；单项解析失败记录错误并不污染上一次可用缓存。
 
-新增只读命令目录 API，返回命令名、描述、参数定义、风险级别、所需能力和是否需要审批。前端 composer 在输入 `/` 或 `/` 后缀查询时展示命令列表；选择命令后渲染参数输入，提交前显示授权决定。后端新增结构化 CLI Run 创建接口，调用 `CliCommandCatalog.authorize`，READ_ONLY 直接执行，MUTATING/DESTRUCTIVE 创建待审批 Run；批准后进入既有 `GovernedCliCommandExecutor`、SSE 日志和 WebSocket Terminal。
+解析规则：
 
-## 数据持久化
+- TypeScript：只接受实际 `package.json` 的 `name`、`version`、`description`、`license`、`bin`；启动必须来自已验证的固定包命令模板，不能执行 README 任意代码块。
+- Python：只接受 `pyproject.toml` 的 `[project] name/version/description/license` 和 `[project.scripts]`；README 中 `uvx`、`python -m` 仅作为展示证据，不能覆盖结构化入口。
+- 包管理器、包名、版本、入口和参数组成不可变 `LaunchSpec`；下载时固定版本并保存 SHA-256，运行时禁止隐式升级或联网安装。
 
-新增 Flyway migration 保存：
+目录客户端使用虚拟线程、连接/读取超时、最大响应字节数、ETag/If-None-Match、TTL 和 GitHub 失败审计。命中限流时返回未过期缓存；无缓存时返回明确的 `CATALOG_UNAVAILABLE`，不能伪造目录。
 
-- 官方 MCP 目录缓存及文件 SHA；
-- MCP 安装记录（工作区/全局范围、配置快照、状态、版本）；
-- 安装审批和卸载审计事件。
+## 4. MCP 安装与 Docker 运行
 
-所有表使用现有 UTC `timestamptz` 存储，由应用层以北京时间展示；敏感环境变量只保存名称，不保存值。
+安装范围枚举为 `WORKSPACE`、`USER_GLOBAL`。默认 `WORKSPACE`，记录 `workspaceId` 与 `actor.userId`；`USER_GLOBAL` 只能在请求中显式携带 `scope=USER_GLOBAL`，并记录 `workspaceId=null`。全局安装仅在用户自己的工作区请求中可见，启动时必须提供目标工作区并重新通过 `WorkspaceAccessService.requireWorkspace`。
 
-## API 与前端验收
+安装状态枚举为 `PREVIEW`、`PENDING_APPROVAL`、`INSTALLING`、`RUNNING`、`FAILED`、`STOPPING`、`STOPPED`、`REJECTED`。预览不写安装表、不下载、不启动进程。
 
-- `GET /api/mcp/catalog`：官方缓存服务列表与刷新状态。
-- `GET /api/workspaces/{workspaceId}/mcp/installations`：当前用户可见安装。
-- `POST /api/workspaces/{workspaceId}/mcp/installations/preview`：生成安装预览，不产生副作用。
-- `POST /api/workspaces/{workspaceId}/mcp/installations`：携带确认标记创建安装并启动。
-- `DELETE /api/workspaces/{workspaceId}/mcp/installations/{installationId}`：停止并卸载。
-- `GET /api/workspaces/{workspaceId}/cli/commands`：受治理命令目录。
-- `POST /api/workspaces/{workspaceId}/cli/runs`：提交结构化命令请求。
+确认后执行顺序固定为：校验固定 commit/blob SHA -> 下载到工作区 `.agent4j/mcp/<installationId>/staging` -> 校验 SHA-256 -> 原子改名为 `active` -> 由 Docker 运行器启动 stdio。禁止使用本机 `ProcessBuilder`。
 
-前端显示来源和风险，不显示原始 Markdown/JSON 配置作为唯一界面；详情区域预留可扩展的代码块、表格和工具列表渲染。
+Docker 运行器必须定义：镜像、容器工作目录、工作区挂载模式、无网络默认策略、CPU/内存/进程数/输出上限、环境变量白名单。密钥值来自运行时 SecretProvider，只保存环境变量名称；命令和参数只能来自已确认的 `LaunchSpec`。
 
-## 测试与可观测性
+新增 `McpInstallationToolBinding` 记录每个本地工具名与 `installationId`。安装启动成功后，MCP client 完成握手和分页发现，再原子注册绑定；任一工具失败则整批回滚。停止/卸载先阻止新调用，等待在途调用结束，原子撤销绑定，再关闭 Docker 容器和 client。应用启动时按状态恢复 `RUNNING/INSTALLING` 记录，重复恢复必须幂等；退出和协议错误统一转为 `FAILED` 并审计。
 
-- 目录客户端测试真实 JSON 字段校验、SHA 变化、缓存过期、GitHub 失败和未知字段拒绝。
-- 安装测试覆盖工作区边界、全局显式选择、审批前无副作用、stdio 握手/分页/退出和 ToolRegistry 能力门禁。
-- CLI 测试覆盖命令目录过滤、参数校验、审批决定和 Run/日志关联。
-- 前端测试覆盖 `/` 键盘选择、参数校验、风险预览、失败提示和模型选择共存。
-- 每次目录刷新、预览、确认、启动、调用、停止、CLI 提交和审批均写入现有审计/Trace，记录 actor、workspace、来源 SHA、runId 和结果；不记录密钥值。
+## 5. GitHub 外部 Skill
 
-## 分期
+只允许 GitHub 仓库来源。搜索结果不直接启用：先取得仓库默认分支的精确 commit SHA，再读取路径为 `SKILL.md` 的文件及其 blob SHA。单文件大小、UTF-8、路径和 SHA-256 必须校验；不下载可执行脚本或未声明的附加文件。
 
-1. 官方目录客户端、缓存表和只读目录 API。
-2. 安装预览/确认持久化与工作区隔离 stdio 运行器。
-3. stdio MCP 接入现有 `McpClient` 和 ToolRegistry，补齐审计。
-4. CLI 目录/结构化 Run API 与聊天 `/` 面板。
-5. 集成测试、前端验收和真实 MCP reference server 冒烟验证。
+Skill 记录字段：`skillId`、`repositoryUrl`、`repository`、`commitSha`、`blobSha`、`path`、`license`、`contentSha256`、`summary`、`requestedToolNames`、`scope`、`workspaceId`、`actorUserId`、`status`。默认 `WORKSPACE`；用户显式 `USER_GLOBAL` 才允许全局安装。
+
+安装预览展示来源、commit/blob SHA、许可证、摘要、声明工具和风险。确认后保存不可变快照。Skill 只能引用本地已注册且通过 `ToolRegistry` 能力/风险策略的工具；禁止 Skill 创建工具、执行 shell、覆盖系统 prompt 或访问安装目录之外的文件。提示词注入、未知 front matter、未知工具名均拒绝安装。
+
+## 6. CLI 工作台与专用 Run
+
+新增 `GET /api/workspaces/{workspaceId}/cli/commands` 返回：`name`、`description`、`fixedArguments`、`arguments`、`riskLevel`、`requiredCapabilities`、`approvalMode`。为满足该合同，扩展 `CliCommandDefinition` 增加不可变 `description` 和结构化 `arguments`；所有现有构造调用与生产命令定义同步迁移。
+
+新增 `POST /api/workspaces/{workspaceId}/cli/runs` 请求字段：`commandName`、`arguments`、`timeoutSeconds`、`approval`。拒绝 `shell`、`bashCommand`、未声明字段和工作区外路径。服务构造 `CliCommandIntent`，使用当前 `WorkspaceAccessService` 返回的 `workspacePath` 和 `WorkspaceTerminalTargetResolver`，调用 `CliCommandCatalog.authorize`。
+
+新增专用 graphId `governed-cli`，初始状态使用 `OpsNode.COMMAND_NAME_KEY`、`OpsNode.COMMAND_ARGUMENTS_KEY`、`CoderNode.WORKSPACE_PATH_KEY`、`PlannerNode.REQUIRED_CAPABILITIES_KEY`。READ_ONLY 直接运行；MUTATING 创建 `WAITING_APPROVAL`；DESTRUCTIVE 首期不进入目录，直到两阶段审批实现。批准后由现有 `AgentRunService.decide` 恢复，日志继续由 `RunTerminalController` 的 `/api/runs/{runId}/logs` 和 Trace `/api/runs/{runId}/events` 提供。
+
+## 7. 精确管理 API
+
+- `GET /api/mcp/catalog` -> `CatalogView { repository, commitSha, fetchedAt, expiresAt, etag, status, servers, errors }`
+- `POST /api/mcp/catalog/refresh` -> `CatalogRefreshView { status, commitSha, fetchedAt, expiresAt }`
+- `GET /api/workspaces/{workspaceId}/mcp/installations` -> `List<InstallationView>`
+- `POST /api/workspaces/{workspaceId}/mcp/installations/preview` 请求 `PreviewRequest { serverKey, scope, targetWorkspaceId }`，返回 `InstallationPreview { previewId, source, launchSpec, environmentNames, riskLevel, requiredCapabilities, summary, requiresConfirmation, sideEffectFree }`
+- `POST /api/workspaces/{workspaceId}/mcp/installations` 请求 `ConfirmInstallationRequest { previewId, confirmationToken, scope, targetWorkspaceId }`，返回 `InstallationView`
+- `DELETE /api/workspaces/{workspaceId}/mcp/installations/{installationId}` -> `InstallationView`
+- `GET /api/workspaces/{workspaceId}/skills`、`GET /api/skills/search?q=...`、`POST /api/workspaces/{workspaceId}/skills/preview`、`POST /api/workspaces/{workspaceId}/skills`、`DELETE /api/workspaces/{workspaceId}/skills/{skillId}`，字段严格对应第 5 节。
+- `GET /api/workspaces/{workspaceId}/cli/commands`、`POST /api/workspaces/{workspaceId}/cli/runs`，字段严格对应第 6 节。
+
+管理审计使用新增 `CapabilityManagementAuditEvent`/`CapabilityManagementAuditSink`，独立于会话审计；事件包含 `eventType`、`actorUserId`、`workspaceId`、`installationId/skillId`、`runId`、`sourceCommitSha`、`result`、`occurredAt`，严禁写入密钥值。数据库继续使用 UTC `timestamptz`，展示层转换 `Asia/Shanghai`。
+
+## 8. 前端与验收
+
+`McpCatalogPanel` 必须由 `Workbench.tsx` 挂载。`ConversationComposer.tsx` 输入 `/` 或 `/` 后缀请求当前 workspace 命令目录，键盘选择、参数校验、风险/审批预览后提交结构化 CLI Run；普通文本路径保持不变。MCP/Skill 详情使用 Markdown 渲染器、代码块、表格和工具列表，不把原始 JSON/Markdown 作为唯一界面。
+
+测试必须覆盖 DTO 精确字段、工作区权限、预览无副作用、固定 SHA/ETag/TTL/限流、Docker 启停与恢复、stdio 并发帧/通知/退出、按安装撤销、Skill 供应链拒绝、CLI 审批和前端挂载。
+
+真实 EDD 使用仓库已有入口：
+
+```powershell
+pwsh .agent4j/acceptance/run-real-agent.ps1
+pwsh .agent4j/acceptance/run-conversation-continuity.ps1
+mvn -pl agent-eval -am -Dgroups=edd -Dtest=LlmEddTest test
+```
+
+只有报告中存在 `modelCallAttempts > 0`、真实 HTTP 记录、Run/Trace/Audit 证据且所有场景通过，才可称为真实 EDD；缺少 API 配置只能标记跳过，不能冒充通过。
