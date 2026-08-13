@@ -69,6 +69,7 @@ class CliApprovalInterruptPolicyTest {
                 .containsEntry("commandArguments", "[\"value.txt\"]")
                 .containsEntry("command", "'printf' 'value.txt'")
                 .containsEntry("riskLevel", "MUTATING")
+                .containsEntry("timeoutSeconds", "30")
                 .containsEntry("authorizationReason", "等待用户批准");
         assertThat(interrupt.details().get("commandSha256")).hasSize(64);
         assertThat(approved.decision()).isEqualTo(CliAuthorizationDecision.ALLOWED);
@@ -119,6 +120,29 @@ class CliApprovalInterruptPolicyTest {
                 .isEqualTo(new PtyTarget(workspace.resolve("bash.exe"), workspaceA.toRealPath()));
     }
 
+    @Test
+    void readsGovernedCommandTimeoutFromExactOpsStateKey() {
+        CliApprovalInterruptPolicy policy = policy(CliRiskLevel.READ_ONLY);
+        AgentState state = state("test.read", List.of("value.txt"))
+                .withVariable(OpsNode.COMMAND_TIMEOUT_SECONDS_KEY, "1");
+
+        assertThat(policy.authorizeForExecution(state, true)
+                .plan().request().timeout()).isEqualTo(Duration.ofSeconds(1));
+    }
+
+    @Test
+    void rejectsMissingMalformedAndOutOfRangeGovernedCommandTimeout() {
+        CliApprovalInterruptPolicy policy = policy(CliRiskLevel.READ_ONLY);
+        AgentState base = stateWithoutTimeout("test.read", List.of("value.txt"));
+        for (String value : new String[] {null, "", "abc", "0", "601"}) {
+            AgentState candidate = value == null
+                    ? base
+                    : base.withVariable(OpsNode.COMMAND_TIMEOUT_SECONDS_KEY, value);
+            assertThatThrownBy(() -> policy.authorizeForExecution(candidate, true))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
     private CliApprovalInterruptPolicy policy(CliRiskLevel riskLevel) {
         String name = riskLevel == CliRiskLevel.MUTATING ? "test.write" : "test.read";
         return new CliApprovalInterruptPolicy(
@@ -138,6 +162,19 @@ class CliApprovalInterruptPolicyTest {
         return stateAt(workspace, name, arguments);
     }
 
+    private AgentState stateWithoutTimeout(String name, List<String> arguments) {
+        try {
+            return AgentState.empty()
+                    .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString())
+                    .withVariable(OpsNode.COMMAND_NAME_KEY, name)
+                    .withVariable(OpsNode.COMMAND_ARGUMENTS_KEY,
+                            objectMapper.writeValueAsString(arguments))
+                    .withVariable(PlannerNode.REQUIRED_CAPABILITIES_KEY, "TERMINAL");
+        } catch (Exception exception) {
+            throw new IllegalStateException(exception);
+        }
+    }
+
     private AgentState stateAt(Path workspacePath, String name, List<String> arguments) {
         try {
             return AgentState.empty()
@@ -145,6 +182,7 @@ class CliApprovalInterruptPolicyTest {
                     .withVariable(OpsNode.COMMAND_NAME_KEY, name)
                     .withVariable(OpsNode.COMMAND_ARGUMENTS_KEY,
                             objectMapper.writeValueAsString(arguments))
+                    .withVariable(OpsNode.COMMAND_TIMEOUT_SECONDS_KEY, "30")
                     .withVariable(PlannerNode.REQUIRED_CAPABILITIES_KEY, "TERMINAL");
         } catch (Exception exception) {
             throw new IllegalStateException(exception);

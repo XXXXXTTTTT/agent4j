@@ -37,7 +37,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-@WebFluxTest(controllers = CliCommandController.class)
+@WebFluxTest(controllers = CliCommandController.class,
+        properties = "agent.production.enabled=true")
 @Import(RunExceptionHandler.class)
 class CliCommandControllerTest {
 
@@ -121,8 +122,49 @@ class CliCommandControllerTest {
         assertThat(state.getValue().variables()).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(
                 "ops.commandName", "test.maven",
                 "ops.commandArguments", "[\"-q\"]",
+                "ops.commandTimeoutSeconds", "30",
                 "coder.workspacePath", workspacePath.toString(),
                 "planner.requiredCapabilities", "TERMINAL"));
+    }
+
+    @Test
+    void filtersDestructiveCommandsFromCatalog() {
+        when(actorResolver.current()).thenReturn(new Actor("user-1", "用户一"));
+        when(workspaceAccessService.requireWorkspace(
+                WORKSPACE_ID, "user-1", WorkspacePermission.OPERATOR))
+                .thenReturn(workspace());
+        when(commandCatalog.list()).thenReturn(List.of(
+                new CliCommandDefinition("safe", "printf", List.of(), CliRiskLevel.READ_ONLY,
+                        Set.of(RequiredCapability.TERMINAL)),
+                new CliCommandDefinition("destroy", "rm", List.of(), CliRiskLevel.DESTRUCTIVE,
+                        Set.of(RequiredCapability.TERMINAL))));
+
+        webTestClient.get()
+                .uri("/api/workspaces/{workspaceId}/cli/commands", WORKSPACE_ID)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[0].name").isEqualTo("safe")
+                .jsonPath("$[1]").doesNotExist();
+    }
+
+    @Test
+    void rejectsDestructiveCommandBeforeStartingRun() {
+        when(actorResolver.current()).thenReturn(new Actor("user-1", "用户一"));
+        when(workspaceAccessService.requireWorkspace(
+                WORKSPACE_ID, "user-1", WorkspacePermission.OPERATOR))
+                .thenReturn(workspace());
+        when(commandCatalog.find("destroy")).thenReturn(java.util.Optional.of(
+                new CliCommandDefinition("destroy", "rm", List.of(), CliRiskLevel.DESTRUCTIVE,
+                        Set.of(RequiredCapability.TERMINAL))));
+
+        webTestClient.post()
+                .uri("/api/workspaces/{workspaceId}/cli/runs", WORKSPACE_ID)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"commandName\":\"destroy\",\"arguments\":[],\"timeoutSeconds\":30}")
+                .exchange()
+                .expectStatus().isBadRequest();
+        org.mockito.Mockito.verifyNoInteractions(runService);
     }
 
     @Test

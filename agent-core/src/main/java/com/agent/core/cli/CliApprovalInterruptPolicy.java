@@ -111,9 +111,29 @@ public final class CliApprovalInterruptPolicy implements InterruptPolicy {
                         Objects.requireNonNull(
                                 targetResolver.resolve(workspace),
                                 "targetResolver 返回值不能为空"),
-                        timeout),
+                        governedTimeout(state)),
                 capabilities,
                 objectMapper.valueToTree(arguments).toString());
+    }
+
+    private Duration governedTimeout(AgentState state) {
+        String raw = state.variables().get(OpsNode.COMMAND_TIMEOUT_SECONDS_KEY);
+        if (raw == null || raw.isBlank()) {
+            throw new IllegalArgumentException(
+                    "缺少状态变量: " + OpsNode.COMMAND_TIMEOUT_SECONDS_KEY);
+        }
+        long seconds;
+        try {
+            seconds = Long.parseLong(raw);
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException(
+                    OpsNode.COMMAND_TIMEOUT_SECONDS_KEY + " 必须是十进制整数", exception);
+        }
+        if (seconds < 1 || seconds > 600) {
+            throw new IllegalArgumentException(
+                    OpsNode.COMMAND_TIMEOUT_SECONDS_KEY + " 必须在 1 到 600 秒之间");
+        }
+        return Duration.ofSeconds(seconds);
     }
 
     private Path realWorkspace(Path workspace) {
@@ -185,6 +205,8 @@ public final class CliApprovalInterruptPolicy implements InterruptPolicy {
         details.put("command", authorization.plan().request().bashCommand());
         details.put("riskLevel", authorization.plan().riskLevel().name());
         details.put("commandSha256", authorization.plan().commandSha256());
+        details.put("timeoutSeconds", Long.toString(
+                authorization.plan().request().timeout().toSeconds()));
         details.put("authorizationReason", authorization.reason());
         UUID interruptId = UUID.nameUUIDFromBytes((runId + ":" + nodeName + ":"
                 + authorization.plan().commandSha256()).getBytes(StandardCharsets.UTF_8));

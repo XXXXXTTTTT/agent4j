@@ -33,6 +33,7 @@ public final class OpsNode implements Node {
     public static final String COMMAND_KEY = "ops.command";
     public static final String COMMAND_NAME_KEY = "ops.commandName";
     public static final String COMMAND_ARGUMENTS_KEY = "ops.commandArguments";
+    public static final String COMMAND_TIMEOUT_SECONDS_KEY = "ops.commandTimeoutSeconds";
     public static final String COMMAND_SHA256_KEY = "ops.commandSha256";
     public static final String AUTHORIZATION_DECISION_KEY = "ops.authorizationDecision";
     public static final String AUTHORIZATION_REASON_KEY = "ops.authorizationReason";

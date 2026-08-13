@@ -20,6 +20,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -37,6 +38,7 @@ import java.util.UUID;
 /** 提供工作区隔离的受治理 CLI 命令目录和 Run 创建入口。 */
 @RestController
 @RequestMapping("/api/workspaces/{workspaceId}/cli")
+@ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
 public final class CliCommandController {
 
     private static final String GRAPH_ID = "governed-cli";
@@ -70,7 +72,10 @@ public final class CliCommandController {
     @GetMapping("/commands")
     public List<CliCommandView> list(@PathVariable UUID workspaceId) {
         requireWorkspace(workspaceId);
-        return commandCatalog.list().stream().map(CliCommandView::from).toList();
+        return commandCatalog.list().stream()
+                .filter(definition -> definition.riskLevel() != com.agent.core.cli.CliRiskLevel.DESTRUCTIVE)
+                .map(CliCommandView::from)
+                .toList();
     }
 
     /** 创建专用 `governed-cli` Run，不接受任意 Shell 文本或审批覆盖。 */
@@ -81,7 +86,10 @@ public final class CliCommandController {
         WorkspaceRecord workspace = requireWorkspace(workspaceId);
         CliCommandDefinition definition = commandCatalog.find(request.commandName())
                 .orElseThrow(() -> new com.agent.core.cli.CliCommandNotFoundException(
-                        request.commandName()));
+                request.commandName()));
+        if (definition.riskLevel() == com.agent.core.cli.CliRiskLevel.DESTRUCTIVE) {
+            throw new IllegalArgumentException("DESTRUCTIVE 命令不允许通过工作区 CLI 入口执行");
+        }
         CliCommandIntent intent = new CliCommandIntent(
                 request.commandName(),
                 request.arguments(),
@@ -94,6 +102,8 @@ public final class CliCommandController {
         AgentState state = AgentState.empty()
                 .withVariable(OpsNode.COMMAND_NAME_KEY, definition.name())
                 .withVariable(OpsNode.COMMAND_ARGUMENTS_KEY, argumentsJson(request.arguments()))
+                .withVariable(OpsNode.COMMAND_TIMEOUT_SECONDS_KEY,
+                        Long.toString(request.timeoutSeconds()))
                 .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.workspacePath().toString())
                 .withVariable(PlannerNode.REQUIRED_CAPABILITIES_KEY,
                         capabilityNames(definition.requiredCapabilities()));
