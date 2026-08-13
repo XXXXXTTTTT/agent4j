@@ -38,6 +38,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.never;
 
 class McpInstallationRuntimeTest {
     private static final UUID WORKSPACE_ID = UUID.fromString("47e570a5-3ac4-4087-a590-f1714b8175dd");
@@ -142,6 +143,59 @@ class McpInstallationRuntimeTest {
         org.mockito.Mockito.verify(repository, org.mockito.Mockito.never()).completeFailure(any(McpRuntimeFailureCompletion.class));
     }
 
+    @Test
+    void rejectsMultipleRunningRecoveryContainersWithoutChoosingOne() throws Exception {
+        McpInstallationRepository repository = mock(McpInstallationRepository.class);
+        DockerMcpStdioRunner runner = mock(DockerMcpStdioRunner.class);
+        McpInstallationRecord running = running("container-current");
+        McpInstallationAggregate aggregate = new McpInstallationAggregate(running, snapshot(), preparedMaterial(), List.of());
+        McpInstallationRuntime runtime = new McpInstallationRuntime(() -> new Actor("runtime-user", "Runtime"),
+                mock(WorkspaceAccessService.class), repository, snapshot -> prepared(aggregate.material()),
+                McpRuntimeSecretProvider.declaredNamesOnly(), runner, mock(ToolRegistry.class),
+                new com.fasterxml.jackson.databind.ObjectMapper(), configuration(), java.time.Clock.systemUTC());
+        DockerMcpContainer current = new DockerMcpContainer("container-current", INSTALLATION_ID, SNAPSHOT_ID, true);
+        DockerMcpContainer duplicate = new DockerMcpContainer("container-duplicate", INSTALLATION_ID, SNAPSHOT_ID, true);
+
+        runtime.recoverRunning(aggregate, List.of(current, duplicate));
+
+        verify(runner).destroyManagedContainer(any(), eq("container-current"));
+        verify(runner).destroyManagedContainer(any(), eq("container-duplicate"));
+        verify(runner, never()).attach(any(), any(), any(), any(), any(), any());
+        verify(repository).completeFailure(org.mockito.ArgumentMatchers.argThat(completion ->
+                "RECOVERY_CONTAINER_MISMATCH".equals(completion.runtimeError())));
+    }
+
+    @Test
+    void attachesUniquePersistedRunningContainerAndCleansExitedResidual() throws Exception {
+        McpInstallationRepository repository = mock(McpInstallationRepository.class);
+        DockerMcpStdioRunner runner = mock(DockerMcpStdioRunner.class);
+        McpInstallationRecord running = running("container-current");
+        com.agent.web.mcp.installation.McpPreparedMaterialRecord material = preparedMaterial();
+        McpInstallationAggregate aggregate = new McpInstallationAggregate(running, snapshot(), material, List.of());
+        WorkspaceAccessService workspaces = mock(WorkspaceAccessService.class);
+        Path workspace = Files.createTempDirectory("agent4j-mcp-recovery-workspace");
+        when(workspaces.requireWorkspace(eq(WORKSPACE_ID), eq("runtime-user"), any())).thenReturn(
+                new com.agent.web.workspace.WorkspaceRecord(WORKSPACE_ID, "runtime-user", "runtime", workspace,
+                        "repo", com.agent.web.workspace.WorkspacePermission.OWNER, Instant.EPOCH, Instant.EPOCH));
+        java.io.PipedInputStream stdout = new java.io.PipedInputStream();
+        java.io.PipedOutputStream responses = new java.io.PipedOutputStream(stdout);
+        DockerMcpStdioProcess process = new DockerMcpStdioProcess(stdout, new RespondingOutputStream(responses),
+                new java.io.ByteArrayInputStream(new byte[0]), "container-current", () -> { });
+        when(runner.attach(any(), eq("container-current"), any(), any(), any(), any())).thenReturn(process);
+        McpInstallationRuntime runtime = new McpInstallationRuntime(() -> new Actor("runtime-user", "Runtime"), workspaces,
+                repository, snapshot -> prepared(material), McpRuntimeSecretProvider.declaredNamesOnly(), runner,
+                mock(ToolRegistry.class), new com.fasterxml.jackson.databind.ObjectMapper(), configuration(), java.time.Clock.systemUTC());
+
+        runtime.recoverRunning(aggregate, List.of(
+                new DockerMcpContainer("container-current", INSTALLATION_ID, SNAPSHOT_ID, true),
+                new DockerMcpContainer("container-exited", INSTALLATION_ID, SNAPSHOT_ID, false)));
+
+        verify(runner).destroyManagedContainer(any(), eq("container-exited"));
+        verify(runner).attach(any(), eq("container-current"), any(), any(), any(), any());
+        verify(repository, never()).completeFailure(any(McpRuntimeFailureCompletion.class));
+        runtime.close();
+    }
+
     private static McpInstallationAggregate aggregate() {
         return new McpInstallationAggregate(stopped(), snapshot(), null, List.of());
     }
@@ -161,6 +215,14 @@ class McpInstallationRuntimeTest {
                 stopped.actorUserId(), McpInstallationStatus.INSTALLING, stopped.confirmationTokenSha256(), stopped.createdAt(),
                 stopped.confirmedAt(), stopped.updatedAt(), stopped.riskLevel(), stopped.requiredCapabilities(),
                 stopped.workspaceMountMode(), stopped.networkMode(), stopped.runtimeImage(), true, null, null, null, 5);
+    }
+
+    private static McpInstallationRecord running(String containerId) {
+        McpInstallationRecord stopped = stopped();
+        return new McpInstallationRecord(stopped.installationId(), stopped.snapshotId(), stopped.scope(), stopped.workspaceId(),
+                stopped.actorUserId(), McpInstallationStatus.RUNNING, stopped.confirmationTokenSha256(), stopped.createdAt(),
+                stopped.confirmedAt(), stopped.updatedAt(), stopped.riskLevel(), stopped.requiredCapabilities(),
+                stopped.workspaceMountMode(), stopped.networkMode(), stopped.runtimeImage(), true, WORKSPACE_ID, containerId, null, 5);
     }
 
     private static McpSourceSnapshot snapshot() {

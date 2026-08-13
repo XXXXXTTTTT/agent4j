@@ -87,22 +87,22 @@ public final class McpInstallationRuntime implements AutoCloseable {
                 Objects.requireNonNull(containers, "containers 不能为空"));
         McpInstallationRecord installation = aggregate.installation();
         within(installation.installationId(), () -> {
-            List<DockerMcpContainer> matching = recoveredContainers.stream()
-                    .filter(DockerMcpContainer::running)
-                    .filter(container -> installation.containerId() != null && installation.containerId().equals(container.containerId()))
-                    .toList();
-            recoveredContainers.stream().filter(container -> !matching.contains(container))
-                    .forEach(container -> destroyRecoveryContainer(installation, aggregate, container));
-            DockerMcpContainer container = matching.size() == 1 ? matching.getFirst() : null;
+            List<DockerMcpContainer> runningContainers = recoveredContainers.stream()
+                    .filter(DockerMcpContainer::running).toList();
+            DockerMcpContainer container = runningContainers.size() == 1 ? runningContainers.getFirst() : null;
             if (installation.status() != McpInstallationStatus.RUNNING
                     || container == null
                     || !installation.snapshotId().equals(container.snapshotId())
                     || !installation.installationId().equals(container.installationId())
                     || installation.runtimeWorkspaceId() == null || installation.containerId() == null
                     || !installation.containerId().equals(container.containerId()) || !container.running()) {
+                recoveredContainers.forEach(value -> destroyRecoveryContainer(installation, aggregate, value));
                 failSynchronously(installation, aggregate, installation.runtimeWorkspaceId(), "RECOVERY_CONTAINER_MISMATCH");
                 return null;
             }
+            recoveredContainers.stream()
+                    .filter(value -> !container.containerId().equals(value.containerId()))
+                    .forEach(value -> destroyRecoveryContainer(installation, aggregate, value));
             try {
                 if (installation.scope() == InstallationScope.WORKSPACE
                         && !installation.workspaceId().equals(installation.runtimeWorkspaceId())) {
