@@ -60,6 +60,9 @@ describe('ConversationComposer', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify([{
         name: 'test.maven', executable: 'mvn', fixedArguments: ['test'], riskLevel: 'MUTATING',
         requiredCapabilities: ['TERMINAL'], maxArguments: 64,
+      }, {
+        name: 'destroy.workspace', executable: 'rm', fixedArguments: ['-rf'], riskLevel: 'DESTRUCTIVE',
+        requiredCapabilities: ['TERMINAL'], maxArguments: 64,
       }]), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify(runView()), { status: 202 }))
     vi.stubGlobal('fetch', fetcher)
@@ -68,6 +71,7 @@ describe('ConversationComposer', () => {
 
     await user.type(screen.getByRole('textbox', { name: '发送消息' }), '/')
     await screen.findByRole('option', { name: /test\.maven/ })
+    expect(screen.queryByRole('option', { name: /destroy\.workspace/ })).not.toBeInTheDocument()
     await user.keyboard('{Enter}')
     expect(screen.getByText('执行前需要审批')).toBeVisible()
     await user.type(screen.getByRole('textbox', { name: '命令参数' }), '-q{enter}-DskipTests')

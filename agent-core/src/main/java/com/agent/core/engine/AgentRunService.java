@@ -196,6 +196,9 @@ public final class AgentRunService implements AutoCloseable {
         InterruptRequest interrupt = Objects.requireNonNull(
                 waiting.interruptRequest(), "等待审批快照缺少 interruptRequest");
         awaitInterruptPublication(runId);
+        if ("governed-cli".equals(waiting.graphId()) && !command.variableUpdates().isEmpty()) {
+            throw new IllegalArgumentException("governed-cli 审批不允许 variableUpdates");
+        }
         if (command.decision() == ApprovalDecision.REJECT) {
             RunCheckpoint rejected = checkpointer.append(new CheckpointAppend(
                     runId,

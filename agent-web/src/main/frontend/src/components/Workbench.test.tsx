@@ -586,6 +586,42 @@ diff --git a/src/Service.java b/src/Service.java
     })
   })
 
+  it('受治理 CLI 审批不提供修改命令的入口', async () => {
+    const user = userEvent.setup()
+    const decide = vi.fn(async () => undefined)
+    const waiting = runView({
+      graphId: 'governed-cli',
+      status: 'WAITING_APPROVAL',
+      nextNode: 'ops',
+      state: {
+        messages: [],
+        variables: { 'ops.command': 'mvn test' },
+        trace: [],
+      },
+      interruptRequest: {
+        interruptId: 'd3a2b8fb-912c-43a5-9ca4-5cd7ae9be517',
+        nodeName: 'ops',
+        reason: '受治理命令需要审批',
+        details: { 'ops.command': 'mvn test' },
+      },
+    })
+    render(
+      <Workbench
+        controller={controller({ run: waiting, decide })}
+        onTerminalReady={() => undefined}
+      />,
+    )
+
+    const dialog = screen.getByRole('dialog', { name: '操作审批' })
+    expect(within(dialog).queryByRole('button', { name: '修改' })).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: '批准修改' })).not.toBeInTheDocument()
+    await user.type(within(dialog).getByLabelText('审批说明'), '已确认')
+    await user.click(within(dialog).getByRole('button', { name: '批准' }))
+    expect(decide).toHaveBeenCalledWith({
+      decision: 'APPROVE', expectedVersion: 2, reason: '已确认', variableUpdates: {},
+    })
+  })
+
   it('切换证据版本并仅显示合法 PNG Data URL 和纯文本 DOM', async () => {
     const user = userEvent.setup()
     const first = runView({

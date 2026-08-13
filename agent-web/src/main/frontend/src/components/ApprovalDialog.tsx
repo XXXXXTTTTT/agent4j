@@ -12,6 +12,7 @@ interface ApprovalDialogProps {
 /** 仅开放中断详情与权威变量中同时存在的字段。 */
 export function ApprovalDialog({ run, decide }: ApprovalDialogProps) {
   const interrupt = run.interruptRequest
+  const allowsVariableUpdates = run.graphId !== 'governed-cli'
   const editableKeys = useMemo(() => {
     if (interrupt === null) return []
     return Object.keys(interrupt.details).filter((key) =>
@@ -64,7 +65,7 @@ export function ApprovalDialog({ run, decide }: ApprovalDialogProps) {
         ))}
       </dl>
 
-      {editing ? (
+      {allowsVariableUpdates && editing ? (
         <div className="approval-updates">
           {editableKeys.map((key) => (
             <label key={key}>
@@ -99,7 +100,7 @@ export function ApprovalDialog({ run, decide }: ApprovalDialogProps) {
         >
           <ShieldCheck aria-hidden="true" size={16} />批准
         </button>
-        {editing ? (
+        {allowsVariableUpdates && editing ? (
           <button
             className="modify-command"
             type="button"
@@ -110,11 +111,11 @@ export function ApprovalDialog({ run, decide }: ApprovalDialogProps) {
           >
             <ShieldCheck aria-hidden="true" size={16} />批准修改
           </button>
-        ) : (
+        ) : allowsVariableUpdates ? (
           <button className="modify-command" type="button" onClick={() => setEditing(true)}>
             <Pencil aria-hidden="true" size={16} />修改
           </button>
-        )}
+        ) : null}
         <button
           className="reject-command"
           type="button"

@@ -229,6 +229,40 @@ class AgentRunServiceTest {
     }
 
     @Test
+    void rejectsVariableUpdatesForGovernedCliApproval() {
+        InMemoryCheckpointer checkpointer = new InMemoryCheckpointer();
+        InterruptRequest interrupt = new InterruptRequest(
+                UUID.fromString("bc6c5920-c6ed-42c8-9d72-adab29365244"),
+                "ops",
+                "受治理命令需要审批",
+                Map.of("ops.command", "mvn test"));
+        GraphRegistry registry = new GraphRegistry(Map.of("governed-cli", () ->
+                new StateGraph(2, (runId, nodeName, state) -> Optional.of(interrupt))
+                        .addNode("ops", state -> state.withTraceEntry("ops"))
+                        .addEdge("ops", StateGraph.END)
+                        .setEntryPoint("ops")));
+
+        try (AgentRunService service = new AgentRunService(
+                checkpointer, registry, event -> { })) {
+            RunCheckpoint started = service.start("governed-cli", AgentState.empty()
+                    .withVariable("ops.command", "mvn test"));
+            RunCheckpoint waiting = checkpointer.awaitStatus(
+                    started.runId(), RunStatus.WAITING_APPROVAL, AWAIT_TIMEOUT);
+
+            assertThatThrownBy(() -> service.decide(
+                    started.runId(),
+                    new ApprovalCommand(
+                            ApprovalDecision.APPROVE,
+                            waiting.version(),
+                            "尝试修改受治理命令",
+                            Map.of("ops.command", "mvn verify"))))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("governed-cli 审批不允许 variableUpdates");
+            assertThat(checkpointer.loadHistory(started.runId())).hasSize(2);
+        }
+    }
+
+    @Test
     void validatesAndCopiesApprovalVariableUpdates() {
         Map<String, String> updates = new LinkedHashMap<>();
         updates.put("ops.command", "mvn verify");

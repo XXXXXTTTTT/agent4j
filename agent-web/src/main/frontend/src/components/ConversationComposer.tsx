@@ -30,7 +30,10 @@ export function ConversationComposer({ conversation, runController }: Conversati
 
   const slashMode = content.startsWith('/') && selectedCommand === null
   const commandQuery = slashMode ? content.slice(1).trim().toLocaleLowerCase() : ''
-  const visibleCommands = commands.filter((command) => command.name.toLocaleLowerCase().includes(commandQuery))
+  const visibleCommands = commands.filter((command) =>
+    command.riskLevel !== 'DESTRUCTIVE'
+      && command.name.toLocaleLowerCase().includes(commandQuery),
+  )
 
   async function loadCommands(): Promise<void> {
     const workspaceId = conversation.activeWorkspace?.workspaceId
