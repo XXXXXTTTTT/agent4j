@@ -36,4 +36,19 @@ describe('CapabilityWorkbenchPanel', () => {
     expect(startMcp).toHaveBeenCalledWith(installation, { MCP_TOKEN: 'secret-value' })
     expect(input).toHaveValue('')
   })
+
+  it('offers retry for a failed MCP installation through the existing start operation', async () => {
+    const user = userEvent.setup()
+    const startMcp = vi.fn(async () => undefined)
+    const installation = {
+      installationId: 'installation-failed', snapshotId: 'snapshot-1', scope: 'WORKSPACE' as const, workspaceId: 'ws-1', actorUserId: 'user-1', status: 'FAILED', createdAt: '', confirmedAt: '', updatedAt: '', riskLevel: 'HIGH' as const, requiredCapabilities: ['TOOL'] as const, workspaceMountMode: 'NONE' as const, networkMode: 'NONE' as const, environmentNames: [], runtimeWorkspaceId: null, runtimeState: 'FAILED', runtimeError: '启动失败', version: 2,
+    }
+    render(<CapabilityWorkbenchPanel workspaceId="ws-1" mcpCatalog={catalog} skillResults={[]} mcpInstallations={[installation]} onPreviewMcp={vi.fn()} onConfirmMcp={vi.fn()} onPreviewSkill={vi.fn()} onConfirmSkill={vi.fn()} onStartMcp={startMcp} />)
+
+    expect(screen.getByText('启动失败')).toBeVisible()
+    expect(screen.getByText(/版本 2/)).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '重试' }))
+
+    expect(startMcp).toHaveBeenCalledWith(installation, {})
+  })
 })
