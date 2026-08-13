@@ -32,6 +32,7 @@ coverage/
 .agent4j/acceptance/*
 !.agent4j/acceptance/run-real-agent.ps1
 !.agent4j/acceptance/run-conversation-continuity.ps1
+!.agent4j/acceptance/run-live-llm-edd.ps1
 .agent4j/imports/
 .agent4j/.staging/
 .agent4j/.uploads/

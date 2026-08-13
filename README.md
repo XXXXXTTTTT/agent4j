@@ -320,11 +320,14 @@ imported-project repair gate first, then the persisted two-turn conversation gat
 ```powershell
 pwsh .agent4j/acceptance/run-real-agent.ps1
 pwsh .agent4j/acceptance/run-conversation-continuity.ps1
+pwsh .agent4j/acceptance/run-live-llm-edd.ps1
 ```
 
 The first command imports a failing Maven project and requires the Agent to modify it and pass its
 test. The second command creates one Conversation with two independent Runs and requires the second
-answer to retain exact facts from the first turn. Generated responses, Run snapshots and IDs are
+answer to retain exact facts from the first turn. The third command explicitly loads the required
+LLM variables from `.env` into its own process, runs the tagged EDD suite, and requires a
+`live-openai-compatible` report with at least one model request. Generated responses, Run snapshots and IDs are
 written under the ignored `.agent4j/acceptance/evidence/` directory; neither command prints or commits
 the API key.
 
