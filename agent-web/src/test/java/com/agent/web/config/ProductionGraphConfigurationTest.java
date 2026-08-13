@@ -8,6 +8,7 @@ import com.agent.core.memory.MemoryContextProvider;
 import com.agent.core.nodes.PlannerNode;
 import com.agent.core.nodes.CoderNode;
 import com.agent.core.nodes.ReviewerNode;
+import com.agent.core.nodes.OpsNode;
 import com.agent.core.trace.RunLogPublisher;
 import com.agent.core.cli.WorkspaceTerminalTargetResolver;
 import com.agent.core.cli.CliApprovalInterruptPolicy;
@@ -23,6 +24,7 @@ import com.agent.sandbox.pty.DockerTarget;
 import com.agent.sandbox.pty.PtyTarget;
 import com.agent.sandbox.pty.SandboxTerminalService;
 import com.agent.sandbox.pty.TerminalTarget;
+import com.agent.sandbox.pty.CommandResult;
 import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -32,6 +34,8 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.mockito.Mockito.mock;
 
@@ -178,6 +182,59 @@ class ProductionGraphConfigurationTest {
             assertThat(graph.inspectTopology().outgoingTargets().get("ops"))
                     .containsExactly(StateGraph.END);
         }
+    }
+
+    @Test
+    void codeAgentOpsDoesNotRequireGovernedCliTimeoutState() throws Exception {
+        Path bash = Files.createFile(workspace.resolve("bash.exe"));
+        AtomicReference<com.agent.sandbox.pty.CommandRequest> command = new AtomicReference<>();
+        SandboxTerminalService terminal = mock(SandboxTerminalService.class);
+        org.mockito.Mockito.when(terminal.execute(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(invocation -> {
+                    command.set(invocation.getArgument(0));
+                    return CompletableFuture.completedFuture(new CommandResult(0, "ok", "", false));
+                });
+        ProductionGraphConfiguration configuration = new ProductionGraphConfiguration();
+        GraphFactory factory = configuration.codeAgentGraph(
+                properties("PTY", "", ""),
+                mock(ModelRouter.class),
+                request -> new com.agent.core.memory.MemoryContext("", 0),
+                terminal,
+                mock(BrowserAutomation.class),
+                new AstService(),
+                new WorkspaceSnapshotService(50, 32_000),
+                RunLogPublisher.noop());
+
+        AgentState result;
+        try (StateGraph graph = factory.create()) {
+            com.agent.core.engine.GraphExecutionResult execution = graph.execute(
+                    new com.agent.core.engine.GraphExecutionRequest(
+                    java.util.UUID.randomUUID(),
+                    AgentState.empty()
+                            .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString())
+                            .withVariable(OpsNode.COMMAND_NAME_KEY, "mvn")
+                            .withVariable(OpsNode.COMMAND_ARGUMENTS_KEY, "[\"test\"]")
+                            .withVariable(PlannerNode.REQUIRED_CAPABILITIES_KEY, "TERMINAL"),
+                    "ops", false), new com.agent.core.engine.GraphExecutionListener() {
+                        @Override
+                        public void onNodeStarted(String nodeName, AgentState state) {
+                        }
+
+                        @Override
+                        public void onNodeCompleted(
+                                String nodeName, String nextNode, AgentState state) {
+                        }
+                    });
+            assertThat(execution).isInstanceOf(
+                    com.agent.core.engine.GraphExecutionResult.Completed.class);
+            result = ((com.agent.core.engine.GraphExecutionResult.Completed) execution).state();
+        }
+
+        assertThat(result.variables()).doesNotContainKey(OpsNode.ERROR_KEY);
+        assertThat(command.get().bashCommand()).isEqualTo("'mvn' 'test'");
+        assertThat(command.get().timeout()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(command.get().target()).isEqualTo(new PtyTarget(bash, workspace.toRealPath()));
     }
 
     @Test

@@ -2,11 +2,16 @@ package com.agent.core.nodes;
 
 import com.agent.core.cli.CliApprovalInterruptPolicy;
 import com.agent.core.cli.CliAuthorization;
+import com.agent.core.cli.CliAuthorizationContext;
 import com.agent.core.cli.CliAuthorizationDecision;
+import com.agent.core.cli.CliCommandCatalog;
+import com.agent.core.cli.CliCommandIntent;
+import com.agent.core.cli.WorkspaceTerminalTargetResolver;
 import com.agent.core.engine.AgentState;
 import com.agent.core.engine.Node;
 import com.agent.core.engine.NodeExecutionContext;
 import com.agent.core.harness.HarnessHookException;
+import com.agent.core.intent.RequiredCapability;
 import com.agent.core.trace.RunLogEvent;
 import com.agent.core.trace.RunLogPublisher;
 import com.agent.core.trace.RunLogStream;
@@ -18,10 +23,15 @@ import com.agent.sandbox.pty.TerminalTarget;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -46,6 +56,8 @@ public final class OpsNode implements Node {
 
     private final TerminalCommandExecutor executor;
     private final TerminalTarget target;
+    private final WorkspaceTerminalTargetResolver targetResolver;
+    private final CliCommandCatalog commandCatalog;
     private final Duration timeout;
     private final RunLogPublisher logPublisher;
     private final CliApprovalInterruptPolicy approvalPolicy;
@@ -79,6 +91,53 @@ public final class OpsNode implements Node {
             RunLogPublisher logPublisher) {
         this.executor = Objects.requireNonNull(executor, "executor 不能为空");
         this.target = Objects.requireNonNull(target, "target 不能为空");
+        this.targetResolver = null;
+        this.commandCatalog = null;
+        this.timeout = Objects.requireNonNull(timeout, "timeout 不能为空");
+        this.logPublisher = Objects.requireNonNull(logPublisher, "logPublisher 不能为空");
+        this.approvalPolicy = null;
+        if (timeout.isZero() || timeout.isNegative()) {
+            throw new IllegalArgumentException("timeout 必须大于 0");
+        }
+    }
+
+    /** 创建按每次运行的已授权工作区解析终端目标的代码执行节点。 */
+    public OpsNode(
+            TerminalCommandExecutor executor,
+            WorkspaceTerminalTargetResolver targetResolver,
+            Duration timeout) {
+        this(executor, targetResolver, timeout, RunLogPublisher.noop());
+    }
+
+    /** 创建按每次运行的已授权工作区解析终端目标并发布日志的代码执行节点。 */
+    public OpsNode(
+            TerminalCommandExecutor executor,
+            WorkspaceTerminalTargetResolver targetResolver,
+            Duration timeout,
+            RunLogPublisher logPublisher) {
+        this.executor = Objects.requireNonNull(executor, "executor 不能为空");
+        this.target = null;
+        this.targetResolver = Objects.requireNonNull(targetResolver, "targetResolver 不能为空");
+        this.commandCatalog = null;
+        this.timeout = Objects.requireNonNull(timeout, "timeout 不能为空");
+        this.logPublisher = Objects.requireNonNull(logPublisher, "logPublisher 不能为空");
+        this.approvalPolicy = null;
+        if (timeout.isZero() || timeout.isNegative()) {
+            throw new IllegalArgumentException("timeout 必须大于 0");
+        }
+    }
+
+    /** 创建按命令目录授权并按当前工作区解析执行目标的代码执行节点。 */
+    public OpsNode(
+            TerminalCommandExecutor executor,
+            CliCommandCatalog commandCatalog,
+            WorkspaceTerminalTargetResolver targetResolver,
+            Duration timeout,
+            RunLogPublisher logPublisher) {
+        this.executor = Objects.requireNonNull(executor, "executor 不能为空");
+        this.target = null;
+        this.targetResolver = Objects.requireNonNull(targetResolver, "targetResolver 不能为空");
+        this.commandCatalog = Objects.requireNonNull(commandCatalog, "commandCatalog 不能为空");
         this.timeout = Objects.requireNonNull(timeout, "timeout 不能为空");
         this.logPublisher = Objects.requireNonNull(logPublisher, "logPublisher 不能为空");
         this.approvalPolicy = null;
@@ -94,6 +153,8 @@ public final class OpsNode implements Node {
             RunLogPublisher logPublisher) {
         this.executor = Objects.requireNonNull(executor, "executor 不能为空");
         this.target = null;
+        this.targetResolver = null;
+        this.commandCatalog = null;
         this.timeout = null;
         this.logPublisher = Objects.requireNonNull(logPublisher, "logPublisher 不能为空");
         this.approvalPolicy = Objects.requireNonNull(
@@ -139,8 +200,29 @@ public final class OpsNode implements Node {
             CommandRequest request;
             String command;
             if (approvalPolicy == null) {
-                command = requireCommand(state);
-                request = new CommandRequest(target, command, timeout);
+                if (commandCatalog == null) {
+                    command = requireCommand(state);
+                    request = new CommandRequest(normalTarget(state), command, timeout);
+                } else {
+                    CliAuthorization authorization = authorizeCodeAgentCommand(state);
+                    command = authorization.plan().request().bashCommand();
+                    evidence = state
+                            .withVariable(COMMAND_KEY, command)
+                            .withVariable(COMMAND_SHA256_KEY,
+                                    authorization.plan().commandSha256())
+                            .withVariable(AUTHORIZATION_DECISION_KEY,
+                                    authorization.decision().name())
+                            .withVariable(AUTHORIZATION_REASON_KEY,
+                                    authorization.reason());
+                    if (authorization.decision() != CliAuthorizationDecision.ALLOWED) {
+                        IllegalStateException failure = new IllegalStateException(
+                                "代码 Agent 命令未获自动执行授权: " + authorization.reason());
+                        return evidence
+                                .withVariable(ERROR_KEY, stackTrace(failure))
+                                .withTraceEntry("ops");
+                    }
+                    request = authorization.plan().request();
+                }
             } else {
                 CliAuthorization authorization = approvalPolicy.authorizeForExecution(
                         state, NodeExecutionContext.approvalBypassed());
@@ -187,6 +269,74 @@ public final class OpsNode implements Node {
             return result.withVariable(LOG_ERROR_KEY, stackTrace(publisherFailure));
         }
         return result;
+    }
+
+    private TerminalTarget normalTarget(AgentState state) {
+        if (targetResolver == null) {
+            return target;
+        }
+        String workspace = state.variables().get(CoderNode.WORKSPACE_PATH_KEY);
+        if (workspace == null || workspace.isBlank()) {
+            throw new IllegalArgumentException(
+                    "缺少状态变量: " + CoderNode.WORKSPACE_PATH_KEY);
+        }
+        return Objects.requireNonNull(
+                targetResolver.resolve(java.nio.file.Path.of(workspace)),
+                "targetResolver 返回值不能为空");
+    }
+
+    private CliAuthorization authorizeCodeAgentCommand(AgentState state) {
+        String name = requireVariable(state, COMMAND_NAME_KEY);
+        List<String> arguments = parseCommandArguments(
+                requireVariable(state, COMMAND_ARGUMENTS_KEY));
+        Path workspace = Path.of(requireVariable(state, CoderNode.WORKSPACE_PATH_KEY));
+        TerminalTarget resolvedTarget = Objects.requireNonNull(
+                targetResolver.resolve(workspace), "targetResolver 返回值不能为空");
+        return commandCatalog.authorize(
+                new CliCommandIntent(name, arguments, workspace, resolvedTarget, timeout),
+                new CliAuthorizationContext(requiredCapabilities(state), false, false));
+    }
+
+    private List<String> parseCommandArguments(String serializedArguments) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readTree(serializedArguments);
+            if (root == null || !root.isArray()) {
+                throw new IllegalArgumentException(COMMAND_ARGUMENTS_KEY + " 必须是 JSON 数组");
+            }
+            List<String> arguments = new ArrayList<>();
+            for (int index = 0; index < root.size(); index++) {
+                com.fasterxml.jackson.databind.JsonNode argument = root.get(index);
+                if (!argument.isTextual()) {
+                    throw new IllegalArgumentException(COMMAND_ARGUMENTS_KEY
+                            + " 的第 " + index + " 项必须是字符串");
+                }
+                arguments.add(argument.textValue());
+            }
+            return List.copyOf(arguments);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException exception) {
+            throw new IllegalArgumentException(COMMAND_ARGUMENTS_KEY + " 不是合法 JSON", exception);
+        }
+    }
+
+    private Set<RequiredCapability> requiredCapabilities(AgentState state) {
+        String serializedCapabilities = state.variables().get(PlannerNode.REQUIRED_CAPABILITIES_KEY);
+        if (serializedCapabilities == null || serializedCapabilities.isBlank()) {
+            return Set.of();
+        }
+        EnumSet<RequiredCapability> capabilities = EnumSet.noneOf(RequiredCapability.class);
+        for (String capability : serializedCapabilities.split(",", -1)) {
+            capabilities.add(RequiredCapability.valueOf(capability));
+        }
+        return Set.copyOf(capabilities);
+    }
+
+    private String requireVariable(AgentState state, String key) {
+        String value = state.variables().get(key);
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("缺少状态变量: " + key);
+        }
+        return value;
     }
 
     private CommandResult executeTerminal(

@@ -5,6 +5,7 @@ import com.agent.core.cli.CliAuthorizationDecision;
 import com.agent.core.cli.CliCommandCatalog;
 import com.agent.core.cli.CliCommandDefinition;
 import com.agent.core.cli.CliRiskLevel;
+import com.agent.core.cli.WorkspaceTerminalTargetResolver;
 import com.agent.core.engine.AgentState;
 import com.agent.core.engine.ExecutionBudget;
 import com.agent.core.engine.GraphExecutionRequest;
@@ -87,6 +88,29 @@ class OpsNodeTest {
                 .containsEntry(OpsNode.TIMED_OUT_KEY, "false")
                 .doesNotContainKey(OpsNode.ERROR_KEY);
         assertThat(result.trace()).containsExactly("ops");
+    }
+
+    @Test
+    void resolvesNormalCodeAgentTargetFromTheRunWorkspace() throws Exception {
+        AtomicReference<CommandRequest> received = new AtomicReference<>();
+        TerminalCommandExecutor executor = (request, logConsumer) -> {
+            received.set(request);
+            return CompletableFuture.completedFuture(
+                    new CommandResult(0, "ok", "", false));
+        };
+        WorkspaceTerminalTargetResolver resolver = workspacePath -> {
+            assertThat(workspacePath).isEqualTo(workspace);
+            return target;
+        };
+        OpsNode node = new OpsNode(executor, resolver, Duration.ofSeconds(30));
+
+        AgentState result = node.execute(AgentState.empty()
+                .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString())
+                .withVariable(OpsNode.COMMAND_KEY, "mvn test"));
+
+        assertThat(received.get().target()).isSameAs(target);
+        assertThat(received.get().timeout()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(result.variables()).containsEntry(OpsNode.EXIT_CODE_KEY, "0");
     }
 
     @Test
@@ -229,7 +253,8 @@ class OpsNodeTest {
 
         assertThatThrownBy(() -> new OpsNode(null, target, Duration.ofSeconds(1)))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new OpsNode(executor, null, Duration.ofSeconds(1)))
+        assertThatThrownBy(() -> new OpsNode(
+                executor, (com.agent.sandbox.pty.TerminalTarget) null, Duration.ofSeconds(1)))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new OpsNode(executor, target, null))
                 .isInstanceOf(NullPointerException.class);
@@ -262,6 +287,7 @@ class OpsNodeTest {
                 .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString())
                 .withVariable(OpsNode.COMMAND_NAME_KEY, "test.write")
                 .withVariable(OpsNode.COMMAND_ARGUMENTS_KEY, "[\"value.txt\"]")
+                .withVariable(OpsNode.COMMAND_TIMEOUT_SECONDS_KEY, "30")
                 .withVariable(PlannerNode.REQUIRED_CAPABILITIES_KEY, "TERMINAL");
         AgentState result;
         try (StateGraph graph = new StateGraph(2, policy)) {
@@ -317,6 +343,7 @@ class OpsNodeTest {
                 .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString())
                 .withVariable(OpsNode.COMMAND_NAME_KEY, "test.write")
                 .withVariable(OpsNode.COMMAND_ARGUMENTS_KEY, "[]")
+                .withVariable(OpsNode.COMMAND_TIMEOUT_SECONDS_KEY, "30")
                 .withVariable(PlannerNode.REQUIRED_CAPABILITIES_KEY, "TERMINAL"));
 
         assertThat(invoked).isFalse();

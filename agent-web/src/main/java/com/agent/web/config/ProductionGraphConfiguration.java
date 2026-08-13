@@ -1,6 +1,7 @@
 package com.agent.web.config;
 
 import com.agent.core.engine.GraphFactory;
+import com.agent.core.engine.InterruptPolicy;
 import com.agent.core.engine.StateGraph;
 import com.agent.core.gui.BrowserSessionRegistry;
 import com.agent.core.harness.HarnessHookChain;
@@ -315,7 +316,7 @@ public class ProductionGraphConfiguration {
             SecurityViolationSink securityViolationSink,
             ToolRegistry toolRegistry,
             CliCommandCatalog commandCatalog,
-            CliApprovalInterruptPolicy approvalPolicy,
+            WorkspaceTerminalTargetResolver workspaceTargetResolver,
             BrowserSessionRegistry browserSessions) {
         Objects.requireNonNull(properties, "properties 不能为空");
         Objects.requireNonNull(knowledgeProperties, "knowledgeProperties 不能为空");
@@ -333,7 +334,7 @@ public class ProductionGraphConfiguration {
         Objects.requireNonNull(securityViolationSink, "securityViolationSink 不能为空");
         Objects.requireNonNull(toolRegistry, "toolRegistry 不能为空");
         Objects.requireNonNull(commandCatalog, "commandCatalog 不能为空");
-        Objects.requireNonNull(approvalPolicy, "approvalPolicy 不能为空");
+        Objects.requireNonNull(workspaceTargetResolver, "workspaceTargetResolver 不能为空");
         Objects.requireNonNull(browserSessions, "browserSessions 不能为空");
         return () -> createGraph(
                 properties,
@@ -351,7 +352,7 @@ public class ProductionGraphConfiguration {
                 knowledgeProperties.maxTokens(),
                 toolRegistry,
                 commandCatalog,
-                approvalPolicy,
+                workspaceTargetResolver,
                 browserSessions);
     }
 
@@ -423,7 +424,7 @@ public class ProductionGraphConfiguration {
                         browserSessions,
                         properties.browserTimeout()),
                 commandCatalog,
-                standaloneApprovalPolicy(properties, objectMapper, commandCatalog),
+                workspaceTargetResolver(properties),
                 browserSessions);
     }
 
@@ -515,7 +516,7 @@ public class ProductionGraphConfiguration {
             int knowledgeMaxTokens,
             ToolRegistry toolRegistry,
             CliCommandCatalog commandCatalog,
-            CliApprovalInterruptPolicy approvalPolicy,
+            WorkspaceTerminalTargetResolver workspaceTargetResolver,
             BrowserSessionRegistry browserSessions) {
         var promptCatalog = PlannerPromptTemplates.catalog();
         PlannerNode planner = new PlannerNode(
@@ -537,7 +538,9 @@ public class ProductionGraphConfiguration {
         CoderNode coder = new CoderNode(
                 astService, modelRouter, objectMapper, snapshotService, toolRegistry,
                 commandCatalog);
-        OpsNode ops = new OpsNode(terminalService, approvalPolicy, logPublisher);
+        OpsNode ops = new OpsNode(
+                terminalService, commandCatalog, workspaceTargetResolver,
+                properties.commandTimeout(), logPublisher);
         ReviewerNode reviewer = new ReviewerNode(
                 browserAutomation, modelRouter, objectMapper, properties.browserTimeout());
         GuiAgentNode gui = new GuiAgentNode(
@@ -551,7 +554,7 @@ public class ProductionGraphConfiguration {
         ToolAgentNode toolAgent = new ToolAgentNode(
                 modelRouter, toolRegistry, objectMapper, skillCatalog, properties.maxSteps());
         return new StateGraph(
-                properties.executionBudget(), approvalPolicy, harness)
+                properties.executionBudget(), InterruptPolicy.never(), harness)
                 .addNode("planner", planner)
                 .addNode("coder", coder)
                 .addNode("ops", ops)
@@ -616,17 +619,6 @@ public class ProductionGraphConfiguration {
         registry.registerAll(BrowserToolDefinitions.definitions(
                 browserSessions, objectMapper, browserTimeout));
         return registry;
-    }
-
-    private CliApprovalInterruptPolicy standaloneApprovalPolicy(
-            ProductionAgentProperties properties,
-            ObjectMapper objectMapper,
-            CliCommandCatalog commandCatalog) {
-        return new CliApprovalInterruptPolicy(
-                commandCatalog,
-                workspaceTargetResolver(properties),
-                properties.commandTimeout(),
-                objectMapper);
     }
 
     String plannerRoute(com.agent.core.engine.AgentState state) {
