@@ -58,6 +58,26 @@ class ToolAgentNodeTest {
     }
 
     @Test
+    void productionModeRejectsMissingFrozenSkillCatalog() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            registry.register(new ToolDefinition("artifact.create", "生成工件",
+                    mapper.readTree("{\"type\":\"object\"}"),
+                    Set.of(com.agent.core.intent.RequiredCapability.TOOL), ToolRiskLevel.LOW,
+                    Duration.ofSeconds(2), (call, context) -> mapper.createObjectNode().put("ok", true)));
+            ToolAgentNode node = new ToolAgentNode(request -> {
+                throw new AssertionError("缺少冻结目录时不应调用模型");
+            }, registry, mapper, null, 1, true);
+
+            AgentState result = node.execute(AgentState.empty()
+                    .withVariable(PlannerNode.TASK_KEY, "执行任务"));
+
+            assertThat(result.variables().get(ToolAgentNode.ERROR_KEY))
+                    .contains("缺少状态变量: " + ToolAgentNode.SKILL_CATALOG_SNAPSHOT_KEY);
+        }
+    }
+
+    @Test
     void doesNotForceStrictToolSchemasForGatewayRequests() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         AtomicReference<ModelRequest> captured = new AtomicReference<>();

@@ -60,6 +60,7 @@ public final class ToolAgentNode implements Node {
     private final ObjectMapper objectMapper;
     private final SkillCatalog skillCatalog;
     private final SkillCatalogSnapshotCodec skillCatalogSnapshotCodec;
+    private final boolean requireSkillCatalogSnapshot;
     private final int maxSteps;
 
     public ToolAgentNode(
@@ -69,7 +70,18 @@ public final class ToolAgentNode implements Node {
             SkillCatalog skillCatalog,
             int maxSteps) {
         this(request -> modelRouter.complete(TaskType.CODE, request),
-                toolRegistry, objectMapper, skillCatalog, maxSteps);
+                toolRegistry, objectMapper, skillCatalog, maxSteps, false);
+    }
+
+    /** 创建只接受运行时冻结 Skill 目录的生产工具节点。 */
+    public ToolAgentNode(
+            ModelRouter modelRouter,
+            ToolRegistry toolRegistry,
+            ObjectMapper objectMapper,
+            int maxSteps,
+            boolean requireSkillCatalogSnapshot) {
+        this(request -> modelRouter.complete(TaskType.CODE, request),
+                toolRegistry, objectMapper, null, maxSteps, requireSkillCatalogSnapshot);
     }
 
     ToolAgentNode(
@@ -78,11 +90,22 @@ public final class ToolAgentNode implements Node {
             ObjectMapper objectMapper,
             SkillCatalog skillCatalog,
             int maxSteps) {
+        this(completer, toolRegistry, objectMapper, skillCatalog, maxSteps, false);
+    }
+
+    ToolAgentNode(
+            Function<ModelRequest, RoutedCompletion> completer,
+            ToolRegistry toolRegistry,
+            ObjectMapper objectMapper,
+            SkillCatalog skillCatalog,
+            int maxSteps,
+            boolean requireSkillCatalogSnapshot) {
         this.completer = Objects.requireNonNull(completer, "completer 不能为空");
         this.toolRegistry = Objects.requireNonNull(toolRegistry, "toolRegistry 不能为空");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
         this.skillCatalog = skillCatalog;
         this.skillCatalogSnapshotCodec = new SkillCatalogSnapshotCodec(objectMapper);
+        this.requireSkillCatalogSnapshot = requireSkillCatalogSnapshot;
         if (maxSteps < 1) {
             throw new IllegalArgumentException("maxSteps 必须大于 0");
         }
@@ -167,6 +190,10 @@ public final class ToolAgentNode implements Node {
     private SkillCatalog resolveCatalog(AgentState state) {
         String encoded = state.variables().get(SKILL_CATALOG_SNAPSHOT_KEY);
         if (encoded == null || encoded.isBlank()) {
+            if (requireSkillCatalogSnapshot) {
+                throw new IllegalArgumentException(
+                        "缺少状态变量: " + SKILL_CATALOG_SNAPSHOT_KEY);
+            }
             return skillCatalog;
         }
         String actor = state.variables().get(PlannerNode.USER_ID_KEY);

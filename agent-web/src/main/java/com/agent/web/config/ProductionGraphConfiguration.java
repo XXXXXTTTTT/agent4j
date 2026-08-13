@@ -42,8 +42,6 @@ import com.agent.core.tool.ToolRegistry;
 import com.agent.core.tool.builtin.CodePatchTool;
 import com.agent.core.tool.builtin.BrowserToolDefinitions;
 import com.agent.core.tool.builtin.ImageGenerationTool;
-import com.agent.core.skill.SkillCatalog;
-import com.agent.core.skill.SkillDefinition;
 import com.agent.sandbox.ast.AstService;
 import com.agent.sandbox.ast.WorkspaceSnapshotService;
 import com.agent.sandbox.browser.BrowserAutomation;
@@ -550,9 +548,8 @@ public class ProductionGraphConfiguration {
                 toolRegistry,
                 properties.browserTimeout(),
                 properties.maxSteps());
-        SkillCatalog skillCatalog = productionSkillCatalog(toolRegistry, objectMapper);
         ToolAgentNode toolAgent = new ToolAgentNode(
-                modelRouter, toolRegistry, objectMapper, skillCatalog, properties.maxSteps());
+                modelRouter, toolRegistry, objectMapper, properties.maxSteps(), true);
         return new StateGraph(
                 properties.executionBudget(), InterruptPolicy.never(), harness)
                 .addNode("planner", planner)
@@ -590,23 +587,6 @@ public class ProductionGraphConfiguration {
                                 FINISH_ROUTE, StateGraph.END,
                                 FAILURE_ROUTE, REVIEWER_FAILURE_NODE))
                 .addEdge(REVIEWER_FAILURE_NODE, StateGraph.END);
-    }
-
-    private SkillCatalog productionSkillCatalog(
-            ToolRegistry toolRegistry,
-            ObjectMapper objectMapper) {
-        if (toolRegistry.find(ImageGenerationTool.NAME).isEmpty()) {
-            return null;
-        }
-        return new SkillCatalog(List.of(new SkillDefinition(
-                "image-generation",
-                "1.0.0",
-                "通过 Images API 生成图片并返回图片工件",
-                List.of("生成图片", "生成一张", "生图", "画一张", "绘制图片"),
-                List.of(ImageGenerationTool.NAME),
-                "先调用 image.generate，确认工具返回图片工件后再向用户说明生成结果")),
-                toolRegistry,
-                objectMapper);
     }
 
     private ToolRegistry standaloneToolRegistry(
