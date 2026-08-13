@@ -1,5 +1,6 @@
 package com.agent.web.skill;
 
+import com.agent.core.skill.SkillDefinition;
 import com.agent.core.security.DefaultPromptInjectionDetector;
 import com.agent.core.security.PromptSecurityAssessment;
 import com.agent.core.security.PromptSecurityContext;
@@ -17,14 +18,16 @@ import java.util.UUID;
 /** 只解析本期允许的 SKILL.md front matter，不赋予外部内容任何执行权。 */
 final class GitHubSkillContent {
 
-    private static final Set<String> ALLOWED_FIELDS = Set.of("name", "description", "tools");
+    private static final Set<String> ALLOWED_FIELDS = Set.of("name", "version", "description", "triggers", "tools");
 
+    private final SkillDefinition definition;
     private final String summary;
     private final List<String> requestedToolNames;
 
-    private GitHubSkillContent(String summary, List<String> requestedToolNames) {
-        this.summary = summary;
-        this.requestedToolNames = List.copyOf(requestedToolNames);
+    private GitHubSkillContent(SkillDefinition definition) {
+        this.definition = definition;
+        this.summary = definition.description();
+        this.requestedToolNames = definition.toolNames();
     }
 
     static GitHubSkillContent parse(String source, Set<String> registeredToolNames) {
@@ -40,7 +43,9 @@ final class GitHubSkillContent {
         if (name.isBlank()) {
             throw new IllegalArgumentException("Skill name 不能为空");
         }
+        String version = requiredScalar(parsed.values(), "version");
         String description = requiredScalar(parsed.values(), "description");
+        List<String> triggers = strings(parsed.values(), "triggers", true);
         List<String> requestedTools = tools(parsed.values());
         for (String toolName : requestedTools) {
             if (!registeredToolNames.contains(toolName)) {
@@ -54,7 +59,8 @@ final class GitHubSkillContent {
             throw new IllegalArgumentException("Skill 内容未通过安全检查: "
                     + assessment.findings().getFirst().ruleId());
         }
-        return new GitHubSkillContent(description, requestedTools);
+        return new GitHubSkillContent(new SkillDefinition(
+                name, version, description, triggers, requestedTools, parsed.body()));
     }
 
     String summary() {
@@ -63,6 +69,10 @@ final class GitHubSkillContent {
 
     List<String> requestedToolNames() {
         return requestedToolNames;
+    }
+
+    SkillDefinition definition() {
+        return definition;
     }
 
     private static ParsedFrontMatter parseFrontMatter(String source) {
@@ -143,6 +153,21 @@ final class GitHubSkillContent {
             }
         }
         return List.copyOf(valuesSet);
+    }
+
+    private static List<String> strings(Map<String, Object> values, String key, boolean required) {
+        Object value = values.get(key);
+        if (!(value instanceof List<?> rawValues)) {
+            if (!required && value == null) return List.of();
+            throw new IllegalArgumentException("Skill front matter " + key + " 必须是列表");
+        }
+        LinkedHashSet<String> result = new LinkedHashSet<>();
+        for (Object raw : rawValues) {
+            if (!(raw instanceof String text) || text.isBlank() || !result.add(text)) {
+                throw new IllegalArgumentException("Skill front matter " + key + " 包含非法或重复值");
+            }
+        }
+        return List.copyOf(result);
     }
 
     private static String requireText(String value, String field) {

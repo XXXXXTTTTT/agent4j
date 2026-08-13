@@ -5,6 +5,9 @@ import com.agent.core.engine.AgentState;
 import com.agent.web.config.ProductionAgentProperties;
 import com.agent.web.identity.ActorResolver;
 import com.agent.web.validation.ReviewerUrlValidator;
+import com.agent.web.workspace.WorkspaceAccessService;
+import com.agent.web.workspace.WorkspacePermission;
+import com.agent.web.workspace.WorkspaceRecord;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.ResponseEntity;
@@ -29,21 +32,27 @@ public final class RunController {
     private final AgentRunService runService;
     private final ObjectProvider<ProductionAgentProperties> productionProperties;
     private final ActorResolver actorResolver;
+    private final ObjectProvider<WorkspaceAccessService> workspaceAccess;
 
     /** 创建 Run Controller。 */
     public RunController(
             AgentRunService runService,
             ObjectProvider<ProductionAgentProperties> productionProperties,
-            ActorResolver actorResolver) {
+            ActorResolver actorResolver,
+            ObjectProvider<WorkspaceAccessService> workspaceAccess) {
         this.runService = Objects.requireNonNull(runService, "runService 不能为空");
         this.productionProperties = Objects.requireNonNull(
                 productionProperties, "productionProperties 不能为空");
         this.actorResolver = Objects.requireNonNull(actorResolver, "actorResolver 不能为空");
+        this.workspaceAccess = Objects.requireNonNull(workspaceAccess, "workspaceAccess 不能为空");
     }
 
     /** 创建并异步启动 Run。 */
     @PostMapping
     public ResponseEntity<RunView> start(@Valid @RequestBody StartRunRequest request) {
+        if ("code-agent".equals(request.graphId()) || "governed-cli".equals(request.graphId())) {
+            throw new IllegalArgumentException("该图必须使用专用启动入口");
+        }
         RunView view = RunView.from(runService.start(request.graphId(), request.initialState()));
         return ResponseEntity.accepted().body(view);
     }
@@ -56,14 +65,19 @@ public final class RunController {
         if (properties == null || !properties.enabled()) {
             throw new IllegalStateException("生产 Code Agent 未启用");
         }
+        WorkspaceAccessService access = workspaceAccess.getIfAvailable();
+        if (access == null) {
+            throw new IllegalStateException("工作区访问服务未配置");
+        }
+        WorkspaceRecord workspace = access.requireWorkspace(
+                request.workspaceId(), actorResolver.current().userId(), WorkspacePermission.OPERATOR);
         AgentState state = AgentState.empty()
                 .withVariable("planner.task", request.task().trim())
                 .withVariable("planner.repositoryId", choose(
-                        request.repositoryId(), properties.repositoryId()))
+                        request.repositoryId(), workspace.repositoryId()))
                 .withVariable("planner.userId", actorResolver.current().userId())
-                .withVariable("coder.workspacePath", validatedWorkspace(
-                        choose(request.workspacePath(), properties.workspace().toString()),
-                        properties.workspace()));
+                .withVariable("conversation.workspaceId", workspace.workspaceId().toString())
+                .withVariable("coder.workspacePath", workspace.workspacePath().toString());
         String reviewerUrl = choose(request.reviewerUrl(), properties.reviewerUrl());
         if (!reviewerUrl.isBlank()) {
             state = state.withVariable(
@@ -101,19 +115,6 @@ public final class RunController {
             return requested.trim();
         }
         return configured == null ? "" : configured.trim();
-    }
-
-    private String validatedWorkspace(String requested, Path configuredRoot) {
-        try {
-            Path root = configuredRoot.toRealPath();
-            Path workspace = Path.of(requested).toRealPath();
-            if (!Files.isDirectory(workspace) || !workspace.startsWith(root)) {
-                throw new IllegalArgumentException("workspacePath 必须位于配置工作区内");
-            }
-            return workspace.toString();
-        } catch (java.io.IOException exception) {
-            throw new IllegalArgumentException("workspacePath 必须是现有目录", exception);
-        }
     }
 
 }

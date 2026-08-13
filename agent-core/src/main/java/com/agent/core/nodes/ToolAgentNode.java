@@ -11,6 +11,9 @@ import com.agent.core.llm.ModelRouter;
 import com.agent.core.llm.RoutedCompletion;
 import com.agent.core.llm.TaskType;
 import com.agent.core.skill.SkillCatalog;
+import com.agent.core.skill.SkillCatalogProvider;
+import com.agent.core.skill.SkillCatalogSnapshot;
+import com.agent.core.skill.SkillCatalogSnapshotCodec;
 import com.agent.core.skill.SkillPromptContext;
 import com.agent.core.skill.SkillPromptJson;
 import com.agent.core.skill.SkillToolMetadata;
@@ -49,12 +52,14 @@ public final class ToolAgentNode implements Node {
     public static final String APPROVAL_KEY = "tool.approvalGranted";
     public static final String ACTIVE_SKILLS_KEY = "skill.active";
     public static final String SKILL_FINGERPRINT_KEY = "skill.fingerprint";
+    public static final String SKILL_CATALOG_SNAPSHOT_KEY = "skill.catalogSnapshot";
     private static final String NODE_NAME = "tool-agent";
 
     private final Function<ModelRequest, RoutedCompletion> completer;
     private final ToolRegistry toolRegistry;
     private final ObjectMapper objectMapper;
     private final SkillCatalog skillCatalog;
+    private final SkillCatalogSnapshotCodec skillCatalogSnapshotCodec;
     private final int maxSteps;
 
     public ToolAgentNode(
@@ -77,6 +82,7 @@ public final class ToolAgentNode implements Node {
         this.toolRegistry = Objects.requireNonNull(toolRegistry, "toolRegistry 不能为空");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
         this.skillCatalog = skillCatalog;
+        this.skillCatalogSnapshotCodec = new SkillCatalogSnapshotCodec(objectMapper);
         if (maxSteps < 1) {
             throw new IllegalArgumentException("maxSteps 必须大于 0");
         }
@@ -89,8 +95,9 @@ public final class ToolAgentNode implements Node {
         AgentState output = state;
         try {
             String task = required(output, PlannerNode.TASK_KEY);
-            SkillPromptContext skills = skillCatalog == null
-                    ? null : skillCatalog.resolve(task, Set.of());
+            SkillCatalog effectiveCatalog = resolveCatalog(output);
+            SkillPromptContext skills = effectiveCatalog == null
+                    ? null : effectiveCatalog.resolve(task, Set.of());
             output = withSkillEvidence(output, skills);
             List<ToolDefinition> definitions = exposedDefinitions(skills);
             if (definitions.isEmpty()) {
@@ -151,6 +158,22 @@ public final class ToolAgentNode implements Node {
                     .withVariable(PlannerNode.FINAL_RESPONSE_KEY, response)
                     .withTraceEntry(NODE_NAME);
         }
+    }
+
+    private SkillCatalog resolveCatalog(AgentState state) {
+        String encoded = state.variables().get(SKILL_CATALOG_SNAPSHOT_KEY);
+        if (encoded == null || encoded.isBlank()) {
+            return skillCatalog;
+        }
+        String actor = state.variables().get(PlannerNode.USER_ID_KEY);
+        String workspace = state.variables().get("conversation.workspaceId");
+        if (actor == null || workspace == null) {
+            throw new IllegalArgumentException("Skill 目录快照缺少绑定身份");
+        }
+        SkillCatalogSnapshot snapshot = skillCatalogSnapshotCodec.decode(
+                encoded, actor, UUID.fromString(workspace), toolRegistry);
+        return snapshot.definitions().isEmpty()
+                ? null : new SkillCatalog(snapshot.definitions(), toolRegistry, objectMapper);
     }
 
     private ToolResult executeTool(AgentState state, ToolCall call) throws Exception {
