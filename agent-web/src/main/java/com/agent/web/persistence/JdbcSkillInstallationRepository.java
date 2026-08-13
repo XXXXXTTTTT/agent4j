@@ -7,6 +7,7 @@ import com.agent.web.skill.SkillInstallationRepository;
 import com.agent.web.skill.SkillInstallationStatus;
 import com.agent.web.skill.SkillInstallationConflictException;
 import com.agent.web.skill.SkillSnapshotRecord;
+import com.agent.web.skill.InstalledSkillRecord;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -103,6 +104,55 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
                 order by updated_at desc, skill_installation_id
                 """).param("actorUserId", actorUserId).param("workspaceId", workspaceId)
                 .query(this::mapInstallation).list();
+    }
+
+    @Override
+    public List<InstalledSkillRecord> findInstalledSkills(String actorUserId, UUID workspaceId) {
+        return jdbc.sql("""
+                select i.skill_installation_id, i.skill_snapshot_id, i.scope, i.workspace_id,
+                       i.actor_user_id, i.status, i.confirmation_token_sha256, i.created_at,
+                       i.confirmed_at, i.updated_at, i.version,
+                       s.repository_url, s.repository, s.commit_sha, s.blob_sha, s.skill_path,
+                       s.license, s.content_sha256, s.summary, s.requested_tool_names,
+                       s.content, s.created_at as snapshot_created_at
+                from agent_skill_installations i
+                join agent_skill_snapshots s on s.skill_snapshot_id = i.skill_snapshot_id
+                where i.actor_user_id = :actorUserId
+                  and i.status = 'APPROVED'
+                  and ((i.scope = 'WORKSPACE' and i.workspace_id = :workspaceId)
+                       or i.scope = 'USER_GLOBAL')
+                order by i.updated_at, i.skill_installation_id
+                """)
+                .param("actorUserId", actorUserId)
+                .param("workspaceId", workspaceId)
+                .query((rs, row) -> new InstalledSkillRecord(
+                        new SkillInstallationRecord(rs.getObject("skill_installation_id", UUID.class),
+                                rs.getObject("skill_snapshot_id", UUID.class),
+                                InstallationScope.valueOf(rs.getString("scope")),
+                                rs.getObject("workspace_id", UUID.class), rs.getString("actor_user_id"),
+                                SkillInstallationStatus.valueOf(rs.getString("status")),
+                                rs.getString("confirmation_token_sha256"),
+                                rs.getTimestamp("created_at").toInstant(),
+                                rs.getTimestamp("confirmed_at").toInstant(),
+                                rs.getTimestamp("updated_at").toInstant(), rs.getLong("version")),
+                        new SkillSnapshotRecord(rs.getObject("skill_snapshot_id", UUID.class),
+                                java.net.URI.create(rs.getString("repository_url")), rs.getString("repository"),
+                                rs.getString("commit_sha"), rs.getString("blob_sha"), rs.getString("skill_path"),
+                                rs.getString("license"), rs.getString("content_sha256"), rs.getString("summary"),
+                                readList(rs.getString("requested_tool_names")), rs.getString("content"),
+                                rs.getTimestamp("snapshot_created_at").toInstant())))
+                .list();
+    }
+
+    @Override
+    public Instant installationsUpdatedAt(String actorUserId, UUID workspaceId) {
+        return jdbc.sql("""
+                select coalesce(max(updated_at), timestamptz 'epoch') as updated_at
+                from agent_skill_installations
+                where actor_user_id = :actorUserId and status = 'APPROVED'
+                  and ((scope = 'WORKSPACE' and workspace_id = :workspaceId) or scope = 'USER_GLOBAL')
+                """).param("actorUserId", actorUserId).param("workspaceId", workspaceId)
+                .query((rs, row) -> rs.getTimestamp("updated_at").toInstant()).single();
     }
 
     @Override

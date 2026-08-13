@@ -45,6 +45,10 @@ import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.skill.SkillInstallationRepository;
 import com.agent.web.capability.CapabilityManagementAuditSink;
 import com.agent.core.tool.ToolRegistry;
+import com.agent.core.skill.SkillCatalogProvider;
+import com.agent.web.skill.InstalledSkillCatalogProvider;
+import com.agent.core.skill.SkillDefinition;
+import com.agent.core.tool.builtin.ImageGenerationTool;
 import com.agent.web.trace.InMemoryTraceEventBus;
 import com.agent.web.trace.RunLifecycleEventPublisher;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -338,7 +342,9 @@ public class HarnessConfiguration {
             AgentRunService agentRunService,
             ConversationRunProjector conversationRunProjector,
             ConversationAuditSink conversationAuditSink,
-            Clock harnessClock) {
+            Clock harnessClock,
+            ObjectMapper objectMapper,
+            ObjectProvider<SkillCatalogProvider> skillCatalogProvider) {
         return new ConversationService(
                 repository,
                 workspaceAccessService,
@@ -347,7 +353,31 @@ public class HarnessConfiguration {
                 agentRunService::start,
                 conversationRunProjector,
                 conversationAuditSink,
-                harnessClock);
+                harnessClock,
+                skillCatalogProvider.getIfAvailable(),
+                new com.agent.core.skill.SkillCatalogSnapshotCodec(objectMapper));
+    }
+
+    /** 将已批准 Skill 安装接入会话初始状态快照。 */
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    @ConditionalOnBean({SkillInstallationRepository.class, ToolRegistry.class,
+            CapabilityManagementAuditSink.class})
+    SkillCatalogProvider installedSkillCatalogProvider(
+            SkillInstallationRepository repository,
+            ToolRegistry toolRegistry,
+            ObjectMapper objectMapper,
+            CapabilityManagementAuditSink auditSink) {
+        List<SkillDefinition> builtIns = toolRegistry.find(ImageGenerationTool.NAME).isPresent()
+                ? List.of(new SkillDefinition(
+                        "image-generation", "1.0.0",
+                        "通过 Images API 生成图片并返回图片工件",
+                        List.of("生成图片", "生成一张", "生图", "画一张", "绘制图片"),
+                        List.of(ImageGenerationTool.NAME),
+                        "先调用 image.generate，确认工具返回图片工件后再向用户说明生成结果"))
+                : List.of();
+        return new InstalledSkillCatalogProvider(
+                repository, toolRegistry, objectMapper, builtIns, auditSink);
     }
 
     /** 创建覆盖运行配置和常见令牌格式的审计文本脱敏器。 */

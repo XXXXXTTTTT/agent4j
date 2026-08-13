@@ -96,6 +96,10 @@ public final class ToolAgentNode implements Node {
         try {
             String task = required(output, PlannerNode.TASK_KEY);
             SkillCatalog effectiveCatalog = resolveCatalog(output);
+            if (output.variables().containsKey(SKILL_CATALOG_SNAPSHOT_KEY)
+                    && effectiveCatalog == null) {
+                throw new IllegalStateException("当前没有可调用工具");
+            }
             SkillPromptContext skills = effectiveCatalog == null
                     ? null : effectiveCatalog.resolve(task, Set.of());
             output = withSkillEvidence(output, skills);
@@ -173,7 +177,8 @@ public final class ToolAgentNode implements Node {
         SkillCatalogSnapshot snapshot = skillCatalogSnapshotCodec.decode(
                 encoded, actor, UUID.fromString(workspace), toolRegistry);
         return snapshot.definitions().isEmpty()
-                ? null : new SkillCatalog(snapshot.definitions(), toolRegistry, objectMapper);
+                ? null
+                : new SkillCatalog(snapshot.definitions(), toolRegistry, objectMapper);
     }
 
     private ToolResult executeTool(AgentState state, ToolCall call) throws Exception {
@@ -366,4 +371,5 @@ public final class ToolAgentNode implements Node {
         exception.printStackTrace(new PrintWriter(writer));
         return writer.toString();
     }
+
 }

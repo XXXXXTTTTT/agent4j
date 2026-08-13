@@ -2,7 +2,11 @@ package com.agent.web.controller;
 
 import com.agent.core.engine.AgentRunService;
 import com.agent.core.engine.AgentState;
+import com.agent.core.nodes.ToolAgentNode;
+import com.agent.core.skill.SkillCatalogProvider;
+import com.agent.core.skill.SkillCatalogSnapshotCodec;
 import com.agent.web.config.ProductionAgentProperties;
+import com.agent.web.identity.Actor;
 import com.agent.web.identity.ActorResolver;
 import com.agent.web.validation.ReviewerUrlValidator;
 import com.agent.web.workspace.WorkspaceAccessService;
@@ -10,6 +14,7 @@ import com.agent.web.workspace.WorkspacePermission;
 import com.agent.web.workspace.WorkspaceRecord;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.ObjectProvider;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,8 +26,6 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
-import java.nio.file.Files;
-import java.nio.file.Path;
 
 /** 提供 Agent Run 生命周期 REST API。 */
 @RestController
@@ -33,18 +36,26 @@ public final class RunController {
     private final ObjectProvider<ProductionAgentProperties> productionProperties;
     private final ActorResolver actorResolver;
     private final ObjectProvider<WorkspaceAccessService> workspaceAccess;
+    private final ObjectProvider<SkillCatalogProvider> skillCatalogProvider;
+    private final SkillCatalogSnapshotCodec skillCatalogSnapshotCodec;
 
     /** 创建 Run Controller。 */
     public RunController(
             AgentRunService runService,
             ObjectProvider<ProductionAgentProperties> productionProperties,
             ActorResolver actorResolver,
-            ObjectProvider<WorkspaceAccessService> workspaceAccess) {
+            ObjectProvider<WorkspaceAccessService> workspaceAccess,
+            ObjectProvider<SkillCatalogProvider> skillCatalogProvider,
+            ObjectMapper objectMapper) {
         this.runService = Objects.requireNonNull(runService, "runService 不能为空");
         this.productionProperties = Objects.requireNonNull(
                 productionProperties, "productionProperties 不能为空");
         this.actorResolver = Objects.requireNonNull(actorResolver, "actorResolver 不能为空");
         this.workspaceAccess = Objects.requireNonNull(workspaceAccess, "workspaceAccess 不能为空");
+        this.skillCatalogProvider = Objects.requireNonNull(
+                skillCatalogProvider, "skillCatalogProvider 不能为空");
+        this.skillCatalogSnapshotCodec = new SkillCatalogSnapshotCodec(
+                Objects.requireNonNull(objectMapper, "objectMapper 不能为空"));
     }
 
     /** 创建并异步启动 Run。 */
@@ -69,15 +80,21 @@ public final class RunController {
         if (access == null) {
             throw new IllegalStateException("工作区访问服务未配置");
         }
+        Actor actor = actorResolver.current();
         WorkspaceRecord workspace = access.requireWorkspace(
-                request.workspaceId(), actorResolver.current().userId(), WorkspacePermission.OPERATOR);
+                request.workspaceId(), actor.userId(), WorkspacePermission.OPERATOR);
         AgentState state = AgentState.empty()
                 .withVariable("planner.task", request.task().trim())
-                .withVariable("planner.repositoryId", choose(
-                        request.repositoryId(), workspace.repositoryId()))
-                .withVariable("planner.userId", actorResolver.current().userId())
+                .withVariable("planner.repositoryId", workspace.repositoryId())
+                .withVariable("planner.userId", actor.userId())
                 .withVariable("conversation.workspaceId", workspace.workspaceId().toString())
                 .withVariable("coder.workspacePath", workspace.workspacePath().toString());
+        SkillCatalogProvider provider = skillCatalogProvider.getIfAvailable();
+        if (provider != null) {
+            state = state.withVariable(ToolAgentNode.SKILL_CATALOG_SNAPSHOT_KEY,
+                    skillCatalogSnapshotCodec.encode(provider.resolve(
+                            actor.userId(), workspace.workspaceId())));
+        }
         String reviewerUrl = choose(request.reviewerUrl(), properties.reviewerUrl());
         if (!reviewerUrl.isBlank()) {
             state = state.withVariable(

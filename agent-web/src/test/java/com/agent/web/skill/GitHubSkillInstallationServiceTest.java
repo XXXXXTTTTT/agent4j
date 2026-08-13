@@ -5,6 +5,8 @@ import com.agent.core.tool.ToolDefinition;
 import com.agent.core.tool.ToolRegistry;
 import com.agent.core.tool.ToolResult;
 import com.agent.core.tool.ToolInvocationContext;
+import com.agent.core.tool.ToolRiskLevel;
+import com.agent.core.intent.RequiredCapability;
 import com.agent.web.capability.CapabilityManagementAuditSink;
 import com.agent.web.capability.InstallationScope;
 import com.agent.web.identity.Actor;
@@ -67,7 +69,7 @@ class GitHubSkillInstallationServiceTest {
             case "/repos/octo/skills/commits/main" -> new GitHubSkillCatalogClient.HttpResponse(200,
                     "{\"sha\":\"76d64c822f5125032f89eb71dbdb94e42b434821\"}");
             case "/repos/octo/skills/contents/SKILL.md?ref=76d64c822f5125032f89eb71dbdb94e42b434821" -> new GitHubSkillCatalogClient.HttpResponse(200,
-                    "{\"type\":\"file\",\"path\":\"SKILL.md\",\"sha\":\"blob\",\"encoding\":\"base64\",\"content\":\"LS0tCm5hbWU6IGphdmEtcmV2aWV3CmRlc2NyaXB0aW9uOiBSZXZpZXcgSmF2YSBjaGFuZ2VzCi0tLQpSZXZpZXcgdGhlIGRpZmYu\"}");
+                    "{\"type\":\"file\",\"path\":\"SKILL.md\",\"sha\":\"blob\",\"encoding\":\"base64\",\"content\":\"LS0tCm5hbWU6IGphdmEtcmV2aWV3CnZlcnNpb246IDEuMC4wCmRlc2NyaXB0aW9uOiBSZXZpZXcgSmF2YSBjaGFuZ2VzCnRyaWdnZXJzOgogIC0gcmV2aWV3IEphdmEKdG9vbHM6CiAgLSBjb2RlLnBhdGNoCi0tLQpSZXZpZXcgdGhlIGRpZmYu\"}");
             default -> throw new IllegalStateException(path);
         };
     }
@@ -76,8 +78,12 @@ class GitHubSkillInstallationServiceTest {
         return new ToolRegistry() {
             public void register(ToolDefinition definition) { throw new UnsupportedOperationException(); }
             public void registerAll(List<ToolDefinition> definitions) { throw new UnsupportedOperationException(); }
-            public Optional<ToolDefinition> find(String name) { return Optional.empty(); }
-            public List<ToolDefinition> list() { return List.of(); }
+            private final ToolDefinition definition = new ToolDefinition(
+                    "code.patch", "修改代码", new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode(),
+                    Set.of(RequiredCapability.TOOL), ToolRiskLevel.LOW, Duration.ofSeconds(1),
+                    (call, context) -> new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode());
+            public Optional<ToolDefinition> find(String name) { return "code.patch".equals(name) ? Optional.of(definition) : Optional.empty(); }
+            public List<ToolDefinition> list() { return List.of(definition); }
             public ToolResult execute(ToolCall call, ToolInvocationContext context) { throw new UnsupportedOperationException(); }
             public void close() { }
         };

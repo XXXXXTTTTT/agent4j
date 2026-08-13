@@ -6,6 +6,8 @@ import com.agent.core.llm.LlmClient;
 import com.agent.core.llm.ModelRequest;
 import com.agent.core.llm.RoutedCompletion;
 import com.agent.core.skill.SkillCatalog;
+import com.agent.core.skill.SkillCatalogSnapshot;
+import com.agent.core.skill.SkillCatalogSnapshotCodec;
 import com.agent.core.skill.SkillDefinition;
 import com.agent.core.tool.DefaultToolRegistry;
 import com.agent.core.tool.ToolDefinition;
@@ -18,10 +20,42 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.time.Instant;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ToolAgentNodeTest {
+
+    @Test
+    void emptyFrozenSkillCatalogDoesNotExposeAllRegisteredTools() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        UUID workspaceId = UUID.fromString("6919d85c-1e92-4d5c-aee6-e7c6a96f1474");
+        AtomicInteger modelCalls = new AtomicInteger();
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            registry.register(new ToolDefinition("artifact.create", "生成工件",
+                    mapper.readTree("{\"type\":\"object\"}"),
+                    Set.of(com.agent.core.intent.RequiredCapability.TOOL), ToolRiskLevel.LOW,
+                    Duration.ofSeconds(2), (call, context) -> mapper.createObjectNode().put("ok", true)));
+            String snapshot = new SkillCatalogSnapshotCodec(mapper).encode(new SkillCatalogSnapshot(
+                    1, "user-1", workspaceId, Instant.parse("2026-08-12T00:00:00Z"),
+                    registry.revision(), List.of(), ""));
+            ToolAgentNode node = new ToolAgentNode(request -> {
+                modelCalls.incrementAndGet();
+                return completion(ChatMessage.assistant("不应调用模型"), "tool-model");
+            }, registry, mapper, null, 1);
+
+            AgentState result = node.execute(AgentState.empty()
+                    .withVariable(PlannerNode.TASK_KEY, "执行任务")
+                    .withVariable(PlannerNode.USER_ID_KEY, "user-1")
+                    .withVariable("conversation.workspaceId", workspaceId.toString())
+                    .withVariable(ToolAgentNode.SKILL_CATALOG_SNAPSHOT_KEY, snapshot));
+
+            assertThat(modelCalls).hasValue(0);
+            assertThat(result.variables().get(ToolAgentNode.ERROR_KEY))
+                    .contains("当前没有可调用工具");
+        }
+    }
 
     @Test
     void doesNotForceStrictToolSchemasForGatewayRequests() throws Exception {

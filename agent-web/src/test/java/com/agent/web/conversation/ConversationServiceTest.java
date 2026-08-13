@@ -8,6 +8,10 @@ import com.agent.core.engine.CheckpointAppend;
 import com.agent.core.engine.RunCheckpoint;
 import com.agent.core.engine.RunStatus;
 import com.agent.core.llm.ChatMessage;
+import com.agent.core.skill.SkillCatalogProvider;
+import com.agent.core.skill.SkillCatalogSnapshot;
+import com.agent.core.skill.SkillCatalogSnapshotCodec;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.agent.web.identity.Actor;
 import com.agent.web.identity.ActorResolver;
 import com.agent.web.workspace.WorkspaceAccessService;
@@ -105,6 +109,43 @@ class ConversationServiceTest {
                 .containsEntry("conversation.id", CONVERSATION_ID.toString())
                 .containsEntry("conversation.turnId", repository.pending.turnId().toString());
         assertThat(starter.state.variables()).doesNotContainKey("request.userId");
+    }
+
+    @Test
+    void submissionFreezesSkillCatalogForResolvedActorAndWorkspace() {
+        Actor resolved = new Actor("skill-user", "Skill");
+        FakeConversationRepository repository = new FakeConversationRepository();
+        repository.conversation = new ConversationRecord(
+                CONVERSATION_ID, WORKSPACE_ID, resolved.userId(), "标题",
+                ConversationStatus.ACTIVE, NOW, NOW);
+        repository.pending = new ConversationTurnRecord(
+                UUID.randomUUID(), CONVERSATION_ID, 1, "使用 Skill", null, null,
+                ConversationTurnStatus.PENDING, null, NOW, null);
+        CapturingStarter starter = new CapturingStarter();
+        SkillCatalogProvider provider = (actorUserId, workspaceId) -> {
+            assertThat(actorUserId).isEqualTo(resolved.userId());
+            assertThat(workspaceId).isEqualTo(WORKSPACE_ID);
+            return new SkillCatalogSnapshot(1, actorUserId, workspaceId, NOW, 0, List.of(), "");
+        };
+        ObjectMapper objectMapper = new ObjectMapper();
+        ConversationService service = new ConversationService(
+                repository,
+                new WorkspaceAccessService(
+                        new TestWorkspaceRepository(resolved), Path.of("D:/agent4j"),
+                        Clock.fixed(NOW, ZoneOffset.UTC)),
+                (id, userId, maxTurns, maxCharacters) -> new ConversationContext(List.of(), 0, false),
+                () -> resolved, starter, null, com.agent.web.audit.ConversationAuditSink.noop(),
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                provider,
+                new SkillCatalogSnapshotCodec(objectMapper));
+
+        service.submitTurn(CONVERSATION_ID, "使用 Skill", "");
+
+        String encoded = starter.state.variables().get("skill.catalogSnapshot");
+        assertThat(encoded).isNotBlank();
+        assertThat(new SkillCatalogSnapshotCodec(objectMapper)
+                .decode(encoded, resolved.userId(), WORKSPACE_ID, new com.agent.core.tool.DefaultToolRegistry()))
+                .extracting(SkillCatalogSnapshot::workspaceId).isEqualTo(WORKSPACE_ID);
     }
 
     @Test

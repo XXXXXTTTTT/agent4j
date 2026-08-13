@@ -13,6 +13,8 @@ import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspacePermission;
 import com.agent.web.workspace.WorkspaceRecord;
 import com.agent.web.validation.ReviewerUrlValidator;
+import com.agent.core.skill.SkillCatalogProvider;
+import com.agent.core.skill.SkillCatalogSnapshotCodec;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -42,6 +44,8 @@ public final class ConversationService {
     private final ConversationRunProjector conversationProjector;
     private final ConversationAuditSink auditSink;
     private final Clock clock;
+    private final SkillCatalogProvider skillCatalogProvider;
+    private final SkillCatalogSnapshotCodec skillCatalogSnapshotCodec;
 
     /** 创建会话应用服务。 */
     public ConversationService(
@@ -78,6 +82,23 @@ public final class ConversationService {
             ConversationRunProjector conversationProjector,
             ConversationAuditSink auditSink,
             Clock clock) {
+        this(repository, workspaceAccess, contextProvider, actorResolver, runStarter,
+                conversationProjector, auditSink, clock, null,
+                new SkillCatalogSnapshotCodec(new com.fasterxml.jackson.databind.ObjectMapper()));
+    }
+
+    /** 创建带终态对账和业务审计能力的会话服务。 */
+    public ConversationService(
+            ConversationRepository repository,
+            WorkspaceAccessService workspaceAccess,
+            ConversationContextProvider contextProvider,
+            ActorResolver actorResolver,
+            ConversationRunStarter runStarter,
+            ConversationRunProjector conversationProjector,
+            ConversationAuditSink auditSink,
+            Clock clock,
+            SkillCatalogProvider skillCatalogProvider,
+            SkillCatalogSnapshotCodec skillCatalogSnapshotCodec) {
         this.repository = Objects.requireNonNull(repository, "repository 不能为空");
         this.workspaceAccess = Objects.requireNonNull(workspaceAccess, "workspaceAccess 不能为空");
         this.contextProvider = Objects.requireNonNull(contextProvider, "contextProvider 不能为空");
@@ -86,6 +107,9 @@ public final class ConversationService {
         this.conversationProjector = conversationProjector;
         this.auditSink = Objects.requireNonNull(auditSink, "auditSink 不能为空");
         this.clock = Objects.requireNonNull(clock, "clock 不能为空");
+        this.skillCatalogProvider = skillCatalogProvider;
+        this.skillCatalogSnapshotCodec = Objects.requireNonNull(
+                skillCatalogSnapshotCodec, "skillCatalogSnapshotCodec 不能为空");
     }
 
     /** 创建绑定当前用户的空会话。 */
@@ -202,6 +226,12 @@ public final class ConversationService {
                     List.of());
             if (modelGroupId != null && !modelGroupId.isBlank()) {
                 state = state.withVariable("model.groupId", modelGroupId.trim());
+            }
+            if (skillCatalogProvider != null) {
+                state = state.withVariable(
+                        com.agent.core.nodes.ToolAgentNode.SKILL_CATALOG_SNAPSHOT_KEY,
+                        skillCatalogSnapshotCodec.encode(skillCatalogProvider.resolve(
+                                actor.userId(), workspace.workspaceId())));
             }
             if (!exactReviewerUrl.isBlank()) {
                 state = state.withVariable("reviewer.url", exactReviewerUrl);
