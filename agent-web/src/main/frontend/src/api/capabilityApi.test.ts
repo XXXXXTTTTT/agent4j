@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { decodeMcpCatalog, decodeSkillRepository, listMcpCatalog, listMcpInstallations, previewMcp } from './capabilityApi'
+import { decodeMcpCatalog, decodeSkillRepository, listMcpCatalog, listMcpInstallations, previewMcp, refreshMcpCatalog } from './capabilityApi'
 
 const server = {
   serviceId: 'everything', sourcePath: 'src/everything', sourceUrl: 'https://github.com/modelcontextprotocol/servers/tree/abc/src/everything',
@@ -23,6 +23,14 @@ describe('capabilityApi', () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ repository: 'modelcontextprotocol/servers', commitSha: 'a'.repeat(40), fetchedAt: '', expiresAt: '', etag: '', status: 'FRESH', servers: [], errors: {} }), { status: 200 }))
     await listMcpCatalog(fetcher)
     expect(fetcher).toHaveBeenCalledWith('/api/mcp/catalog', { method: 'GET' })
+  })
+
+  it('refreshes the official MCP catalog through the exact backend endpoint', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ repository: 'modelcontextprotocol/servers', commitSha: 'a'.repeat(40), fetchedAt: '', expiresAt: '', etag: '', status: 'FRESH', servers: [], errors: {} }), { status: 200 }))
+
+    await refreshMcpCatalog(fetcher)
+
+    expect(fetcher).toHaveBeenCalledWith('/api/mcp/catalog/refresh', { method: 'POST' })
   })
 
   it('decodes GitHub skill repository metadata', () => {
