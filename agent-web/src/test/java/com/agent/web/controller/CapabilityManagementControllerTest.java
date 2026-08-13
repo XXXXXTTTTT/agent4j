@@ -5,6 +5,7 @@ import com.agent.web.mcp.catalog.OfficialMcpCatalogClient;
 import com.agent.web.mcp.catalog.OfficialMcpServerRecord;
 import com.agent.web.mcp.installation.McpInstallationPreview;
 import com.agent.web.mcp.installation.McpInstallationRecord;
+import com.agent.web.mcp.installation.McpInstallationDetails;
 import com.agent.web.mcp.installation.McpInstallationService;
 import com.agent.web.mcp.installation.McpInstallationStatus;
 import com.agent.web.mcp.runtime.McpMaterialPreparationService;
@@ -132,21 +133,24 @@ class CapabilityManagementControllerTest {
         McpInstallationRecord installation = mcpInstallation();
         when(mcpInstallations.confirm(eq(WORKSPACE_ID), eq(PREVIEW_ID), eq("confirm-mcp"),
                 eq(InstallationScope.WORKSPACE), eq(WORKSPACE_ID))).thenReturn(installation);
-        when(mcpInstallations.list(WORKSPACE_ID)).thenReturn(List.of(installation));
+        when(mcpInstallations.listDetails(WORKSPACE_ID)).thenReturn(List.of(
+                new McpInstallationDetails(installation, List.of("MCP_TOKEN"))));
         when(mcpInstallations.uninstall(WORKSPACE_ID, INSTALLATION_ID, installation.version())).thenReturn(installation);
 
         client.post().uri("/api/workspaces/{workspaceId}/mcp/installations", WORKSPACE_ID)
                 .header("Content-Type", "application/json")
                 .bodyValue("""
                         {"previewId":"%s","confirmationToken":"confirm-mcp","scope":"WORKSPACE","targetWorkspaceId":"%s"}
-                        """.formatted(PREVIEW_ID, WORKSPACE_ID))
+                """.formatted(PREVIEW_ID, WORKSPACE_ID))
                 .exchange().expectStatus().isCreated().expectBody()
                 .jsonPath("$.installationId").isEqualTo(INSTALLATION_ID.toString())
+                .jsonPath("$.environmentNames[0]").isEqualTo("MCP_TOKEN")
                 .jsonPath("$.confirmationTokenSha256").doesNotExist();
 
         client.get().uri("/api/workspaces/{workspaceId}/mcp/installations", WORKSPACE_ID)
                 .exchange().expectStatus().isOk().expectBody()
                 .jsonPath("$[0].status").isEqualTo("STOPPED")
+                .jsonPath("$[0].environmentNames[0]").isEqualTo("MCP_TOKEN")
                 .jsonPath("$[0].confirmationTokenSha256").doesNotExist();
 
         client.delete().uri(uriBuilder -> uriBuilder

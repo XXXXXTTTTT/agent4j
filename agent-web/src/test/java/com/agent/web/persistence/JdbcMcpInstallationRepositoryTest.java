@@ -106,7 +106,7 @@ class JdbcMcpInstallationRepositoryTest {
                 "npx",
                 List.of("-y", "@modelcontextprotocol/server-filesystem"),
                 "node",
-                List.of(),
+                List.of("MCP_TOKEN"),
                 "Official filesystem server");
         McpSourceSnapshot snapshot = McpSourceSnapshot.from(UUID.randomUUID(), server, NOW);
 
@@ -120,6 +120,12 @@ class JdbcMcpInstallationRepositoryTest {
                         installation.installationId(), null, null, snapshot.commitSha(), "SUCCESS", NOW)))).isEqualTo(installation);
         assertThat(repository.findInstallations("mcp-test-user", WORKSPACE_ID))
                 .containsExactly(installation);
+        assertThat(repository.findInstallationDetails("mcp-test-user", WORKSPACE_ID))
+                .singleElement()
+                .satisfies(details -> {
+                    assertThat(details.installation()).isEqualTo(installation);
+                    assertThat(details.environmentVariableNames()).containsExactly("MCP_TOKEN");
+                });
     }
 
     @Test

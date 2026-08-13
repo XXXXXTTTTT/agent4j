@@ -153,6 +153,32 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
     }
 
     @Override
+    public List<com.agent.web.mcp.installation.McpInstallationDetails> findInstallationDetails(
+            String actorUserId, UUID workspaceId) {
+        Objects.requireNonNull(actorUserId, "actorUserId 不能为空");
+        Objects.requireNonNull(workspaceId, "workspaceId 不能为空");
+        return jdbc.sql("""
+                select i.installation_id, i.snapshot_id, i.scope, i.workspace_id, i.actor_user_id, i.status,
+                       i.confirmation_token_sha256, i.created_at, i.confirmed_at, i.updated_at,
+                       i.risk_level, i.required_capabilities, i.workspace_mount_mode, i.network_mode,
+                       i.runtime_image, i.runtime_image_confirmed, i.runtime_workspace_id, i.container_id, i.runtime_error, i.version,
+                       s.environment_variable_names
+                from agent_mcp_installations i
+                join agent_mcp_installation_snapshots s on s.snapshot_id = i.snapshot_id
+                where i.actor_user_id = :actorUserId
+                  and ((i.scope = 'WORKSPACE' and i.workspace_id = :workspaceId)
+                       or i.scope = 'USER_GLOBAL')
+                order by i.updated_at desc, i.installation_id
+                """)
+                .param("actorUserId", actorUserId)
+                .param("workspaceId", workspaceId)
+                .query((resultSet, rowNum) -> new com.agent.web.mcp.installation.McpInstallationDetails(
+                        mapInstallation(resultSet, rowNum),
+                        readList(resultSet.getString("environment_variable_names"))))
+                .list();
+    }
+
+    @Override
     public McpInstallationRecord removeInstallation(UUID installationId, String actorUserId, UUID workspaceId,
                                                     long expectedVersion,
                                                     com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {

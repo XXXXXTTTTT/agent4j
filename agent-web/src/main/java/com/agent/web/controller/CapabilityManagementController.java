@@ -81,39 +81,45 @@ public final class CapabilityManagementController {
     @PostMapping("/api/workspaces/{workspaceId}/mcp/installations")
     public ResponseEntity<InstallationView> installMcp(@PathVariable UUID workspaceId,
                                                         @Valid @RequestBody ConfirmInstallationRequest request) {
-        return ResponseEntity.status(201).body(InstallationView.from(mcpInstallations.confirm(workspaceId,
-                request.previewId(), request.confirmationToken(), request.scope(), request.targetWorkspaceId())));
+        McpInstallationRecord installation = mcpInstallations.confirm(workspaceId,
+                request.previewId(), request.confirmationToken(), request.scope(), request.targetWorkspaceId());
+        return ResponseEntity.status(201).body(installationView(workspaceId, installation));
     }
 
     @GetMapping("/api/workspaces/{workspaceId}/mcp/installations")
     public List<InstallationView> listMcp(@PathVariable UUID workspaceId) {
-        return mcpInstallations.list(workspaceId).stream().map(InstallationView::from).toList();
+        return mcpInstallations.listDetails(workspaceId).stream().map(InstallationView::from).toList();
     }
 
     @DeleteMapping("/api/workspaces/{workspaceId}/mcp/installations/{installationId}")
     public InstallationView uninstallMcp(@PathVariable UUID workspaceId, @PathVariable UUID installationId,
                                          @RequestParam long expectedVersion) {
-        return InstallationView.from(mcpInstallations.uninstall(workspaceId, installationId, expectedVersion));
+        com.agent.web.mcp.installation.McpInstallationDetails details = mcpInstallations.listDetails(workspaceId)
+                .stream().filter(value -> value.installation().installationId().equals(installationId))
+                .findFirst().orElse(null);
+        McpInstallationRecord installation = mcpInstallations.uninstall(workspaceId, installationId, expectedVersion);
+        return details == null ? InstallationView.from(installation) : InstallationView.from(details);
     }
 
     @PostMapping("/api/workspaces/{workspaceId}/mcp/installations/{installationId}/material")
     public InstallationView prepareMcpMaterial(@PathVariable UUID workspaceId, @PathVariable UUID installationId,
                                                @Valid @RequestBody MaterialPreparationRequest request) {
         if (materialPreparation == null) throw new IllegalStateException("MCP 物料准备器未配置");
-        return InstallationView.from(materialPreparation.prepare(workspaceId, installationId, request.expectedVersion()));
+        return installationView(workspaceId,
+                materialPreparation.prepare(workspaceId, installationId, request.expectedVersion()));
     }
 
     @PostMapping("/api/workspaces/{workspaceId}/mcp/installations/{installationId}/start")
     public InstallationView startMcp(@PathVariable UUID workspaceId, @PathVariable UUID installationId,
                                      @Valid @RequestBody LifecycleRequest request) {
-        return InstallationView.from(runtime().start(workspaceId, installationId,
+        return installationView(workspaceId, runtime().start(workspaceId, installationId,
                 new McpInstallationRuntime.LifecycleRequest(request.expectedVersion(), request.targetWorkspaceId(), request.environment())));
     }
 
     @PostMapping("/api/workspaces/{workspaceId}/mcp/installations/{installationId}/stop")
     public InstallationView stopMcp(@PathVariable UUID workspaceId, @PathVariable UUID installationId,
                                     @Valid @RequestBody LifecycleRequest request) {
-        return InstallationView.from(runtime().stop(workspaceId, installationId,
+        return installationView(workspaceId, runtime().stop(workspaceId, installationId,
                 new McpInstallationRuntime.LifecycleRequest(request.expectedVersion(), request.targetWorkspaceId(), request.environment())));
     }
 
@@ -195,18 +201,37 @@ public final class CapabilityManagementController {
                                    java.util.Set<com.agent.core.intent.RequiredCapability> requiredCapabilities,
                                    com.agent.web.mcp.installation.WorkspaceMountMode workspaceMountMode,
                                    com.agent.web.mcp.installation.McpNetworkMode networkMode,
+                                   List<String> environmentNames,
+                                   UUID runtimeWorkspaceId,
                                    String runtimeState, String runtimeError, long version) {
         static InstallationView from(McpInstallationRecord value) {
             return new InstallationView(value.installationId(), value.snapshotId(), value.scope(), value.workspaceId(),
                     value.actorUserId(), value.status().name(), value.createdAt(), value.confirmedAt(), value.updatedAt(),
                     value.riskLevel(), value.requiredCapabilities(), value.workspaceMountMode(), value.networkMode(),
-                    value.status().name(), value.runtimeError(), value.version());
+                    List.of(), value.runtimeWorkspaceId(), value.status().name(), value.runtimeError(), value.version());
+        }
+
+        static InstallationView from(com.agent.web.mcp.installation.McpInstallationDetails details) {
+            McpInstallationRecord value = details.installation();
+            return new InstallationView(value.installationId(), value.snapshotId(), value.scope(), value.workspaceId(),
+                    value.actorUserId(), value.status().name(), value.createdAt(), value.confirmedAt(), value.updatedAt(),
+                    value.riskLevel(), value.requiredCapabilities(), value.workspaceMountMode(), value.networkMode(),
+                    details.environmentVariableNames(), value.runtimeWorkspaceId(), value.status().name(),
+                    value.runtimeError(), value.version());
         }
     }
 
     private McpInstallationRuntime runtime() {
         if (mcpRuntime == null) throw new IllegalStateException("MCP Docker 运行时未配置");
         return mcpRuntime;
+    }
+
+    private InstallationView installationView(UUID workspaceId, McpInstallationRecord installation) {
+        return mcpInstallations.listDetails(workspaceId).stream()
+                .filter(details -> details.installation().installationId().equals(installation.installationId()))
+                .findFirst()
+                .map(InstallationView::from)
+                .orElseGet(() -> InstallationView.from(installation));
     }
 
     public record SkillInstallationView(UUID skillInstallationId, UUID skillSnapshotId, InstallationScope scope,

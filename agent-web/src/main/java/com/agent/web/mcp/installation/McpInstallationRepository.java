@@ -8,6 +8,14 @@ import java.util.UUID;
 public interface McpInstallationRepository {
     McpInstallationRecord confirmInstallation(McpInstallationCommand command);
     List<McpInstallationRecord> findInstallations(String actorUserId, UUID workspaceId);
+
+    /** 读取工作台所需的安装记录及其冻结快照环境变量名。 */
+    default List<McpInstallationDetails> findInstallationDetails(
+            String actorUserId, UUID workspaceId) {
+        return findInstallations(actorUserId, workspaceId).stream()
+                .map(installation -> new McpInstallationDetails(installation, List.of()))
+                .toList();
+    }
     McpInstallationRecord removeInstallation(UUID installationId, String actorUserId, UUID workspaceId,
                                              long expectedVersion,
                                              com.agent.web.capability.CapabilityManagementAuditEvent auditEvent);

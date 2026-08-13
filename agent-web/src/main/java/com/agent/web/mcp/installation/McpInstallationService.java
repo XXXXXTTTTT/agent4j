@@ -144,6 +144,13 @@ public final class McpInstallationService {
         return repository.findInstallations(actor.userId(), workspaceId);
     }
 
+    /** 返回当前主体可见的安装及已冻结环境变量名，不返回变量值。 */
+    public List<McpInstallationDetails> listDetails(UUID workspaceId) {
+        Actor actor = actorResolver.current();
+        workspaceAccess.requireWorkspace(workspaceId, actor.userId(), WorkspacePermission.VIEWER);
+        return repository.findInstallationDetails(actor.userId(), workspaceId);
+    }
+
     /** 撤销当前主体可管理范围内的安装记录，不启动或停止运行时。 */
     public McpInstallationRecord uninstall(UUID workspaceId, UUID installationId, long expectedVersion) {
         Objects.requireNonNull(installationId, "installationId 不能为空");

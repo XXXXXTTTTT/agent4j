@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { decodeMcpCatalog, decodeSkillRepository, listMcpCatalog, listMcpInstallations, previewMcp, refreshMcpCatalog } from './capabilityApi'
+import { decodeMcpCatalog, decodeSkillRepository, listMcpCatalog, listMcpInstallations, previewMcp, refreshMcpCatalog, startMcpInstallation } from './capabilityApi'
 
 const server = {
   serviceId: 'everything', sourcePath: 'src/everything', sourceUrl: 'https://github.com/modelcontextprotocol/servers/tree/abc/src/everything',
@@ -62,7 +62,8 @@ describe('capabilityApi', () => {
       scope: 'WORKSPACE', workspaceId: 'ws-1', actorUserId: 'user-1', status: 'STOPPED',
       createdAt: '2026-08-12T00:00:00Z', confirmedAt: '2026-08-12T00:00:00Z', updatedAt: '2026-08-12T00:00:00Z',
       riskLevel: 'HIGH', requiredCapabilities: ['TOOL'], workspaceMountMode: 'NONE', networkMode: 'NONE',
-      runtimeState: 'STOPPED', runtimeError: '', version: 3,
+      environmentNames: ['MCP_TOKEN'],
+      environmentNames: ['MCP_TOKEN'], runtimeWorkspaceId: null, runtimeState: 'STOPPED', runtimeError: '', version: 3,
     }
     const fetcher = vi.fn(async () => new Response(JSON.stringify([installation]), { status: 200 }))
 
@@ -70,5 +71,22 @@ describe('capabilityApi', () => {
 
     expect(result).toEqual([expect.objectContaining({ installationId: installation.installationId, version: 3 })])
     expect(fetcher).toHaveBeenCalledWith('/api/workspaces/ws-1/mcp/installations', { method: 'GET' })
+  })
+
+  it('submits only the current password values for snapshot-declared MCP environment names', async () => {
+    const installation = {
+      installationId: '00000000-0000-0000-0000-000000000001', snapshotId: '00000000-0000-0000-0000-000000000002',
+      scope: 'WORKSPACE' as const, workspaceId: 'ws-1', actorUserId: 'user-1', status: 'STOPPED',
+      createdAt: '2026-08-12T00:00:00Z', confirmedAt: '2026-08-12T00:00:00Z', updatedAt: '2026-08-12T00:00:00Z',
+      riskLevel: 'HIGH' as const, requiredCapabilities: ['TOOL'] as const, workspaceMountMode: 'NONE' as const, networkMode: 'NONE' as const,
+      environmentNames: ['MCP_TOKEN'], runtimeWorkspaceId: null, runtimeState: 'STOPPED', runtimeError: '', version: 3,
+    }
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(installation), { status: 200 }))
+
+    await startMcpInstallation('ws-1', installation, { MCP_TOKEN: 'secret-value' }, fetcher)
+
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
+      expectedVersion: 3, targetWorkspaceId: 'ws-1', environment: { MCP_TOKEN: 'secret-value' },
+    })
   })
 })
