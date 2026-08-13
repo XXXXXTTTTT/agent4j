@@ -280,7 +280,7 @@ public final class ReviewerNode implements Node {
     }
 
     private static boolean isSuccessfulMavenTest(Map<String, String> variables) {
-        return "mvn".equals(variables.get(OpsNode.COMMAND_KEY))
+        return "mvn".equals(variables.get(OpsNode.COMMAND_NAME_KEY))
                 && "[\"test\"]".equals(variables.get(OpsNode.COMMAND_ARGUMENTS_KEY))
                 && "0".equals(variables.get(OpsNode.EXIT_CODE_KEY))
                 && "false".equals(variables.get(OpsNode.TIMED_OUT_KEY))

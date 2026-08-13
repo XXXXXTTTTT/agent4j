@@ -216,7 +216,8 @@ class ReviewerNodeTest {
                         """)
                 .withVariable(OpsNode.STDERR_KEY, "")
                 .withVariable(OpsNode.TIMED_OUT_KEY, "false")
-                .withVariable(OpsNode.COMMAND_KEY, "mvn")
+                .withVariable(OpsNode.COMMAND_KEY, "'mvn' 'test'")
+                .withVariable(OpsNode.COMMAND_NAME_KEY, "mvn")
                 .withVariable(OpsNode.COMMAND_ARGUMENTS_KEY, "[\"test\"]")
                 .withVariable(CoderNode.UPDATED_FILES_KEY, "src/main/java/demo/NumberLabel.java")
                 .withVariable(CoderNode.SUMMARY_KEY, "当前工作区未实际执行 Maven 测试"));
