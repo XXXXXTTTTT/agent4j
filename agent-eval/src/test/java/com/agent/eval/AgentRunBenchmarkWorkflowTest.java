@@ -127,6 +127,41 @@ class AgentRunBenchmarkWorkflowTest {
     }
 
     @Test
+    void preservesFixtureMetadataInInitialStateBeforeStartingAgentRun() {
+        InputStream resource = getClass().getResourceAsStream(
+                "/benchmarks/mcp-skill-runtime.jsonl");
+        assertThat(resource).isNotNull();
+        BenchmarkTask task;
+        try (resource) {
+            task = new BenchmarkTaskSetReader().read(resource).tasks().getFirst();
+        } catch (java.io.IOException exception) {
+            throw new AssertionError(exception);
+        }
+
+        InMemoryCheckpointer checkpointer = new InMemoryCheckpointer();
+        GraphRegistry registry = new GraphRegistry(Map.of("metadata-graph", () ->
+                new StateGraph(1)
+                        .addNode("complete", state -> state)
+                        .addEdge("complete", StateGraph.END)
+                        .setEntryPoint("complete")));
+        try (AgentRunService runService = new AgentRunService(
+                checkpointer, registry, TraceEventPublisher.noop())) {
+            AgentRunBenchmarkExecutor executor = new AgentRunBenchmarkExecutor(
+                    runService, "metadata-graph", (ignored, terminal) -> true);
+
+            BenchmarkTaskResult result = executor.execute(task, 1, Duration.ofSeconds(2));
+
+            assertThat(result.passed()).isTrue();
+            assertThat(checkpointer.loadHistory(checkpointer.lastRunId()).getFirst()
+                    .state().variables())
+                    .containsEntry("benchmark.metadata.actorUserId", "user-mcp-a")
+                    .containsEntry("benchmark.metadata.workspaceId", "ws-mcp-a")
+                    .containsEntry("benchmark.metadata.expectedMcpRemoteTool", "echo")
+                    .containsEntry("benchmark.metadata.expectedTraceMarker", "mcp.tool.call");
+        }
+    }
+
+    @Test
     void cancelsUnderlyingRunWhenBenchmarkTimeoutExpires() throws Exception {
         InMemoryCheckpointer checkpointer = new InMemoryCheckpointer();
         CountDownLatch entered = new CountDownLatch(1);

@@ -31,17 +31,28 @@ public final class AgentRunBenchmarkExecutor implements BenchmarkTaskExecutor {
     private final String graphId;
     private final BenchmarkSuccessEvaluator successEvaluator;
     private final Function<UUID, Optional<Instant>> firstTokenSource;
+    private final BenchmarkStateEnricher stateEnricher;
 
     /** 创建不提供首事件时间源的适配器。 */
     public AgentRunBenchmarkExecutor(AgentRunService runService, String graphId,
                                      BenchmarkSuccessEvaluator successEvaluator) {
-        this(runService, graphId, successEvaluator, ignored -> Optional.empty());
+        this(runService, graphId, successEvaluator, ignored -> Optional.empty(),
+                BenchmarkStateEnricher.metadata());
     }
 
     /** 创建带首事件时间源的适配器。 */
     public AgentRunBenchmarkExecutor(AgentRunService runService, String graphId,
                                      BenchmarkSuccessEvaluator successEvaluator,
                                      Function<UUID, Optional<Instant>> firstTokenSource) {
+        this(runService, graphId, successEvaluator, firstTokenSource,
+                BenchmarkStateEnricher.metadata());
+    }
+
+    /** 创建带首事件时间源和初始状态增强器的适配器。 */
+    public AgentRunBenchmarkExecutor(AgentRunService runService, String graphId,
+                                     BenchmarkSuccessEvaluator successEvaluator,
+                                     Function<UUID, Optional<Instant>> firstTokenSource,
+                                     BenchmarkStateEnricher stateEnricher) {
         this.runService = Objects.requireNonNull(runService, "runService 不能为空");
         if (graphId == null || graphId.isBlank()) {
             throw new IllegalArgumentException("graphId 不能为空");
@@ -51,6 +62,7 @@ public final class AgentRunBenchmarkExecutor implements BenchmarkTaskExecutor {
                 successEvaluator, "successEvaluator 不能为空");
         this.firstTokenSource = Objects.requireNonNull(
                 firstTokenSource, "firstTokenSource 不能为空");
+        this.stateEnricher = Objects.requireNonNull(stateEnricher, "stateEnricher 不能为空");
     }
 
     @Override
@@ -74,6 +86,7 @@ public final class AgentRunBenchmarkExecutor implements BenchmarkTaskExecutor {
                     .withVariable(CATEGORY_VARIABLE, task.category())
                     .withVariable(PROMPT_VARIABLE, task.prompt())
                     .withVariable(SUCCESS_CRITERIA_VARIABLE, task.successCriteria());
+            initialState = stateEnricher.enrich(initialState, task);
             RunCheckpoint created = runService.start(graphId, initialState);
             RunCheckpoint terminal;
             try {
