@@ -199,23 +199,162 @@ class CoderNodeTest {
         server.verify();
     }
 
+    @Test
+    void retriesOnceWhenModelReturnsBlankUnifiedDiff() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://coder.test");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        LlmClient client = new LlmClient(builder.build(), objectMapper, "/v1/chat/completions");
+        ModelEndpoint endpoint = new ModelEndpoint(
+                "coder-endpoint", "coder-model", client,
+                CircuitBreaker.ofDefaults("coder-breaker-retry"));
+        ModelRouter router = new ModelRouter(java.util.Map.of(
+                TaskType.CODE, java.util.List.of(endpoint),
+                TaskType.VISION, java.util.List.of(endpoint),
+                TaskType.QUICK_CLASSIFICATION, java.util.List.of(endpoint)));
+        server.expect(once(), requestTo("https://coder.test/v1/chat/completions"))
+                .andRespond(withSuccess(blankUnifiedDiffResponse(objectMapper), MediaType.APPLICATION_JSON));
+        server.expect(once(), requestTo("https://coder.test/v1/chat/completions"))
+                .andExpect(content().string(containsString(
+                        "代码模型响应字段 unifiedDiff 必须是非空字符串")))
+                .andRespond(withSuccess(coderResponse(objectMapper, "corrected-model"), MediaType.APPLICATION_JSON));
+
+        try (client; DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            registry.register(com.agent.core.tool.builtin.CodePatchTool.definition(
+                    new AstService(), objectMapper));
+            CoderNode node = new CoderNode(
+                    new AstService(), router, objectMapper,
+                    new WorkspaceSnapshotService(10, 4096), registry);
+
+            AgentState result = node.execute(AgentState.empty()
+                    .withVariable(PlannerNode.TASK_KEY, "把 value.txt 改成 after")
+                    .withVariable(PlannerNode.PLAN_KEY, "修改 value.txt 并运行测试")
+                    .withVariable(PlannerNode.USER_ID_KEY, "user-1")
+                    .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString()));
+
+            assertThat(result.variables()).doesNotContainKey(CoderNode.ERROR_KEY);
+            assertThat(Files.readString(workspace.resolve("value.txt"))).isEqualTo("after\n");
+            assertThat(result.variables())
+                    .containsEntry(CoderNode.MODEL_KEY, "coder-model")
+                    .containsEntry(CoderNode.RESPONSE_KEY, codeChangeJson(objectMapper));
+        }
+        server.verify();
+    }
+
+    @Test
+    void retriesOnceWhenModelReturnsNonJsonResponse() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://coder.test");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        LlmClient client = new LlmClient(builder.build(), objectMapper, "/v1/chat/completions");
+        ModelEndpoint endpoint = new ModelEndpoint(
+                "coder-endpoint", "coder-model", client,
+                CircuitBreaker.ofDefaults("coder-breaker-non-json"));
+        ModelRouter router = new ModelRouter(java.util.Map.of(
+                TaskType.CODE, java.util.List.of(endpoint),
+                TaskType.VISION, java.util.List.of(endpoint),
+                TaskType.QUICK_CLASSIFICATION, java.util.List.of(endpoint)));
+        server.expect(once(), requestTo("https://coder.test/v1/chat/completions"))
+                .andRespond(withSuccess(modelResponse(objectMapper, "coder-model", "这不是 JSON"), MediaType.APPLICATION_JSON));
+        server.expect(once(), requestTo("https://coder.test/v1/chat/completions"))
+                .andExpect(content().string(containsString("代码模型响应字段格式错误")))
+                .andRespond(withSuccess(coderResponse(objectMapper), MediaType.APPLICATION_JSON));
+
+        try (client; DefaultToolRegistry registry = patchRegistry(objectMapper)) {
+            CoderNode node = productionCoderNode(router, objectMapper, registry);
+            AgentState result = node.execute(coderState());
+
+            assertThat(result.variables()).doesNotContainKey(CoderNode.ERROR_KEY);
+            assertThat(Files.readString(workspace.resolve("value.txt"))).isEqualTo("after\n");
+        }
+        server.verify();
+    }
+
+    @Test
+    void doesNotRetryModelWhenPatchApplicationFails() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://coder.test");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        LlmClient client = new LlmClient(builder.build(), objectMapper, "/v1/chat/completions");
+        ModelEndpoint endpoint = new ModelEndpoint(
+                "coder-endpoint", "coder-model", client,
+                CircuitBreaker.ofDefaults("coder-breaker-patch-failure"));
+        ModelRouter router = new ModelRouter(java.util.Map.of(
+                TaskType.CODE, java.util.List.of(endpoint),
+                TaskType.VISION, java.util.List.of(endpoint),
+                TaskType.QUICK_CLASSIFICATION, java.util.List.of(endpoint)));
+        server.expect(once(), requestTo("https://coder.test/v1/chat/completions"))
+                .andRespond(withSuccess(coderResponse(objectMapper, "coder-model", conflictingDiff()), MediaType.APPLICATION_JSON));
+
+        try (client; DefaultToolRegistry registry = patchRegistry(objectMapper)) {
+            CoderNode node = productionCoderNode(router, objectMapper, registry);
+            AgentState result = node.execute(coderState());
+
+            assertThat(result.variables().get(CoderNode.ERROR_KEY))
+                    .contains("AstServiceException")
+                    .contains("PatchApplyException");
+            assertThat(Files.readString(workspace.resolve("value.txt"))).isEqualTo("before\n");
+        }
+        server.verify();
+    }
+
     private String coderResponse(ObjectMapper objectMapper) throws Exception {
+        return coderResponse(objectMapper, "coder-model");
+    }
+
+    private String coderResponse(ObjectMapper objectMapper, String model) throws Exception {
+        return coderResponse(objectMapper, model, applyPatchFormat());
+    }
+
+    private String coderResponse(ObjectMapper objectMapper, String model, String diff) throws Exception {
+        return modelResponse(objectMapper, model, codeChangeJson(objectMapper, diff));
+    }
+
+    private String modelResponse(ObjectMapper objectMapper, String model, String content) throws Exception {
         var response = objectMapper.createObjectNode();
         response.put("id", "coder-response");
         response.put("object", "chat.completion");
         response.put("created", 1720000000L);
-        response.put("model", "coder-model");
+        response.put("model", model);
         var choice = response.putArray("choices").addObject();
         choice.put("index", 0);
         var message = choice.putObject("message");
         message.put("role", "assistant");
-        message.put("content", objectMapper.writeValueAsString(java.util.Map.of(
-                "summary", "修改值文件",
-                "unifiedDiff", applyPatchFormat(),
-                "commandName", "test.cat",
-                "commandArguments", java.util.List.of("value.txt"))));
+        message.put("content", content);
         choice.put("finish_reason", "stop");
         return objectMapper.writeValueAsString(response);
+    }
+
+    private String codeChangeJson(ObjectMapper objectMapper) throws Exception {
+        return codeChangeJson(objectMapper, applyPatchFormat());
+    }
+
+    private String codeChangeJson(ObjectMapper objectMapper, String diff) throws Exception {
+        return objectMapper.writeValueAsString(java.util.Map.of(
+                "summary", "修改值文件",
+                "unifiedDiff", diff,
+                "commandName", "test.cat",
+                "commandArguments", java.util.List.of("value.txt")));
+    }
+
+    private DefaultToolRegistry patchRegistry(ObjectMapper objectMapper) {
+        DefaultToolRegistry registry = new DefaultToolRegistry();
+        registry.register(com.agent.core.tool.builtin.CodePatchTool.definition(new AstService(), objectMapper));
+        return registry;
+    }
+
+    private CoderNode productionCoderNode(
+            ModelRouter router, ObjectMapper objectMapper, DefaultToolRegistry registry) {
+        return new CoderNode(new AstService(), router, objectMapper,
+                new WorkspaceSnapshotService(10, 4096), registry);
+    }
+
+    private AgentState coderState() {
+        return AgentState.empty()
+                .withVariable(PlannerNode.TASK_KEY, "把 value.txt 改成 after")
+                .withVariable(PlannerNode.PLAN_KEY, "修改 value.txt 并运行测试")
+                .withVariable(PlannerNode.USER_ID_KEY, "user-1")
+                .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString());
     }
 
     @Test
@@ -233,6 +372,10 @@ class CoderNodeTest {
                 TaskType.QUICK_CLASSIFICATION, java.util.List.of(endpoint)));
         server.expect(once(), requestTo("https://coder.test/v1/chat/completions"))
                 .andRespond(withSuccess(legacyCoderResponse(objectMapper), MediaType.APPLICATION_JSON));
+        server.expect(once(), requestTo("https://coder.test/v1/chat/completions"))
+                .andExpect(content().string(containsString(
+                        "代码模型响应字段格式错误")))
+                .andRespond(withSuccess(legacyCoderResponse(objectMapper), MediaType.APPLICATION_JSON));
         try (client; DefaultToolRegistry registry = new DefaultToolRegistry()) {
             registry.register(com.agent.core.tool.builtin.CodePatchTool.definition(
                     new AstService(), objectMapper));
@@ -245,8 +388,7 @@ class CoderNodeTest {
                     .withVariable(PlannerNode.USER_ID_KEY, "user-1")
                     .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString()));
             assertThat(result.variables().get(CoderNode.ERROR_KEY))
-                    .contains("MismatchedInputException")
-                    .contains("commandName")
+                    .contains("代码模型响应字段 commandName 必须是非空字符串")
                     .contains("at ");
             assertThat(Files.readString(workspace.resolve("value.txt"))).isEqualTo("before\n");
         }
@@ -267,6 +409,25 @@ class CoderNodeTest {
                 "summary", "修改值文件",
                 "unifiedDiff", validDiff(),
                 "command", "cat value.txt")));
+        choice.put("finish_reason", "stop");
+        return objectMapper.writeValueAsString(response);
+    }
+
+    private String blankUnifiedDiffResponse(ObjectMapper objectMapper) throws Exception {
+        var response = objectMapper.createObjectNode();
+        response.put("id", "blank-diff-response");
+        response.put("object", "chat.completion");
+        response.put("created", 1720000000L);
+        response.put("model", "coder-model");
+        var choice = response.putArray("choices").addObject();
+        choice.put("index", 0);
+        var message = choice.putObject("message");
+        message.put("role", "assistant");
+        message.put("content", objectMapper.writeValueAsString(java.util.Map.of(
+                "summary", "没有补丁",
+                "unifiedDiff", "",
+                "commandName", "test.cat",
+                "commandArguments", java.util.List.of("value.txt"))));
         choice.put("finish_reason", "stop");
         return objectMapper.writeValueAsString(response);
     }

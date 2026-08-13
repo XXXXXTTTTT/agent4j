@@ -182,19 +182,10 @@ public final class CoderNode implements Node {
                     List.of(),
                     null,
                     0.0);
-            RoutedCompletion completion = modelRouter.complete(TaskType.CODE, request);
-            NodeExecutionContext.progress("代码模型已返回变更方案");
-            ChatMessage message = completion.response().choices().getFirst().message();
-            if (!(message.content() instanceof ChatMessage.TextContent textContent)) {
-                throw new IllegalStateException("代码模型响应 content 必须是 TextContent");
-            }
-            String responseText = textContent.text();
-            JsonNode responseNode = objectMapper.readTree(responseText);
-            if (!(responseNode instanceof ObjectNode responseObject)) {
-                throw new IllegalArgumentException("代码模型响应必须是 JSON 对象");
-            }
-            CodeChange change = changeReader.readValue(
-                    normalizeCommandArguments(objectMapper, responseObject).toString());
+            GeneratedCodeChange generated = generateCodeChange(request);
+            RoutedCompletion completion = generated.completion();
+            String responseText = generated.responseText();
+            CodeChange change = generated.change();
             String commandArguments = objectMapper.writeValueAsString(
                     change.commandArguments());
             output = output
@@ -267,6 +258,64 @@ public final class CoderNode implements Node {
             return harnessToolExecutor.execute(call, context);
         }
         return toolRegistry.execute(call, context);
+    }
+
+    /**
+     * 结构化代码响应不完整时仅要求模型纠正一次格式；补丁和工具失败仍按原链路处理。
+     */
+    private GeneratedCodeChange generateCodeChange(ModelRequest request) throws Exception {
+        RoutedCompletion completion = modelRouter.complete(TaskType.CODE, request);
+        NodeExecutionContext.progress("代码模型已返回变更方案");
+        String responseText = responseText(completion);
+        try {
+            return new GeneratedCodeChange(completion, responseText, parseCodeChange(responseText));
+        } catch (java.io.IOException | IllegalArgumentException formatFailure) {
+            NodeExecutionContext.progress("代码模型响应格式无效，正在请求一次纠正");
+            String correction = "代码模型响应字段格式错误：" + formatFailure.getMessage()
+                    + "。必须只返回包含非空 summary、unifiedDiff、commandName 和 commandArguments 的 JSON 对象。"
+                    + "unifiedDiff 必须是可应用的 Unified Diff，commandArguments 必须是 JSON 数组。";
+            List<ChatMessage> correctionMessages = new java.util.ArrayList<>(request.messages());
+            correctionMessages.add(ChatMessage.assistant(responseText));
+            correctionMessages.add(ChatMessage.user(correction));
+            ModelRequest correctionRequest = new ModelRequest(
+                    List.copyOf(correctionMessages), request.tools(), request.toolChoice(),
+                    request.temperature(), request.modelGroupId());
+            RoutedCompletion corrected = modelRouter.complete(TaskType.CODE, correctionRequest);
+            NodeExecutionContext.progress("代码模型已返回纠正后的变更方案");
+            String correctedText = responseText(corrected);
+            return new GeneratedCodeChange(corrected, correctedText, parseCodeChange(correctedText));
+        }
+    }
+
+    private String responseText(RoutedCompletion completion) {
+        ChatMessage message = completion.response().choices().getFirst().message();
+        if (!(message.content() instanceof ChatMessage.TextContent textContent)) {
+            throw new IllegalStateException("代码模型响应 content 必须是 TextContent");
+        }
+        return textContent.text();
+    }
+
+    private CodeChange parseCodeChange(String responseText) throws java.io.IOException {
+        JsonNode responseNode = objectMapper.readTree(responseText);
+        if (!(responseNode instanceof ObjectNode responseObject)) {
+            throw new IllegalArgumentException("代码模型响应必须是 JSON 对象");
+        }
+        ObjectNode normalized = normalizeCommandArguments(objectMapper, responseObject);
+        requireNonBlankText(normalized, "summary");
+        requireNonBlankText(normalized, "unifiedDiff");
+        requireNonBlankText(normalized, "commandName");
+        JsonNode commandArguments = normalized.get("commandArguments");
+        if (commandArguments == null || !commandArguments.isArray()) {
+            throw new IllegalArgumentException("代码模型响应字段 commandArguments 必须是 JSON 数组");
+        }
+        return changeReader.readValue(normalized.toString());
+    }
+
+    private void requireNonBlankText(ObjectNode response, String field) {
+        JsonNode value = response.get(field);
+        if (value == null || !value.isTextual() || value.textValue().isBlank()) {
+            throw new IllegalArgumentException("代码模型响应字段 " + field + " 必须是非空字符串");
+        }
     }
 
     private String updatedFiles(JsonNode output) {
@@ -424,5 +473,11 @@ public final class CoderNode implements Node {
                 throw new IllegalArgumentException("代码变更 commandArguments 不能包含 null");
             }
         }
+    }
+
+    private record GeneratedCodeChange(
+            RoutedCompletion completion,
+            String responseText,
+            CodeChange change) {
     }
 }
