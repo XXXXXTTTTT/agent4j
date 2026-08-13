@@ -30,6 +30,36 @@ class BenchmarkTaskSetReaderTest {
     }
 
     @Test
+    void readsStrictMcpSkillRuntimeFixtureWithAuditableScenarioCoverage() {
+        InputStream resource = getClass().getResourceAsStream("/benchmarks/mcp-skill-runtime.jsonl");
+        assertThat(resource).isNotNull();
+
+        BenchmarkTaskSet set = new BenchmarkTaskSetReader().read(resource);
+
+        assertThat(set.tasks()).hasSize(50);
+        assertThat(set.tasks()).extracting(BenchmarkTask::id).doesNotHaveDuplicates();
+        assertThat(set.tasks()).extracting(task -> task.metadata().get("fixtureVersion"))
+                .containsOnly("1");
+        assertThat(set.tasks()).extracting(task -> task.metadata().get("scenario"))
+                .contains("mcp-tool-call", "skill-active-fingerprint", "actor-workspace-isolation",
+                        "approval-audit-trace", "binding-lifecycle-recovery");
+        assertThat(set.tasks()).allSatisfy(task -> {
+            assertThat(task.id()).isNotBlank();
+            assertThat(task.category()).isNotBlank();
+            assertThat(task.prompt()).isNotBlank();
+            assertThat(task.successCriteria()).isNotBlank();
+            assertThat(task.metadata()).allSatisfy((key, value) -> {
+                assertThat(key).isIn(
+                        "fixtureVersion", "scenario", "actorUserId", "workspaceId",
+                        "peerActorUserId", "peerWorkspaceId", "runtime", "expectedTerminalStatus",
+                        "expectedMcpRemoteTool", "expectedSkillActive", "expectedAuditToolName",
+                        "expectedTraceMarker", "expectPeerVisibility");
+                assertThat(value).isNotBlank();
+            });
+        });
+    }
+
+    @Test
     void rejectsUnknownFieldsDuplicateIdsInvalidJsonAndBlankLines() {
         BenchmarkTaskSetReader reader = new BenchmarkTaskSetReader();
         String valid = "{\"id\":\"one\",\"category\":\"CODE\","
