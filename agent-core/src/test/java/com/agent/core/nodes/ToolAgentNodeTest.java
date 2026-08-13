@@ -5,6 +5,9 @@ import com.agent.core.llm.ChatMessage;
 import com.agent.core.llm.LlmClient;
 import com.agent.core.llm.ModelRequest;
 import com.agent.core.llm.RoutedCompletion;
+import com.agent.core.mcp.McpCatalogSnapshot;
+import com.agent.core.mcp.McpCatalogSnapshotCodec;
+import com.agent.core.mcp.McpToolBindingSnapshot;
 import com.agent.core.skill.SkillCatalog;
 import com.agent.core.skill.SkillCatalogSnapshot;
 import com.agent.core.skill.SkillCatalogSnapshotCodec;
@@ -54,6 +57,116 @@ class ToolAgentNodeTest {
             assertThat(modelCalls).hasValue(0);
             assertThat(result.variables().get(ToolAgentNode.ERROR_KEY))
                     .contains("当前没有可调用工具");
+        }
+    }
+
+    @Test
+    void exposesOnlyMcpToolsFrozenForCurrentRunAndRejectsForgedToolName() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        UUID workspaceId = UUID.fromString("8d79e38c-6225-4d42-8a61-4731d2dc9f55");
+        AtomicReference<ModelRequest> captured = new AtomicReference<>();
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            registry.registerOwned("installation-a", List.of(new ToolDefinition("mcp.installation_a.echo", "A 回显",
+                    mapper.readTree("{\"type\":\"object\"}"),
+                    Set.of(com.agent.core.intent.RequiredCapability.TOOL), ToolRiskLevel.LOW,
+                    Duration.ofSeconds(2), (call, context) -> mapper.createObjectNode().put("owner", "a"))));
+            registry.registerOwned("installation-b", List.of(new ToolDefinition("mcp.installation_b.echo", "B 回显",
+                    mapper.readTree("{\"type\":\"object\"}"),
+                    Set.of(com.agent.core.intent.RequiredCapability.TOOL), ToolRiskLevel.LOW,
+                    Duration.ofSeconds(2), (call, context) -> mapper.createObjectNode().put("owner", "b"))));
+            ToolAgentNode node = new ToolAgentNode(request -> {
+                captured.set(request);
+                ChatMessage.ToolCall call = new ChatMessage.ToolCall("forged", "function",
+                        new ChatMessage.FunctionCall("mcp_installation_b_echo", "{}"));
+                return completion(ChatMessage.assistantToolCalls(List.of(call)), "tool-model");
+            }, registry, mapper, null, 1, true);
+
+            AgentState result = node.execute(AgentState.empty()
+                    .withVariable(PlannerNode.TASK_KEY, "调用当前工作区 MCP")
+                    .withVariable(PlannerNode.USER_ID_KEY, "user-a")
+                    .withVariable("conversation.workspaceId", workspaceId.toString())
+                    .withVariable(ToolAgentNode.SKILL_CATALOG_SNAPSHOT_KEY, emptySkillSnapshot(mapper, "user-a", workspaceId, registry))
+                    .withVariable(ToolAgentNode.MCP_CATALOG_SNAPSHOT_KEY, mcpSnapshot(mapper, "user-a", workspaceId,
+                            "installation-a", "mcp.installation_a.echo")));
+
+            assertThat(captured.get().tools()).extracting(tool -> tool.function().name())
+                    .containsExactly("mcp_installation_a_echo");
+            assertThat(result.variables().get(ToolAgentNode.ERROR_KEY))
+                    .contains("模型返回了未声明的工具: mcp_installation_b_echo");
+        }
+    }
+
+    @Test
+    void frozenMcpToolIsNotReexposedAfterItsHandlerIsRevoked() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        UUID workspaceId = UUID.fromString("7ccd34b1-0d91-4ecf-8772-1936fa2b77b9");
+        AtomicReference<ModelRequest> captured = new AtomicReference<>();
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            registry.registerOwned("installation-a", List.of(new ToolDefinition("mcp.installation_a.echo", "A 回显",
+                    mapper.readTree("{\"type\":\"object\"}"),
+                    Set.of(com.agent.core.intent.RequiredCapability.TOOL), ToolRiskLevel.LOW,
+                    Duration.ofSeconds(2), (call, context) -> mapper.createObjectNode().put("owner", "a"))));
+            ToolAgentNode node = new ToolAgentNode(request -> {
+                captured.set(request);
+                registry.beginDrain("installation-a");
+                registry.unregisterOwned("installation-a", Duration.ZERO);
+                ChatMessage.ToolCall call = new ChatMessage.ToolCall("revoked", "function",
+                        new ChatMessage.FunctionCall("mcp_installation_a_echo", "{}"));
+                return completion(ChatMessage.assistantToolCalls(List.of(call)), "tool-model");
+            }, registry, mapper, null, 1, true);
+            String snapshot = mcpSnapshot(mapper, "user-a", workspaceId,
+                    "installation-a", "mcp.installation_a.echo");
+
+            AgentState result = node.execute(AgentState.empty()
+                    .withVariable(PlannerNode.TASK_KEY, "调用当前工作区 MCP")
+                    .withVariable(PlannerNode.USER_ID_KEY, "user-a")
+                    .withVariable("conversation.workspaceId", workspaceId.toString())
+                    .withVariable(ToolAgentNode.SKILL_CATALOG_SNAPSHOT_KEY, emptySkillSnapshot(mapper, "user-a", workspaceId, registry))
+                    .withVariable(ToolAgentNode.MCP_CATALOG_SNAPSHOT_KEY, snapshot));
+
+            assertThat(captured.get().tools()).extracting(tool -> tool.function().name())
+                    .containsExactly("mcp_installation_a_echo");
+            assertThat(result.variables().get(ToolAgentNode.ERROR_KEY))
+                    .contains("工具调用未成功: mcp.installation_a.echo")
+                    .contains("工具未注册: mcp.installation_a.echo");
+        }
+    }
+
+    @Test
+    void frozenSkillCannotExposeMcpToolOutsideCurrentRunMcpSnapshot() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        UUID workspaceId = UUID.fromString("7e9c6e72-2d65-4e0d-ab88-34c530d6cd94");
+        AtomicReference<ModelRequest> captured = new AtomicReference<>();
+        try (DefaultToolRegistry registry = new DefaultToolRegistry()) {
+            registry.registerOwned("installation-a", List.of(new ToolDefinition("mcp.installation_a.echo", "A 回显",
+                    mapper.readTree("{\"type\":\"object\"}"),
+                    Set.of(com.agent.core.intent.RequiredCapability.TOOL), ToolRiskLevel.LOW,
+                    Duration.ofSeconds(2), (call, context) -> mapper.createObjectNode().put("owner", "a"))));
+            registry.registerOwned("installation-b", List.of(new ToolDefinition("mcp.installation_b.echo", "B 回显",
+                    mapper.readTree("{\"type\":\"object\"}"),
+                    Set.of(com.agent.core.intent.RequiredCapability.TOOL), ToolRiskLevel.LOW,
+                    Duration.ofSeconds(2), (call, context) -> mapper.createObjectNode().put("owner", "b"))));
+            SkillDefinition skill = new SkillDefinition("mcp-skill", "1.0.0", "MCP Skill",
+                    List.of("使用 MCP"), List.of("mcp.installation_a.echo", "mcp.installation_b.echo"), "仅调用 MCP");
+            String skillSnapshot = new SkillCatalogSnapshotCodec(mapper).encode(new SkillCatalogSnapshot(
+                    1, "user-a", workspaceId, Instant.parse("2026-08-13T00:00:00Z"), registry.revision(),
+                    List.of(skill), ""));
+            ToolAgentNode node = new ToolAgentNode(request -> {
+                captured.set(request);
+                return completion(ChatMessage.assistant("完成"), "tool-model");
+            }, registry, mapper, null, 1, true);
+
+            AgentState result = node.execute(AgentState.empty()
+                    .withVariable(PlannerNode.TASK_KEY, "使用 MCP")
+                    .withVariable(PlannerNode.USER_ID_KEY, "user-a")
+                    .withVariable("conversation.workspaceId", workspaceId.toString())
+                    .withVariable(ToolAgentNode.SKILL_CATALOG_SNAPSHOT_KEY, skillSnapshot)
+                    .withVariable(ToolAgentNode.MCP_CATALOG_SNAPSHOT_KEY, mcpSnapshot(mapper, "user-a", workspaceId,
+                            "installation-a", "mcp.installation_a.echo")));
+
+            assertThat(result.variables()).doesNotContainKey(ToolAgentNode.ERROR_KEY);
+            assertThat(captured.get().tools()).extracting(tool -> tool.function().name())
+                    .containsExactly("mcp_installation_a_echo");
         }
     }
 
@@ -298,5 +411,42 @@ class ToolAgentNodeTest {
                         model,
                         List.of(new LlmClient.Choice(0, message, "stop")),
                         new LlmClient.Usage(1, 1, 2)));
+    }
+
+    private String emptySkillSnapshot(
+            ObjectMapper mapper,
+            String actorUserId,
+            UUID workspaceId,
+            DefaultToolRegistry registry) {
+        return new SkillCatalogSnapshotCodec(mapper).encode(new SkillCatalogSnapshot(
+                1, actorUserId, workspaceId, Instant.parse("2026-08-13T00:00:00Z"),
+                registry.revision(), List.of(), ""));
+    }
+
+    private String mcpSnapshot(
+            ObjectMapper mapper,
+            String actorUserId,
+            UUID workspaceId,
+            String installationId,
+            String localToolName) {
+        UUID exactInstallationId = UUID.nameUUIDFromBytes(
+                installationId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        McpCatalogSnapshot snapshot = new McpCatalogSnapshot(
+                1,
+                actorUserId,
+                workspaceId,
+                Instant.parse("2026-08-13T00:00:00Z"),
+                List.of(new McpToolBindingSnapshot(
+                        exactInstallationId,
+                        UUID.nameUUIDFromBytes((installationId + "-snapshot")
+                                .getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                        1,
+                        localToolName,
+                        "echo",
+                        ToolRiskLevel.LOW,
+                        Set.of(com.agent.core.intent.RequiredCapability.TOOL),
+                        Instant.parse("2026-08-13T00:00:00Z"))),
+                "");
+        return new McpCatalogSnapshotCodec(mapper).encode(snapshot);
     }
 }

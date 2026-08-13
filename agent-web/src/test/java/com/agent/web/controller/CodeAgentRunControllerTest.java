@@ -7,6 +7,9 @@ import com.agent.core.engine.RunStatus;
 import com.agent.core.skill.SkillCatalogProvider;
 import com.agent.core.skill.SkillCatalogSnapshot;
 import com.agent.core.skill.SkillCatalogSnapshotCodec;
+import com.agent.core.mcp.McpCatalogProvider;
+import com.agent.core.mcp.McpCatalogSnapshot;
+import com.agent.core.mcp.McpCatalogSnapshotCodec;
 import com.agent.web.config.ProductionAgentProperties;
 import com.agent.web.identity.Actor;
 import com.agent.web.identity.ActorResolver;
@@ -58,6 +61,9 @@ class CodeAgentRunControllerTest {
     @MockBean
     private SkillCatalogProvider skillCatalogProvider;
 
+    @MockBean
+    private McpCatalogProvider mcpCatalogProvider;
+
     @Test
     void startsCodeAgentWithExactTaskStateKeys() throws Exception {
         Path workspace = Path.of(".").toAbsolutePath().normalize();
@@ -76,6 +82,9 @@ class CodeAgentRunControllerTest {
         when(skillCatalogProvider.resolve("resolved-user", WORKSPACE_ID)).thenReturn(
                 new SkillCatalogSnapshot(1, "resolved-user", WORKSPACE_ID,
                         Instant.parse("2026-08-05T00:00:00Z"), 0, java.util.List.of(), ""));
+        when(mcpCatalogProvider.resolve("resolved-user", WORKSPACE_ID)).thenReturn(
+                new McpCatalogSnapshot(1, "resolved-user", WORKSPACE_ID,
+                        Instant.parse("2026-08-05T00:00:00Z"), java.util.List.of(), ""));
         when(runService.start(eq("code-agent"), any(AgentState.class)))
                 .thenReturn(new RunCheckpoint(
                         RUN_ID,
@@ -120,6 +129,11 @@ class CodeAgentRunControllerTest {
                 .decode(encoded, "resolved-user", WORKSPACE_ID,
                         new com.agent.core.tool.DefaultToolRegistry()))
                 .extracting(SkillCatalogSnapshot::workspaceId)
+                .isEqualTo(WORKSPACE_ID);
+        String encodedMcp = stateCaptor.getValue().variables().get("mcp.catalogSnapshot");
+        org.assertj.core.api.Assertions.assertThat(new McpCatalogSnapshotCodec(new ObjectMapper())
+                .decode(encodedMcp, "resolved-user", WORKSPACE_ID))
+                .extracting(McpCatalogSnapshot::workspaceId)
                 .isEqualTo(WORKSPACE_ID);
         verify(workspaceAccessService).requireWorkspace(
                 WORKSPACE_ID, "resolved-user", WorkspacePermission.OPERATOR);

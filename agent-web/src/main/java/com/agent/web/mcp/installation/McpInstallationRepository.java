@@ -22,6 +22,12 @@ public interface McpInstallationRepository {
         throw new UnsupportedOperationException("当前 MCP 仓储不支持运行恢复");
     }
 
+    /** 读取当前主体在工作区可用且正在运行的 MCP 安装及其固定工具绑定。 */
+    default List<McpInstallationAggregate> findRunningInstallations(
+            String actorUserId, UUID workspaceId) {
+        throw new UnsupportedOperationException("当前 MCP 仓储不支持运行中安装读取");
+    }
+
     /** 按固定快照标识读取已准备物料，供运行时在启动前重新校验。 */
     default Optional<McpPreparedMaterialRecord> findPreparedMaterial(UUID snapshotId) {
         throw new UnsupportedOperationException("当前 MCP 仓储不支持物料读取");

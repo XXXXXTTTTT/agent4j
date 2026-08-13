@@ -211,6 +211,26 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
     }
 
     @Override
+    public List<com.agent.web.mcp.installation.McpInstallationAggregate> findRunningInstallations(
+            String actorUserId, UUID workspaceId) {
+        Objects.requireNonNull(actorUserId, "actorUserId 不能为空");
+        Objects.requireNonNull(workspaceId, "workspaceId 不能为空");
+        return jdbc.sql("""
+                select i.installation_id, i.snapshot_id, i.scope, i.workspace_id, i.actor_user_id, i.status,
+                       i.confirmation_token_sha256, i.created_at, i.confirmed_at, i.updated_at,
+                       i.risk_level, i.required_capabilities, i.workspace_mount_mode, i.network_mode,
+                       i.runtime_image, i.runtime_image_confirmed, i.runtime_workspace_id, i.container_id, i.runtime_error, i.version
+                from agent_mcp_installations i
+                where i.actor_user_id = :actorUserId
+                  and i.status = 'RUNNING'
+                  and ((i.scope = 'WORKSPACE' and i.workspace_id = :workspaceId)
+                       or i.scope = 'USER_GLOBAL')
+                order by i.updated_at, i.installation_id
+                """).param("actorUserId", actorUserId).param("workspaceId", workspaceId)
+                .query(this::mapInstallation).list().stream().map(this::aggregate).toList();
+    }
+
+    @Override
     public McpInstallationRecord beginStart(UUID installationId, String actorUserId, UUID requestWorkspaceId,
                                             UUID runtimeWorkspaceId, long expectedVersion,
                                             com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {

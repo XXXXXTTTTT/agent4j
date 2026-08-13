@@ -15,6 +15,8 @@ import com.agent.web.workspace.WorkspaceRecord;
 import com.agent.web.validation.ReviewerUrlValidator;
 import com.agent.core.skill.SkillCatalogProvider;
 import com.agent.core.skill.SkillCatalogSnapshotCodec;
+import com.agent.core.mcp.McpCatalogProvider;
+import com.agent.core.mcp.McpCatalogSnapshotCodec;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -46,6 +48,8 @@ public final class ConversationService {
     private final Clock clock;
     private final SkillCatalogProvider skillCatalogProvider;
     private final SkillCatalogSnapshotCodec skillCatalogSnapshotCodec;
+    private final McpCatalogProvider mcpCatalogProvider;
+    private final McpCatalogSnapshotCodec mcpCatalogSnapshotCodec;
 
     /** 创建会话应用服务。 */
     public ConversationService(
@@ -84,7 +88,8 @@ public final class ConversationService {
             Clock clock) {
         this(repository, workspaceAccess, contextProvider, actorResolver, runStarter,
                 conversationProjector, auditSink, clock, null,
-                new SkillCatalogSnapshotCodec(new com.fasterxml.jackson.databind.ObjectMapper()));
+                new SkillCatalogSnapshotCodec(new com.fasterxml.jackson.databind.ObjectMapper()), null,
+                new McpCatalogSnapshotCodec(new com.fasterxml.jackson.databind.ObjectMapper()));
     }
 
     /** 创建带终态对账和业务审计能力的会话服务。 */
@@ -99,6 +104,26 @@ public final class ConversationService {
             Clock clock,
             SkillCatalogProvider skillCatalogProvider,
             SkillCatalogSnapshotCodec skillCatalogSnapshotCodec) {
+        this(repository, workspaceAccess, contextProvider, actorResolver, runStarter,
+                conversationProjector, auditSink, clock, skillCatalogProvider,
+                skillCatalogSnapshotCodec, null,
+                new McpCatalogSnapshotCodec(new com.fasterxml.jackson.databind.ObjectMapper()));
+    }
+
+    /** 创建带 Skill 和 MCP 冻结目录的会话服务。 */
+    public ConversationService(
+            ConversationRepository repository,
+            WorkspaceAccessService workspaceAccess,
+            ConversationContextProvider contextProvider,
+            ActorResolver actorResolver,
+            ConversationRunStarter runStarter,
+            ConversationRunProjector conversationProjector,
+            ConversationAuditSink auditSink,
+            Clock clock,
+            SkillCatalogProvider skillCatalogProvider,
+            SkillCatalogSnapshotCodec skillCatalogSnapshotCodec,
+            McpCatalogProvider mcpCatalogProvider,
+            McpCatalogSnapshotCodec mcpCatalogSnapshotCodec) {
         this.repository = Objects.requireNonNull(repository, "repository 不能为空");
         this.workspaceAccess = Objects.requireNonNull(workspaceAccess, "workspaceAccess 不能为空");
         this.contextProvider = Objects.requireNonNull(contextProvider, "contextProvider 不能为空");
@@ -110,6 +135,9 @@ public final class ConversationService {
         this.skillCatalogProvider = skillCatalogProvider;
         this.skillCatalogSnapshotCodec = Objects.requireNonNull(
                 skillCatalogSnapshotCodec, "skillCatalogSnapshotCodec 不能为空");
+        this.mcpCatalogProvider = mcpCatalogProvider;
+        this.mcpCatalogSnapshotCodec = Objects.requireNonNull(
+                mcpCatalogSnapshotCodec, "mcpCatalogSnapshotCodec 不能为空");
     }
 
     /** 创建绑定当前用户的空会话。 */
@@ -231,6 +259,12 @@ public final class ConversationService {
                 state = state.withVariable(
                         com.agent.core.nodes.ToolAgentNode.SKILL_CATALOG_SNAPSHOT_KEY,
                         skillCatalogSnapshotCodec.encode(skillCatalogProvider.resolve(
+                                actor.userId(), workspace.workspaceId())));
+            }
+            if (mcpCatalogProvider != null) {
+                state = state.withVariable(
+                        com.agent.core.nodes.ToolAgentNode.MCP_CATALOG_SNAPSHOT_KEY,
+                        mcpCatalogSnapshotCodec.encode(mcpCatalogProvider.resolve(
                                 actor.userId(), workspace.workspaceId())));
             }
             if (!exactReviewerUrl.isBlank()) {

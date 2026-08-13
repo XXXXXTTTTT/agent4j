@@ -11,6 +11,9 @@ import com.agent.core.llm.ChatMessage;
 import com.agent.core.skill.SkillCatalogProvider;
 import com.agent.core.skill.SkillCatalogSnapshot;
 import com.agent.core.skill.SkillCatalogSnapshotCodec;
+import com.agent.core.mcp.McpCatalogProvider;
+import com.agent.core.mcp.McpCatalogSnapshot;
+import com.agent.core.mcp.McpCatalogSnapshotCodec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.agent.web.identity.Actor;
 import com.agent.web.identity.ActorResolver;
@@ -146,6 +149,41 @@ class ConversationServiceTest {
         assertThat(new SkillCatalogSnapshotCodec(objectMapper)
                 .decode(encoded, resolved.userId(), WORKSPACE_ID, new com.agent.core.tool.DefaultToolRegistry()))
                 .extracting(SkillCatalogSnapshot::workspaceId).isEqualTo(WORKSPACE_ID);
+    }
+
+    @Test
+    void submissionFreezesMcpCatalogForResolvedActorAndWorkspace() {
+        Actor resolved = new Actor("mcp-user", "Mcp");
+        FakeConversationRepository repository = new FakeConversationRepository();
+        repository.conversation = new ConversationRecord(
+                CONVERSATION_ID, WORKSPACE_ID, resolved.userId(), "标题",
+                ConversationStatus.ACTIVE, NOW, NOW);
+        repository.pending = new ConversationTurnRecord(
+                UUID.randomUUID(), CONVERSATION_ID, 1, "使用 MCP", null, null,
+                ConversationTurnStatus.PENDING, null, NOW, null);
+        CapturingStarter starter = new CapturingStarter();
+        McpCatalogProvider provider = (actorUserId, workspaceId) -> {
+            assertThat(actorUserId).isEqualTo(resolved.userId());
+            assertThat(workspaceId).isEqualTo(WORKSPACE_ID);
+            return new McpCatalogSnapshot(1, actorUserId, workspaceId, NOW, List.of(), "");
+        };
+        ObjectMapper objectMapper = new ObjectMapper();
+        ConversationService service = new ConversationService(
+                repository,
+                new WorkspaceAccessService(new TestWorkspaceRepository(resolved), Path.of("D:/agent4j"),
+                        Clock.fixed(NOW, ZoneOffset.UTC)),
+                (id, userId, maxTurns, maxCharacters) -> new ConversationContext(List.of(), 0, false),
+                () -> resolved, starter, null, com.agent.web.audit.ConversationAuditSink.noop(),
+                Clock.fixed(NOW, ZoneOffset.UTC), null,
+                new SkillCatalogSnapshotCodec(objectMapper), provider,
+                new McpCatalogSnapshotCodec(objectMapper));
+
+        service.submitTurn(CONVERSATION_ID, "使用 MCP", "");
+
+        String encoded = starter.state.variables().get("mcp.catalogSnapshot");
+        assertThat(new McpCatalogSnapshotCodec(objectMapper)
+                .decode(encoded, resolved.userId(), WORKSPACE_ID))
+                .extracting(McpCatalogSnapshot::workspaceId).isEqualTo(WORKSPACE_ID);
     }
 
     @Test

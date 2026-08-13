@@ -27,6 +27,8 @@ import com.agent.web.workspace.WorkspaceDirectoryBrowser;
 import com.agent.web.workspace.WorkspaceImportService;
 import com.agent.web.mcp.catalog.OfficialMcpCatalogClient;
 import com.agent.web.mcp.installation.McpInstallationRepository;
+import com.agent.web.mcp.installation.InstalledMcpCatalogProvider;
+import com.agent.core.mcp.McpCatalogProvider;
 import com.agent.web.mcp.installation.McpInstallationService;
 import com.agent.web.mcp.runtime.DockerMcpStdioRunner;
 import com.agent.web.mcp.runtime.FileSystemMcpRuntimeMaterialProvider;
@@ -343,7 +345,8 @@ public class HarnessConfiguration {
             ConversationAuditSink conversationAuditSink,
             Clock harnessClock,
             ObjectMapper objectMapper,
-            ObjectProvider<SkillCatalogProvider> skillCatalogProvider) {
+            ObjectProvider<SkillCatalogProvider> skillCatalogProvider,
+            ObjectProvider<McpCatalogProvider> mcpCatalogProvider) {
         return new ConversationService(
                 repository,
                 workspaceAccessService,
@@ -354,7 +357,16 @@ public class HarnessConfiguration {
                 conversationAuditSink,
                 harnessClock,
                 skillCatalogProvider.getIfAvailable(),
-                new com.agent.core.skill.SkillCatalogSnapshotCodec(objectMapper));
+                new com.agent.core.skill.SkillCatalogSnapshotCodec(objectMapper),
+                mcpCatalogProvider.getIfAvailable(),
+                new com.agent.core.mcp.McpCatalogSnapshotCodec(objectMapper));
+    }
+
+    /** 将同一主体和工作区的运行中 MCP 绑定冻结到新 Run。 */
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    McpCatalogProvider installedMcpCatalogProvider(McpInstallationRepository repository) {
+        return new InstalledMcpCatalogProvider(repository);
     }
 
     /** 将已批准 Skill 安装接入会话初始状态快照。 */

@@ -5,6 +5,8 @@ import com.agent.core.engine.AgentState;
 import com.agent.core.nodes.ToolAgentNode;
 import com.agent.core.skill.SkillCatalogProvider;
 import com.agent.core.skill.SkillCatalogSnapshotCodec;
+import com.agent.core.mcp.McpCatalogProvider;
+import com.agent.core.mcp.McpCatalogSnapshotCodec;
 import com.agent.web.config.ProductionAgentProperties;
 import com.agent.web.identity.Actor;
 import com.agent.web.identity.ActorResolver;
@@ -38,6 +40,8 @@ public final class RunController {
     private final ObjectProvider<WorkspaceAccessService> workspaceAccess;
     private final ObjectProvider<SkillCatalogProvider> skillCatalogProvider;
     private final SkillCatalogSnapshotCodec skillCatalogSnapshotCodec;
+    private final ObjectProvider<McpCatalogProvider> mcpCatalogProvider;
+    private final McpCatalogSnapshotCodec mcpCatalogSnapshotCodec;
 
     /** 创建 Run Controller。 */
     public RunController(
@@ -46,6 +50,7 @@ public final class RunController {
             ActorResolver actorResolver,
             ObjectProvider<WorkspaceAccessService> workspaceAccess,
             ObjectProvider<SkillCatalogProvider> skillCatalogProvider,
+            ObjectProvider<McpCatalogProvider> mcpCatalogProvider,
             ObjectMapper objectMapper) {
         this.runService = Objects.requireNonNull(runService, "runService 不能为空");
         this.productionProperties = Objects.requireNonNull(
@@ -56,6 +61,8 @@ public final class RunController {
                 skillCatalogProvider, "skillCatalogProvider 不能为空");
         this.skillCatalogSnapshotCodec = new SkillCatalogSnapshotCodec(
                 Objects.requireNonNull(objectMapper, "objectMapper 不能为空"));
+        this.mcpCatalogProvider = Objects.requireNonNull(mcpCatalogProvider, "mcpCatalogProvider 不能为空");
+        this.mcpCatalogSnapshotCodec = new McpCatalogSnapshotCodec(objectMapper);
     }
 
     /** 创建并异步启动 Run。 */
@@ -93,6 +100,12 @@ public final class RunController {
         if (provider != null) {
             state = state.withVariable(ToolAgentNode.SKILL_CATALOG_SNAPSHOT_KEY,
                     skillCatalogSnapshotCodec.encode(provider.resolve(
+                            actor.userId(), workspace.workspaceId())));
+        }
+        McpCatalogProvider mcpProvider = mcpCatalogProvider.getIfAvailable();
+        if (mcpProvider != null) {
+            state = state.withVariable(ToolAgentNode.MCP_CATALOG_SNAPSHOT_KEY,
+                    mcpCatalogSnapshotCodec.encode(mcpProvider.resolve(
                             actor.userId(), workspace.workspaceId())));
         }
         String reviewerUrl = choose(request.reviewerUrl(), properties.reviewerUrl());

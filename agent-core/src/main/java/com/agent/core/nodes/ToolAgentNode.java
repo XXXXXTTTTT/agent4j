@@ -10,6 +10,8 @@ import com.agent.core.llm.ModelRequest;
 import com.agent.core.llm.ModelRouter;
 import com.agent.core.llm.RoutedCompletion;
 import com.agent.core.llm.TaskType;
+import com.agent.core.mcp.McpCatalogSnapshot;
+import com.agent.core.mcp.McpCatalogSnapshotCodec;
 import com.agent.core.skill.SkillCatalog;
 import com.agent.core.skill.SkillCatalogProvider;
 import com.agent.core.skill.SkillCatalogSnapshot;
@@ -36,6 +38,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.EnumSet;
@@ -53,6 +56,7 @@ public final class ToolAgentNode implements Node {
     public static final String ACTIVE_SKILLS_KEY = "skill.active";
     public static final String SKILL_FINGERPRINT_KEY = "skill.fingerprint";
     public static final String SKILL_CATALOG_SNAPSHOT_KEY = "skill.catalogSnapshot";
+    public static final String MCP_CATALOG_SNAPSHOT_KEY = "mcp.catalogSnapshot";
     private static final String NODE_NAME = "tool-agent";
 
     private final Function<ModelRequest, RoutedCompletion> completer;
@@ -60,6 +64,7 @@ public final class ToolAgentNode implements Node {
     private final ObjectMapper objectMapper;
     private final SkillCatalog skillCatalog;
     private final SkillCatalogSnapshotCodec skillCatalogSnapshotCodec;
+    private final McpCatalogSnapshotCodec mcpCatalogSnapshotCodec;
     private final boolean requireSkillCatalogSnapshot;
     private final int maxSteps;
 
@@ -105,6 +110,7 @@ public final class ToolAgentNode implements Node {
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
         this.skillCatalog = skillCatalog;
         this.skillCatalogSnapshotCodec = new SkillCatalogSnapshotCodec(objectMapper);
+        this.mcpCatalogSnapshotCodec = new McpCatalogSnapshotCodec(objectMapper);
         this.requireSkillCatalogSnapshot = requireSkillCatalogSnapshot;
         if (maxSteps < 1) {
             throw new IllegalArgumentException("maxSteps 必须大于 0");
@@ -119,14 +125,16 @@ public final class ToolAgentNode implements Node {
         try {
             String task = required(output, PlannerNode.TASK_KEY);
             SkillCatalog effectiveCatalog = resolveCatalog(output);
+            McpCatalogSnapshot mcpSnapshot = resolveMcpCatalog(output);
             if (output.variables().containsKey(SKILL_CATALOG_SNAPSHOT_KEY)
-                    && effectiveCatalog == null) {
+                    && effectiveCatalog == null
+                    && (mcpSnapshot == null || mcpSnapshot.bindings().isEmpty())) {
                 throw new IllegalStateException("当前没有可调用工具");
             }
             SkillPromptContext skills = effectiveCatalog == null
                     ? null : effectiveCatalog.resolve(task, Set.of());
             output = withSkillEvidence(output, skills);
-            List<ToolDefinition> definitions = exposedDefinitions(skills);
+            List<ToolDefinition> definitions = exposedDefinitions(skills, mcpSnapshot);
             if (definitions.isEmpty()) {
                 throw new IllegalStateException("当前没有可调用工具");
             }
@@ -171,6 +179,10 @@ public final class ToolAgentNode implements Node {
                     ToolCall toolCall = new ToolCall(
                             call.id(), registryName, objectMapper.readTree(call.function().arguments()));
                     ToolResult result = executeTool(output, toolCall);
+                    if (result.status() != ToolResultStatus.SUCCEEDED) {
+                        throw new IllegalStateException("工具调用未成功: " + registryName + "\n"
+                                + result.errorStack());
+                    }
                     String resultText = objectMapper.writeValueAsString(result.output());
                     output = output.withVariable(RESULT_KEY, resultText);
                     messages.add(ChatMessage.tool(call.id(), resultText));
@@ -206,6 +218,19 @@ public final class ToolAgentNode implements Node {
         return snapshot.definitions().isEmpty()
                 ? null
                 : new SkillCatalog(snapshot.definitions(), toolRegistry, objectMapper);
+    }
+
+    private McpCatalogSnapshot resolveMcpCatalog(AgentState state) {
+        String encoded = state.variables().get(MCP_CATALOG_SNAPSHOT_KEY);
+        if (encoded == null || encoded.isBlank()) {
+            return null;
+        }
+        String actor = state.variables().get(PlannerNode.USER_ID_KEY);
+        String workspace = state.variables().get("conversation.workspaceId");
+        if (actor == null || workspace == null) {
+            throw new IllegalArgumentException("MCP 目录快照缺少绑定身份");
+        }
+        return mcpCatalogSnapshotCodec.decode(encoded, actor, UUID.fromString(workspace));
     }
 
     private ToolResult executeTool(AgentState state, ToolCall call) throws Exception {
@@ -308,15 +333,29 @@ public final class ToolAgentNode implements Node {
         return "工具调用失败，完整错误已写入工具审计。";
     }
 
-    private List<ToolDefinition> exposedDefinitions(SkillPromptContext skills) {
-        if (skills == null || skills.activatedSkills().isEmpty()) {
+    private List<ToolDefinition> exposedDefinitions(
+            SkillPromptContext skills,
+            McpCatalogSnapshot mcpSnapshot) {
+        Set<String> names = new java.util.TreeSet<>();
+        Set<String> mcpNames = mcpSnapshot == null ? Set.of() : mcpSnapshot.bindings().stream()
+                .map(binding -> binding.localToolName()).collect(java.util.stream.Collectors.toUnmodifiableSet());
+        boolean frozenSkills = skills != null;
+        if (skills != null && !skills.activatedSkills().isEmpty()) {
+            skills.activatedSkills().stream()
+                    .flatMap(skill -> skill.tools().stream())
+                    .map(tool -> tool.name())
+                    .filter(name -> !isMcpTool(name) || mcpNames.contains(name))
+                    .forEach(names::add);
+        }
+        names.addAll(mcpNames);
+        if (!frozenSkills && mcpSnapshot == null) {
             return toolRegistry.list();
         }
-        Set<String> names = skills.activatedSkills().stream()
-                .flatMap(skill -> skill.tools().stream())
-                .map(tool -> tool.name())
-                .collect(java.util.stream.Collectors.toSet());
-        return toolRegistry.list().stream().filter(tool -> names.contains(tool.name())).toList();
+        return names.stream().map(toolRegistry::find).flatMap(Optional::stream).toList();
+    }
+
+    private boolean isMcpTool(String name) {
+        return name.startsWith("mcp.");
     }
 
     private String systemPrompt(
@@ -342,6 +381,9 @@ public final class ToolAgentNode implements Node {
             section.append("## ").append(skill.name()).append('@').append(skill.version()).append('\n');
             section.append("tools:\n");
             for (SkillToolMetadata tool : skill.tools()) {
+                if (!protocolToRegistryName.containsValue(tool.name())) {
+                    continue;
+                }
                 section.append("- ").append(protocolName(tool.name(), protocolToRegistryName))
                         .append(": ").append(tool.description()).append("\n")
                         .append("  inputSchema: ").append(SkillPromptJson.canonicalJson(objectMapper, tool.inputSchema())).append('\n');
