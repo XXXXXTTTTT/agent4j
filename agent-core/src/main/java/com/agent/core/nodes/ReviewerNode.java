@@ -264,15 +264,30 @@ public final class ReviewerNode implements Node {
                 ? "代码任务已完成并通过审查。"
                 : "代码任务已执行，但审查未通过。");
         appendFinalSection(response, "修改文件", variables.get(CoderNode.UPDATED_FILES_KEY));
-        appendFinalSection(response, "修改内容", variables.get(CoderNode.SUMMARY_KEY));
         appendFinalSection(response, "验证命令", variables.get(OpsNode.COMMAND_KEY));
         String exitCode = variables.get(OpsNode.EXIT_CODE_KEY);
         if (exitCode != null && !exitCode.isBlank()) {
             response.append("\n\n退出码：").append(exitCode);
         }
+        if (isSuccessfulMavenTest(variables)) {
+            response.append("\n\n测试已执行并通过。");
+        } else if (variables.containsKey(OpsNode.COMMAND_KEY) && exitCode != null && !exitCode.isBlank()) {
+            response.append("\n\n命令已执行，退出码：").append(exitCode);
+        }
         appendFinalSection(response, "审查结论", decision.summary());
         appendFinalSection(response, "审查反馈", decision.feedback());
         return response.toString();
+    }
+
+    private static boolean isSuccessfulMavenTest(Map<String, String> variables) {
+        return "mvn".equals(variables.get(OpsNode.COMMAND_KEY))
+                && "[\"test\"]".equals(variables.get(OpsNode.COMMAND_ARGUMENTS_KEY))
+                && "0".equals(variables.get(OpsNode.EXIT_CODE_KEY))
+                && "false".equals(variables.get(OpsNode.TIMED_OUT_KEY))
+                && variables.getOrDefault(OpsNode.STDOUT_KEY, "").contains("Tests run:")
+                && variables.getOrDefault(OpsNode.STDOUT_KEY, "").contains("Failures: 0")
+                && variables.getOrDefault(OpsNode.STDOUT_KEY, "").contains("Errors: 0")
+                && variables.getOrDefault(OpsNode.STDOUT_KEY, "").contains("BUILD SUCCESS");
     }
 
     private void appendFinalSection(

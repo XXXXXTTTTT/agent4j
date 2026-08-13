@@ -195,12 +195,35 @@ class ReviewerNodeTest {
         assertThat(result.variables().get(PlannerNode.FINAL_RESPONSE_KEY))
                 .contains(
                         "src/main/java/demo/NumberLabel.java",
-                        "将标签改为平方根并保留两位小数",
                         "cat value.txt",
                         "退出码：0",
                         "代码测试通过",
                         "无需修改");
         assertThat(result.trace()).containsExactly("reviewer");
+    }
+
+    @Test
+    void reportsMavenTestPassOnlyFromExactSuccessfulOpsEvidence() throws Exception {
+        ReviewerNode node = reviewerNode();
+        expectModelResponse(textContent(
+                "{\"approved\":true,\"summary\":\"审查通过\",\"feedback\":\"无需修改\"}"));
+
+        AgentState result = node.execute(AgentState.empty()
+                .withVariable(OpsNode.EXIT_CODE_KEY, "0")
+                .withVariable(OpsNode.STDOUT_KEY, """
+                        [INFO] Tests run: 12, Failures: 0, Errors: 0, Skipped: 0
+                        [INFO] BUILD SUCCESS
+                        """)
+                .withVariable(OpsNode.STDERR_KEY, "")
+                .withVariable(OpsNode.TIMED_OUT_KEY, "false")
+                .withVariable(OpsNode.COMMAND_KEY, "mvn")
+                .withVariable(OpsNode.COMMAND_ARGUMENTS_KEY, "[\"test\"]")
+                .withVariable(CoderNode.UPDATED_FILES_KEY, "src/main/java/demo/NumberLabel.java")
+                .withVariable(CoderNode.SUMMARY_KEY, "当前工作区未实际执行 Maven 测试"));
+
+        assertThat(result.variables().get(PlannerNode.FINAL_RESPONSE_KEY))
+                .contains("测试已执行并通过", "src/main/java/demo/NumberLabel.java", "mvn", "退出码：0", "审查通过", "无需修改")
+                .doesNotContain("当前工作区未实际执行 Maven 测试");
     }
 
     @Test
