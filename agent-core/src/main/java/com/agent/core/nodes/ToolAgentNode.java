@@ -126,6 +126,7 @@ public final class ToolAgentNode implements Node {
             String task = required(output, PlannerNode.TASK_KEY);
             SkillCatalog effectiveCatalog = resolveCatalog(output);
             McpCatalogSnapshot mcpSnapshot = resolveMcpCatalog(output);
+            verifyMcpRuntimeBindings(mcpSnapshot);
             if (output.variables().containsKey(SKILL_CATALOG_SNAPSHOT_KEY)
                     && effectiveCatalog == null
                     && (mcpSnapshot == null || mcpSnapshot.bindings().isEmpty())) {
@@ -352,6 +353,28 @@ public final class ToolAgentNode implements Node {
             return toolRegistry.list();
         }
         return names.stream().map(toolRegistry::find).flatMap(Optional::stream).toList();
+    }
+
+    /** Run 快照必须指向同一次 MCP 启动注册的 handler，禁止重启后借用同名工具。 */
+    private void verifyMcpRuntimeBindings(McpCatalogSnapshot snapshot) {
+        if (snapshot == null) {
+            return;
+        }
+        if (snapshot.schemaVersion() != 2) {
+            throw new IllegalStateException("MCP 工具快照缺少运行时绑定版本");
+        }
+        for (var binding : snapshot.bindings()) {
+            java.util.UUID currentInstanceId = toolRegistry.bindingInstanceId(binding.localToolName()).orElseThrow(
+                    () -> new IllegalStateException("MCP 工具运行时绑定已撤销: " + binding.localToolName()));
+            if (!currentInstanceId.equals(binding.runtimeBindingInstanceId())) {
+                throw new IllegalStateException("MCP 工具运行时实例已变更: " + binding.localToolName());
+            }
+            long currentRevision = toolRegistry.bindingRevision(binding.localToolName()).orElseThrow(
+                    () -> new IllegalStateException("MCP 工具运行时绑定已撤销: " + binding.localToolName()));
+            if (currentRevision != binding.runtimeBindingRevision()) {
+                throw new IllegalStateException("MCP 工具运行时绑定已变更: " + binding.localToolName());
+            }
+        }
     }
 
     private boolean isMcpTool(String name) {

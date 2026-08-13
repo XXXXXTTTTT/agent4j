@@ -188,8 +188,7 @@ class JdbcMcpInstallationRepositoryTest {
         assertThat(repository.findRunningInstallations("other-user", WORKSPACE_ID)).isEmpty();
         UUID otherWorkspace = UUID.fromString("d4289a7e-c87f-46b3-83f5-f893bcba166d");
         assertThat(repository.findRunningInstallations("mcp-test-user", otherWorkspace))
-                .extracting(aggregate -> aggregate.installation().installationId())
-                .containsExactly(globalInstallation.installationId());
+                .isEmpty();
     }
 
     @Test

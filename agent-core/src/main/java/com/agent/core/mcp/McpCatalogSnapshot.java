@@ -14,8 +14,8 @@ public record McpCatalogSnapshot(
         List<McpToolBindingSnapshot> bindings,
         String snapshotSha256) {
     public McpCatalogSnapshot {
-        if (schemaVersion != 1) {
-            throw new IllegalArgumentException("schemaVersion 必须为 1");
+        if (schemaVersion != 1 && schemaVersion != 2) {
+            throw new IllegalArgumentException("schemaVersion 必须为 1 或 2");
         }
         if (actorUserId == null || actorUserId.isBlank()) {
             throw new IllegalArgumentException("actorUserId 不能为空");

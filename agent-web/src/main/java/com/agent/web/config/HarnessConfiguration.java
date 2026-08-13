@@ -365,8 +365,8 @@ public class HarnessConfiguration {
     /** 将同一主体和工作区的运行中 MCP 绑定冻结到新 Run。 */
     @Bean
     @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
-    McpCatalogProvider installedMcpCatalogProvider(McpInstallationRepository repository) {
-        return new InstalledMcpCatalogProvider(repository);
+    McpCatalogProvider installedMcpCatalogProvider(McpInstallationRepository repository, ToolRegistry toolRegistry) {
+        return new InstalledMcpCatalogProvider(repository, toolRegistry);
     }
 
     /** 将已批准 Skill 安装接入会话初始状态快照。 */

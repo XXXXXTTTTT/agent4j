@@ -2,7 +2,9 @@ package com.agent.core.tool;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.time.Duration;
+import java.util.UUID;
 
 /** 统一工具注册、治理、执行与审计端口。 */
 public interface ToolRegistry extends AutoCloseable {
@@ -31,6 +33,16 @@ public interface ToolRegistry extends AutoCloseable {
     /** 返回当前不可变注册快照的修订号。 */
     default long revision() {
         return 0;
+    }
+
+    /** 返回当前已注册工具 handler 的运行时绑定修订号。 */
+    default OptionalLong bindingRevision(String name) {
+        return OptionalLong.empty();
+    }
+
+    /** 返回当前运行中注册表为工具 handler 分配的实例标识。 */
+    default Optional<UUID> bindingInstanceId(String name) {
+        return Optional.empty();
     }
 
     /** 按精确名称查找工具。 */

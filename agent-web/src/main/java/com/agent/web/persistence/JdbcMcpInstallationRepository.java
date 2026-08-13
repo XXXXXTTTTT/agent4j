@@ -224,7 +224,7 @@ public final class JdbcMcpInstallationRepository implements McpInstallationRepos
                 where i.actor_user_id = :actorUserId
                   and i.status = 'RUNNING'
                   and ((i.scope = 'WORKSPACE' and i.workspace_id = :workspaceId)
-                       or i.scope = 'USER_GLOBAL')
+                       or (i.scope = 'USER_GLOBAL' and i.runtime_workspace_id = :workspaceId))
                 order by i.updated_at, i.installation_id
                 """).param("actorUserId", actorUserId).param("workspaceId", workspaceId)
                 .query(this::mapInstallation).list().stream().map(this::aggregate).toList();

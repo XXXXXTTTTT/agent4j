@@ -13,6 +13,8 @@ public record McpToolBindingSnapshot(
         UUID installationId,
         UUID snapshotId,
         long installationVersion,
+        UUID runtimeBindingInstanceId,
+        long runtimeBindingRevision,
         String localToolName,
         String remoteToolName,
         ToolRiskLevel riskLevel,
@@ -23,6 +25,11 @@ public record McpToolBindingSnapshot(
         snapshotId = Objects.requireNonNull(snapshotId, "snapshotId 不能为空");
         if (installationVersion < 0) {
             throw new IllegalArgumentException("installationVersion 不能小于 0");
+        }
+        runtimeBindingInstanceId = Objects.requireNonNull(
+                runtimeBindingInstanceId, "runtimeBindingInstanceId 不能为空");
+        if (runtimeBindingRevision < 0) {
+            throw new IllegalArgumentException("runtimeBindingRevision 不能小于 0");
         }
         localToolName = required(localToolName, "localToolName");
         remoteToolName = required(remoteToolName, "remoteToolName");

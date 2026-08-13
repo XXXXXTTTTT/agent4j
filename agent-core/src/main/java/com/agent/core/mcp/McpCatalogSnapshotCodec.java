@@ -22,9 +22,13 @@ public final class McpCatalogSnapshotCodec {
     private static final Set<String> TOP_LEVEL_FIELDS = Set.of(
             "schemaVersion", "actorUserId", "workspaceId", "installationsUpdatedAt",
             "bindings", "snapshotSha256");
-    private static final Set<String> BINDING_FIELDS = Set.of(
+    private static final Set<String> V1_BINDING_FIELDS = Set.of(
             "installationId", "snapshotId", "installationVersion", "localToolName",
             "remoteToolName", "riskLevel", "requiredCapabilities", "bindingCreatedAt");
+    private static final Set<String> V2_BINDING_FIELDS = Set.of(
+            "installationId", "snapshotId", "installationVersion", "runtimeBindingInstanceId", "runtimeBindingRevision",
+            "localToolName", "remoteToolName", "riskLevel", "requiredCapabilities", "bindingCreatedAt");
+    private static final UUID LEGACY_RUNTIME_BINDING_INSTANCE_ID = new UUID(0, 0);
 
     private final ObjectMapper objectMapper;
 
@@ -54,6 +58,10 @@ public final class McpCatalogSnapshotCodec {
             rejectUnknown(parsed, TOP_LEVEL_FIELDS, "MCP 目录快照");
             String exactActor = exactText(parsed, "actorUserId");
             UUID exactWorkspace = UUID.fromString(exactText(parsed, "workspaceId"));
+            int schemaVersion = exactInt(parsed, "schemaVersion");
+            if (schemaVersion != 1 && schemaVersion != 2) {
+                throw new IllegalArgumentException("schemaVersion 必须为 1 或 2");
+            }
             List<McpToolBindingSnapshot> bindings = new ArrayList<>();
             JsonNode bindingsNode = parsed.get("bindings");
             if (bindingsNode == null || !bindingsNode.isArray()) {
@@ -61,11 +69,14 @@ public final class McpCatalogSnapshotCodec {
             }
             Set<String> localNames = new HashSet<>();
             for (JsonNode binding : bindingsNode) {
-                rejectUnknown(binding, BINDING_FIELDS, "MCP 工具绑定");
+                rejectUnknown(binding, schemaVersion == 1 ? V1_BINDING_FIELDS : V2_BINDING_FIELDS, "MCP 工具绑定");
                 McpToolBindingSnapshot decoded = new McpToolBindingSnapshot(
                         UUID.fromString(exactText(binding, "installationId")),
                         UUID.fromString(exactText(binding, "snapshotId")),
                         exactLong(binding, "installationVersion"),
+                        schemaVersion == 1 ? LEGACY_RUNTIME_BINDING_INSTANCE_ID
+                                : UUID.fromString(exactText(binding, "runtimeBindingInstanceId")),
+                        schemaVersion == 1 ? 0 : exactLong(binding, "runtimeBindingRevision"),
                         exactText(binding, "localToolName"), exactText(binding, "remoteToolName"),
                         ToolRiskLevel.valueOf(exactText(binding, "riskLevel")),
                         capabilities(binding, "requiredCapabilities"),
@@ -76,7 +87,7 @@ public final class McpCatalogSnapshotCodec {
                 bindings.add(decoded);
             }
             McpCatalogSnapshot snapshot = new McpCatalogSnapshot(
-                    exactInt(parsed, "schemaVersion"), exactActor, exactWorkspace,
+                    schemaVersion, exactActor, exactWorkspace,
                     Instant.parse(exactText(parsed, "installationsUpdatedAt")), bindings,
                     exactText(parsed, "snapshotSha256"));
             if (!actorUserId.equals(exactActor) || !workspaceId.equals(exactWorkspace)) {
@@ -107,6 +118,10 @@ public final class McpCatalogSnapshotCodec {
                     node.put("installationId", binding.installationId().toString());
                     node.put("snapshotId", binding.snapshotId().toString());
                     node.put("installationVersion", binding.installationVersion());
+                    if (snapshot.schemaVersion() == 2) {
+                        node.put("runtimeBindingInstanceId", binding.runtimeBindingInstanceId().toString());
+                        node.put("runtimeBindingRevision", binding.runtimeBindingRevision());
+                    }
                     node.put("localToolName", binding.localToolName());
                     node.put("remoteToolName", binding.remoteToolName());
                     node.put("riskLevel", binding.riskLevel().name());

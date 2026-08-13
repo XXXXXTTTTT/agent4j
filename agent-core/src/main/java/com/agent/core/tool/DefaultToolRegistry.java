@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
@@ -58,6 +59,7 @@ public final class DefaultToolRegistry implements ToolRegistry {
     private static final String BUILTIN_OWNER_ID = "builtin";
 
     private final Object lifecycleMonitor = new Object();
+    private final UUID runtimeInstanceId = UUID.randomUUID();
     private volatile RegistrySnapshot snapshot = RegistrySnapshot.empty();
     private final ExecutorService executor;
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -166,16 +168,19 @@ public final class DefaultToolRegistry implements ToolRegistry {
             }
             HashMap<String, ToolDefinition> nextDefinitions = new HashMap<>(current.definitions());
             HashMap<String, String> nextOwners = new HashMap<>(current.owners());
+            HashMap<String, Long> nextBindingRevisions = new HashMap<>(current.bindingRevisions());
             HashMap<String, ToolOwnerState> nextStates = new HashMap<>(current.ownerStates());
             HashMap<String, Integer> nextInFlight = new HashMap<>(current.inFlight());
+            long nextBindingRevision = current.nextBindingRevision();
             for (ToolDefinition definition : batch) {
                 nextDefinitions.put(definition.name(), definition);
                 nextOwners.put(definition.name(), ownerId);
+                nextBindingRevisions.put(definition.name(), nextBindingRevision++);
             }
             nextStates.put(ownerId, ToolOwnerState.ACTIVE);
             nextInFlight.putIfAbsent(ownerId, 0);
-            snapshot = new RegistrySnapshot(nextDefinitions, nextOwners, nextStates, nextInFlight,
-                    current.revision() + 1);
+            snapshot = new RegistrySnapshot(nextDefinitions, nextOwners, nextBindingRevisions, nextStates, nextInFlight,
+                    current.revision() + 1, nextBindingRevision);
         }
     }
 
@@ -227,18 +232,20 @@ public final class DefaultToolRegistry implements ToolRegistry {
             RegistrySnapshot ready = snapshot;
             HashMap<String, ToolDefinition> nextDefinitions = new HashMap<>(ready.definitions());
             HashMap<String, String> nextOwners = new HashMap<>(ready.owners());
+            HashMap<String, Long> nextBindingRevisions = new HashMap<>(ready.bindingRevisions());
             ready.owners().forEach((name, registeredOwner) -> {
                 if (ownerId.equals(registeredOwner)) {
                     nextDefinitions.remove(name);
                     nextOwners.remove(name);
+                    nextBindingRevisions.remove(name);
                 }
             });
             HashMap<String, ToolOwnerState> nextStates = new HashMap<>(ready.ownerStates());
             HashMap<String, Integer> nextInFlight = new HashMap<>(ready.inFlight());
             nextStates.remove(ownerId);
             nextInFlight.remove(ownerId);
-            snapshot = new RegistrySnapshot(nextDefinitions, nextOwners, nextStates, nextInFlight,
-                    ready.revision() + 1);
+            snapshot = new RegistrySnapshot(nextDefinitions, nextOwners, nextBindingRevisions, nextStates, nextInFlight,
+                    ready.revision() + 1, ready.nextBindingRevision());
             lifecycleMonitor.notifyAll();
         }
     }
@@ -247,6 +254,25 @@ public final class DefaultToolRegistry implements ToolRegistry {
     public long revision() {
         ensureOpen();
         return snapshot.revision();
+    }
+
+    @Override
+    public OptionalLong bindingRevision(String name) {
+        ensureOpen();
+        if (name == null || name.isBlank()) {
+            return OptionalLong.empty();
+        }
+        Long value = snapshot.bindingRevisions().get(name);
+        return value == null ? OptionalLong.empty() : OptionalLong.of(value);
+    }
+
+    @Override
+    public Optional<UUID> bindingInstanceId(String name) {
+        ensureOpen();
+        if (name == null || name.isBlank() || !snapshot.bindingRevisions().containsKey(name)) {
+            return Optional.empty();
+        }
+        return Optional.of(runtimeInstanceId);
     }
 
     @Override
@@ -603,31 +629,39 @@ public final class DefaultToolRegistry implements ToolRegistry {
     private record RegistrySnapshot(
             Map<String, ToolDefinition> definitions,
             Map<String, String> owners,
+            Map<String, Long> bindingRevisions,
             Map<String, ToolOwnerState> ownerStates,
             Map<String, Integer> inFlight,
-            long revision) {
+            long revision,
+            long nextBindingRevision) {
 
         private RegistrySnapshot {
             definitions = Map.copyOf(definitions);
             owners = Map.copyOf(owners);
+            bindingRevisions = Map.copyOf(bindingRevisions);
             ownerStates = Map.copyOf(ownerStates);
             inFlight = Map.copyOf(inFlight);
+            if (nextBindingRevision < 1) {
+                throw new IllegalArgumentException("nextBindingRevision 必须大于 0");
+            }
         }
 
         private static RegistrySnapshot empty() {
-            return new RegistrySnapshot(Map.of(), Map.of(), Map.of(), Map.of(), 0);
+            return new RegistrySnapshot(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), 0, 1);
         }
 
         private RegistrySnapshot withOwnerState(String ownerId, ToolOwnerState state) {
             HashMap<String, ToolOwnerState> nextStates = new HashMap<>(ownerStates);
             nextStates.put(ownerId, state);
-            return new RegistrySnapshot(definitions, owners, nextStates, inFlight, revision + 1);
+            return new RegistrySnapshot(definitions, owners, bindingRevisions, nextStates, inFlight,
+                    revision + 1, nextBindingRevision);
         }
 
         private RegistrySnapshot withInFlight(String ownerId, int count) {
             HashMap<String, Integer> nextInFlight = new HashMap<>(inFlight);
             nextInFlight.put(ownerId, count);
-            return new RegistrySnapshot(definitions, owners, ownerStates, nextInFlight, revision);
+            return new RegistrySnapshot(definitions, owners, bindingRevisions, ownerStates, nextInFlight,
+                    revision, nextBindingRevision);
         }
     }
 }

@@ -2,12 +2,15 @@ package com.agent.web.mcp.installation;
 
 import com.agent.core.intent.RequiredCapability;
 import com.agent.core.mcp.McpCatalogSnapshot;
+import com.agent.core.tool.DefaultToolRegistry;
+import com.agent.core.tool.ToolDefinition;
 import com.agent.core.tool.ToolRiskLevel;
 import com.agent.web.capability.InstallationScope;
 import org.junit.jupiter.api.Test;
 
 import java.net.URI;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -22,7 +25,7 @@ class InstalledMcpCatalogProviderTest {
     private static final Instant NOW = Instant.parse("2026-08-13T00:00:00Z");
 
     @Test
-    void resolvesOnlyCurrentActorWorkspaceAndUserGlobalRunningBindings() {
+    void resolvesOnlyCurrentActorAndActualRuntimeWorkspaceRunningBindings() {
         McpInstallationAggregate workspaceRunning = aggregate(
                 "user-a", InstallationScope.WORKSPACE, WORKSPACE_A, McpInstallationStatus.RUNNING, "workspace.echo");
         McpInstallationAggregate globalRunning = aggregate(
@@ -36,12 +39,30 @@ class InstalledMcpCatalogProviderTest {
         RecordingRepository repository = new RecordingRepository(List.of(
                 workspaceRunning, globalRunning, otherWorkspace, otherActor, stopped));
 
-        McpCatalogSnapshot snapshot = new InstalledMcpCatalogProvider(repository).resolve("user-a", WORKSPACE_A);
+        try (DefaultToolRegistry registry = registryFor(
+                workspaceRunning, globalRunning, otherWorkspace, otherActor, stopped)) {
+            McpCatalogSnapshot snapshot = new InstalledMcpCatalogProvider(repository, registry)
+                    .resolve("user-a", WORKSPACE_A);
 
-        assertThat(repository.actorUserId).isEqualTo("user-a");
-        assertThat(repository.workspaceId).isEqualTo(WORKSPACE_A);
-        assertThat(snapshot.bindings()).extracting(binding -> binding.localToolName())
-                .containsExactly("mcp.global.echo", "mcp.workspace.echo");
+            assertThat(repository.actorUserId).isEqualTo("user-a");
+            assertThat(repository.workspaceId).isEqualTo(WORKSPACE_A);
+            assertThat(snapshot.bindings()).extracting(binding -> binding.localToolName())
+                    .containsExactly("mcp.global.echo", "mcp.workspace.echo");
+        }
+    }
+
+    @Test
+    void excludesUserGlobalBindingRunningInAnotherWorkspace() {
+        McpInstallationAggregate globalRunningInWorkspaceA = aggregate(
+                "user-a", InstallationScope.USER_GLOBAL, null, McpInstallationStatus.RUNNING, "global.echo");
+        RecordingRepository repository = new RecordingRepository(List.of(globalRunningInWorkspaceA));
+
+        try (DefaultToolRegistry registry = registryFor(globalRunningInWorkspaceA)) {
+            McpCatalogSnapshot snapshot = new InstalledMcpCatalogProvider(repository, registry)
+                    .resolve("user-a", WORKSPACE_B);
+
+            assertThat(snapshot.bindings()).isEmpty();
+        }
     }
 
     @Test
@@ -49,14 +70,16 @@ class InstalledMcpCatalogProviderTest {
         McpInstallationAggregate running = aggregate(
                 "user-a", InstallationScope.WORKSPACE, WORKSPACE_A, McpInstallationStatus.RUNNING, "workspace.echo");
         RecordingRepository repository = new RecordingRepository(List.of(running));
-        InstalledMcpCatalogProvider provider = new InstalledMcpCatalogProvider(repository);
+        try (DefaultToolRegistry registry = registryFor(running)) {
+            InstalledMcpCatalogProvider provider = new InstalledMcpCatalogProvider(repository, registry);
 
-        McpCatalogSnapshot frozen = provider.resolve("user-a", WORKSPACE_A);
-        repository.installations = List.of();
+            McpCatalogSnapshot frozen = provider.resolve("user-a", WORKSPACE_A);
+            repository.installations = List.of();
 
-        assertThat(frozen.bindings()).singleElement().extracting(binding -> binding.localToolName())
-                .isEqualTo("mcp.workspace.echo");
-        assertThat(repository.calls).isEqualTo(1);
+            assertThat(frozen.bindings()).singleElement().extracting(binding -> binding.localToolName())
+                    .isEqualTo("mcp.workspace.echo");
+            assertThat(repository.calls).isEqualTo(1);
+        }
     }
 
     private McpInstallationAggregate aggregate(
@@ -81,6 +104,19 @@ class InstalledMcpCatalogProviderTest {
         McpToolBindingRecord binding = new McpToolBindingRecord(installationId, "mcp." + remoteToolName,
                 remoteToolName, ToolRiskLevel.LOW, java.util.Set.of(RequiredCapability.TOOL), NOW);
         return new McpInstallationAggregate(installation, source, null, List.of(binding));
+    }
+
+    private DefaultToolRegistry registryFor(McpInstallationAggregate... aggregates) {
+        DefaultToolRegistry registry = new DefaultToolRegistry();
+        for (McpInstallationAggregate aggregate : aggregates) {
+            registry.registerOwned(aggregate.installation().installationId().toString(), aggregate.bindings().stream()
+                    .map(binding -> new ToolDefinition(binding.localToolName(), "测试 MCP 工具",
+                            new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode().put("type", "object"),
+                            binding.requiredCapabilities(), binding.riskLevel(), Duration.ofSeconds(1),
+                            (call, context) -> new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()))
+                    .toList());
+        }
+        return registry;
     }
 
     private static final class RecordingRepository implements McpInstallationRepository {
