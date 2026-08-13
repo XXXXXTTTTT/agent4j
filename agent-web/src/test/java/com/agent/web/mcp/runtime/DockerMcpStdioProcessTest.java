@@ -33,4 +33,20 @@ class DockerMcpStdioProcessTest {
 
         assertThat(destroyed).hasValue(1);
     }
+
+    @Test
+    void recoveryPreparationRedirectsTheNextDestroyToLocalDetach() {
+        AtomicInteger destroyed = new AtomicInteger();
+        AtomicInteger detached = new AtomicInteger();
+        DockerMcpStdioProcess process = new DockerMcpStdioProcess(
+                new ByteArrayInputStream(new byte[0]), new java.io.ByteArrayOutputStream(),
+                new ByteArrayInputStream(new byte[0]), "container-1", destroyed::incrementAndGet, detached::incrementAndGet);
+
+        process.prepareForRecovery();
+        process.destroy();
+
+        assertThat(detached).hasValue(1);
+        assertThat(destroyed).hasValue(0);
+        assertThat(process.isAlive()).isFalse();
+    }
 }

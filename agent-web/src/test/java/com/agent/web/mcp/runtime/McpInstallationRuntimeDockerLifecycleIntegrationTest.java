@@ -178,6 +178,118 @@ class McpInstallationRuntimeDockerLifecycleIntegrationTest {
     }
 
     @Test
+    void recoversRunningDockerMcpAfterRuntimeRestartThenUninstallsIt(@TempDir Path workspaceRoot) throws Exception {
+        DataSource dataSource = dataSource();
+        Flyway.configure().dataSource(dataSource).load().migrate();
+        JdbcClient jdbc = JdbcClient.create(dataSource);
+        jdbc.sql("truncate table agent_mcp_installations, agent_mcp_installation_snapshots, agent_capability_management_audit, "
+                + "agent_workspace_members, agent_workspaces, agent_users cascade").update();
+        ObjectMapper json = new ObjectMapper();
+        TransactionTemplate transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+        JdbcMcpInstallationRepository installations = new JdbcMcpInstallationRepository(jdbc, transactions, json);
+        JdbcConversationRepository workspaces = new JdbcConversationRepository(jdbc, transactions, Clock.systemUTC());
+        Actor actor = new Actor(ACTOR_USER_ID, "MCP Restart Recovery User");
+        UUID workspaceId = UUID.randomUUID();
+        workspaces.ensureDefaultWorkspace(workspaceId, actor, "MCP Restart Recovery", workspaceRoot,
+                "mcp-restart-recovery", Instant.EPOCH);
+        WorkspaceAccessService access = new WorkspaceAccessService(workspaces, workspaceRoot, Clock.systemUTC());
+        McpInstallationService installationService = new McpInstallationService(() -> actor, access, installations,
+                CapabilityManagementAuditSink.noop(), Clock.systemUTC(), Duration.ofMinutes(5), UUID::randomUUID,
+                "node:22-alpine");
+
+        UUID snapshotId = UUID.randomUUID();
+        UUID installationId = UUID.randomUUID();
+        McpSourceSnapshot snapshot = new McpSourceSnapshot(snapshotId, "fixture", "src/fixture",
+                URI.create("https://example.invalid/fixture"), "0123456789012345678901234567890123456789", Map.of(),
+                "c".repeat(64), "2026.7.4", "controlled fixture", "MIT", "npx",
+                List.of("-y", "@modelcontextprotocol/server-everything@2026.7.4"), "mcp-server-everything", List.of(),
+                "controlled fixture", Instant.EPOCH);
+        McpInstallationRecord installation = new McpInstallationRecord(installationId, snapshotId,
+                InstallationScope.WORKSPACE, workspaceId, ACTOR_USER_ID, McpInstallationStatus.STOPPED,
+                "d".repeat(64), Instant.EPOCH, Instant.EPOCH, Instant.EPOCH, ToolRiskLevel.HIGH,
+                Set.of(RequiredCapability.TOOL), WorkspaceMountMode.READ_ONLY, McpNetworkMode.NONE,
+                "node:22-alpine", true, null, null, null, 0);
+        installations.confirmInstallation(new McpInstallationCommand(snapshot, installation,
+                audit(installationId, workspaceId, snapshot, "MCP_INSTALLATION_CONFIRMED", "STOPPED", "STOPPED")));
+        Path materialRoot = java.nio.file.Files.createDirectory(workspaceRoot.resolve("mcp-materials"));
+        try (DockerMcpMaterialPreparationRunner preparationRunner = new DockerMcpMaterialPreparationRunner(
+                materialRoot, "node:22-alpine", "", json, Clock.systemUTC())) {
+            new McpMaterialPreparationService(() -> actor, access, installations, preparationRunner, Clock.systemUTC())
+                    .prepare(workspaceId, installationId, installation.version());
+        }
+
+        McpRuntimeMaterialProvider materials = new FileSystemMcpRuntimeMaterialProvider(materialRoot,
+                source -> installations.findPreparedMaterial(source.snapshotId()).map(value ->
+                        new McpRuntimeMaterialProvider.PreparedMaterial(value.directory(), value.sha256(), value.command(), value.arguments()))
+                        .orElse(null));
+        McpInstallationRuntime.McpRuntimeConfiguration configuration = new McpInstallationRuntime.McpRuntimeConfiguration(
+                "2025-06-18", "agent4j", "test", "/mcp-material", "", "", "/workspace",
+                128L * 1024 * 1024, 100_000_000L, 64, 1_048_576, 4_194_304, 1_048_576,
+                Duration.ofSeconds(120), Duration.ofSeconds(60), Duration.ofSeconds(30));
+        DefaultToolRegistry firstRegistry = new DefaultToolRegistry();
+        DockerMcpStdioRunner firstRunner = new DockerMcpStdioRunner();
+        McpInstallationRuntime firstRuntime = new McpInstallationRuntime(() -> actor, access, installations, materials,
+                McpRuntimeSecretProvider.declaredNamesOnly(), firstRunner, firstRegistry, json, configuration, Clock.systemUTC());
+        String containerId = null;
+        try {
+            McpInstallationRecord running = firstRuntime.start(workspaceId, installationId,
+                    new McpInstallationRuntime.LifecycleRequest(1, workspaceId, Map.of()));
+            containerId = running.containerId();
+            assertThat(running.status()).isEqualTo(McpInstallationStatus.RUNNING);
+            assertThat(containerId).isNotBlank();
+
+            // 模拟进程被终止：释放本地流和注册表，但不能按正常关闭路径销毁仍在运行的容器。
+            firstRuntime.detachForRecovery();
+            firstRegistry.close();
+            firstRunner.closeForRecovery();
+            try (DockerClient docker = dockerClient()) {
+                assertThat(docker.inspectContainerCmd(containerId).exec().getState().getRunning()).isTrue();
+            }
+
+            try (DefaultToolRegistry recoveredRegistry = new DefaultToolRegistry();
+                 DockerMcpStdioRunner recoveredRunner = new DockerMcpStdioRunner()) {
+                McpInstallationRuntime recoveredRuntime = new McpInstallationRuntime(() -> actor, access, installations, materials,
+                        McpRuntimeSecretProvider.declaredNamesOnly(), recoveredRunner, recoveredRegistry, json, configuration,
+                        Clock.systemUTC());
+                new McpRuntimeRecovery(installations, recoveredRunner, recoveredRuntime).recover();
+                var recovered = installations.findInstallation(installationId, ACTOR_USER_ID, workspaceId).orElseThrow();
+                assertThat(recovered.installation().status()).isEqualTo(McpInstallationStatus.RUNNING);
+                assertThat(recovered.installation().containerId()).isEqualTo(containerId);
+                String echoToolName = recovered.bindings().stream().filter(binding -> binding.remoteToolName().equals("echo"))
+                        .findFirst().orElseThrow().localToolName();
+                assertThat(recoveredRegistry.execute(new ToolCall("recovery-echo", echoToolName,
+                        json.createObjectNode().put("message", "recovered")), new ToolInvocationContext(UUID.randomUUID(), "ops",
+                        ACTOR_USER_ID, workspaceRoot, Set.of(RequiredCapability.TOOL), true)).status())
+                        .isEqualTo(ToolResultStatus.SUCCEEDED);
+
+                McpInstallationRecord stopped = recoveredRuntime.stop(workspaceId, installationId,
+                        new McpInstallationRuntime.LifecycleRequest(recovered.installation().version(), workspaceId, Map.of()));
+                assertThat(stopped.status()).isEqualTo(McpInstallationStatus.STOPPED);
+                try (DockerClient docker = dockerClient()) {
+                    assertThat(docker.listContainersCmd().withShowAll(true).withIdFilter(Set.of(containerId)).exec()).isEmpty();
+                }
+                assertThat(jdbc.sql("select count(*) from agent_capability_management_audit where installation_id = :installationId "
+                                + "and event_type = 'MCP_INSTALLATION_STOPPED' and from_status = 'STOPPING' and to_status = 'STOPPED'")
+                        .param("installationId", installationId).query(Long.class).single()).isEqualTo(1L);
+                McpInstallationRecord removed = installationService.uninstall(workspaceId, installationId, stopped.version());
+                assertThat(removed.installationId()).isEqualTo(installationId);
+                assertThat(installations.findInstallation(installationId, ACTOR_USER_ID, workspaceId)).isEmpty();
+                assertThat(jdbc.sql("select count(*) from agent_mcp_tool_bindings where installation_id = :installationId")
+                        .param("installationId", installationId).query(Long.class).single()).isZero();
+                assertThat(recoveredRegistry.find(echoToolName)).isEmpty();
+                assertThat(jdbc.sql("select count(*) from agent_capability_management_audit where installation_id = :installationId and event_type = 'MCP_INSTALLATION_REMOVED'")
+                        .param("installationId", installationId).query(Long.class).single()).isEqualTo(1L);
+                recoveredRuntime.close();
+            }
+        } finally {
+            firstRuntime.detachForRecovery();
+            firstRegistry.close();
+            firstRunner.closeForRecovery();
+            removeContainerIfPresent(containerId);
+        }
+    }
+
+    @Test
     void httpCatalogPreviewConfirmMaterialStartAndStopUseRealDockerAndPostgres(@TempDir Path workspaceRoot) throws Exception {
         DataSource dataSource = dataSource();
         Flyway.configure().dataSource(dataSource).load().migrate();
@@ -317,6 +429,19 @@ class McpInstallationRuntimeDockerLifecycleIntegrationTest {
         DockerHttpClient http = new ApacheDockerHttpClient.Builder()
                 .dockerHost(config.getDockerHost()).sslConfig(config.getSSLConfig()).build();
         return DockerClientImpl.getInstance(config, http);
+    }
+
+    private static void removeContainerIfPresent(String containerId) {
+        if (containerId == null || containerId.isBlank()) {
+            return;
+        }
+        try (DockerClient docker = dockerClient()) {
+            if (!docker.listContainersCmd().withShowAll(true).withIdFilter(Set.of(containerId)).exec().isEmpty()) {
+                docker.removeContainerCmd(containerId).withForce(true).exec();
+            }
+        } catch (Exception exception) {
+            throw new IllegalStateException("清理 MCP 恢复演练容器失败: " + containerId, exception);
+        }
     }
 
 }

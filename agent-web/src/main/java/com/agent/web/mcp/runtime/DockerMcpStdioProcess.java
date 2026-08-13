@@ -14,14 +14,17 @@ public final class DockerMcpStdioProcess implements McpStdioProcess {
     private final InputStream stderr;
     private final String containerId;
     private final Runnable destroyAction;
+    private final Runnable detachAction;
     private final AtomicBoolean active = new AtomicBoolean(true);
+    private final AtomicBoolean detaching = new AtomicBoolean();
 
     DockerMcpStdioProcess(
             InputStream stdout,
             OutputStream stdin,
             InputStream stderr,
             String containerId,
-            Runnable destroyAction) {
+            Runnable destroyAction,
+            Runnable detachAction) {
         this.stdout = Objects.requireNonNull(stdout, "stdout 不能为空");
         this.stdin = Objects.requireNonNull(stdin, "stdin 不能为空");
         this.stderr = Objects.requireNonNull(stderr, "stderr 不能为空");
@@ -30,10 +33,20 @@ public final class DockerMcpStdioProcess implements McpStdioProcess {
         }
         this.containerId = containerId;
         this.destroyAction = Objects.requireNonNull(destroyAction, "destroyAction 不能为空");
+        this.detachAction = Objects.requireNonNull(detachAction, "detachAction 不能为空");
+    }
+
+    DockerMcpStdioProcess(
+            InputStream stdout,
+            OutputStream stdin,
+            InputStream stderr,
+            String containerId,
+            Runnable destroyAction) {
+        this(stdout, stdin, stderr, containerId, destroyAction, () -> { });
     }
 
     DockerMcpStdioProcess(InputStream stdout, OutputStream stdin, InputStream stderr, Runnable destroyAction) {
-        this(stdout, stdin, stderr, "test-container", destroyAction);
+        this(stdout, stdin, stderr, "test-container", destroyAction, () -> { });
     }
 
     @Override public InputStream stdout() { return stdout; }
@@ -47,10 +60,27 @@ public final class DockerMcpStdioProcess implements McpStdioProcess {
         return active.compareAndSet(true, false);
     }
 
+    /** 模拟宿主进程消失时只断开本地 stdio，保留仍在运行的 Docker 容器供恢复器接管。 */
+    void detachForRecovery() {
+        detaching.set(true);
+        if (active.compareAndSet(true, false)) {
+            detachAction.run();
+        }
+    }
+
+    /** 标记下一次协议层 close 触发的 destroy 为本地断连，不删除受管 Docker 容器。 */
+    void prepareForRecovery() {
+        detaching.set(true);
+    }
+
     @Override
     public void destroy() {
         if (active.compareAndSet(true, false)) {
-            destroyAction.run();
+            if (detaching.get()) {
+                detachAction.run();
+            } else {
+                destroyAction.run();
+            }
         }
     }
 }

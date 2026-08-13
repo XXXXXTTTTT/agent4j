@@ -524,6 +524,16 @@ class DockerMcpStdioRunnerContractTest {
     }
 
     @Test
+    void recoveryCloseIsIdempotentAndCanBeFollowedByNormalClose() {
+        StartedRunner started = startableRunner(spec(Set.of()));
+        DockerMcpStdioRunner runner = started.runner();
+
+        runner.closeForRecovery();
+
+        assertThatCode(runner::close).doesNotThrowAnyException();
+    }
+
+    @Test
     void concurrentCloseWaitsForStartThenCleansUpCreatedContainer() throws Exception {
         StartedRunner started = startableRunner(spec(Set.of()));
         CountDownLatch createEntered = new CountDownLatch(1);

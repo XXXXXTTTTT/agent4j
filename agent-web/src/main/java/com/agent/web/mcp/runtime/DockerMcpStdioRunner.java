@@ -220,6 +220,12 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
             process = new DockerMcpStdioProcess(stdout.input(), stdin, stderr.input(), id, () -> {
                 cleanup(id, callbackRef.get(), stdinRef, stdoutRef, stderrRef);
                 processes.removeIf(value -> value == processRef.get());
+            }, () -> {
+                close(callbackRef.get());
+                close(stdinRef);
+                close(stdoutRef);
+                close(stderrRef);
+                processes.removeIf(value -> value == processRef.get());
             });
             processRef.set(process);
             processes.add(process);
@@ -549,6 +555,42 @@ public final class DockerMcpStdioRunner implements AutoCloseable {
             }
         } finally { lifecycleLock.unlock(); }
         if (waitForClose) awaitCloseCompletion();
+    }
+
+    /** 模拟应用异常退出时关闭本地 Docker 连接而不停止或删除已启动的受管容器。 */
+    void closeForRecovery() {
+        lifecycleLock.lock();
+        try {
+            if (closed) return;
+            closed = true;
+            closing = true;
+            for (DockerMcpStdioProcess process : List.copyOf(processes)) process.detachForRecovery();
+            processes.clear();
+            cleanupExecutor.shutdownNow();
+            listenerExecutor.shutdownNow();
+            closeExecutor.shutdownNow();
+            awaitExecutorTermination(cleanupExecutor);
+            awaitExecutorTermination(listenerExecutor);
+            awaitExecutorTermination(closeExecutor);
+            docker.close();
+            closeCompletion.complete(null);
+        } catch (IOException exception) {
+            closeCompletion.completeExceptionally(new IllegalStateException("关闭 Docker MCP 恢复演练连接失败", exception));
+            throw new IllegalStateException("关闭 Docker MCP 恢复演练连接失败", exception);
+        } finally {
+            lifecycleLock.unlock();
+        }
+    }
+
+    private static void awaitExecutorTermination(ExecutorService executor) {
+        try {
+            if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            executor.shutdownNow();
+        }
     }
 
     private void finishClose() {

@@ -207,6 +207,13 @@ public final class McpInstallationRuntime implements AutoCloseable {
         close();
     }
 
+    /** 恢复演练专用：模拟进程突然终止，只释放本地连接，不改变持久化状态也不清理受管容器。 */
+    void detachForRecovery() {
+        closing = true;
+        active.values().forEach(ActiveRuntime::detachForRecovery);
+        active.clear();
+    }
+
     /** 恢复 STOPPING 状态时继续已开始的 drain、容器销毁与状态收敛。 */
     public void recoverStopping(McpInstallationAggregate aggregate, List<DockerMcpContainer> containers) {
         McpInstallationRecord installation = aggregate.installation();
@@ -437,6 +444,11 @@ public final class McpInstallationRuntime implements AutoCloseable {
     /** 运行时连接三元组；关闭 transport 会销毁对应 Docker 容器。 */
     private record ActiveRuntime(McpClient client, DockerMcpStdioProcess process) implements AutoCloseable {
         @Override public void close() { client.close(); }
+
+        void detachForRecovery() {
+            process.prepareForRecovery();
+            client.close();
+        }
     }
 
     /** 将配置和协议标识注入运行时，避免从 HTTP MCP 配置继承配额。 */
