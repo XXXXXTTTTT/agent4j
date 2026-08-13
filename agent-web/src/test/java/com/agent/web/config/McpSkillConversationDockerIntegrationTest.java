@@ -4,9 +4,13 @@ import com.agent.core.engine.AgentRunService;
 import com.agent.core.engine.AgentState;
 import com.agent.core.engine.ExecutionBudget;
 import com.agent.core.engine.GraphRegistry;
+import com.agent.core.engine.InterruptPolicy;
 import com.agent.core.engine.RunCheckpoint;
 import com.agent.core.engine.RunStatus;
 import com.agent.core.engine.StateGraph;
+import com.agent.core.harness.HarnessEvent;
+import com.agent.core.harness.HarnessEventType;
+import com.agent.core.harness.HarnessHookChain;
 import com.agent.core.intent.RequiredCapability;
 import com.agent.core.llm.LlmClient;
 import com.agent.core.llm.ModelEndpoint;
@@ -22,18 +26,17 @@ import com.agent.core.tool.JacksonToolSchemaValidator;
 import com.agent.core.tool.ToolAuditEvent;
 import com.agent.core.tool.ToolRiskLevel;
 import com.agent.core.trace.TraceEvent;
-import com.agent.web.capability.CapabilityManagementAuditEvent;
 import com.agent.web.capability.CapabilityManagementAuditSink;
 import com.agent.web.capability.InstallationScope;
 import com.agent.web.conversation.ConversationService;
 import com.agent.web.identity.Actor;
 import com.agent.web.mcp.installation.InstalledMcpCatalogProvider;
-import com.agent.web.mcp.installation.McpInstallationCommand;
 import com.agent.web.mcp.installation.McpInstallationRecord;
 import com.agent.web.mcp.installation.McpInstallationStatus;
-import com.agent.web.mcp.installation.McpNetworkMode;
-import com.agent.web.mcp.installation.McpSourceSnapshot;
+import com.agent.web.mcp.installation.McpInstallationService;
 import com.agent.web.mcp.installation.WorkspaceMountMode;
+import com.agent.web.mcp.catalog.OfficialMcpCatalogClient;
+import com.agent.web.mcp.catalog.OfficialMcpServerRecord;
 import com.agent.web.mcp.runtime.DockerMcpMaterialPreparationRunner;
 import com.agent.web.mcp.runtime.DockerMcpStdioRunner;
 import com.agent.web.mcp.runtime.FileSystemMcpRuntimeMaterialProvider;
@@ -46,9 +49,8 @@ import com.agent.web.persistence.JdbcConversationRepository;
 import com.agent.web.persistence.JdbcMcpInstallationRepository;
 import com.agent.web.persistence.JdbcSkillInstallationRepository;
 import com.agent.web.skill.InstalledSkillCatalogProvider;
-import com.agent.web.skill.SkillInstallationRecord;
-import com.agent.web.skill.SkillInstallationStatus;
-import com.agent.web.skill.SkillSnapshotRecord;
+import com.agent.web.skill.GitHubSkillCatalogClient;
+import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.workspace.WorkspaceAccessService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -74,7 +76,6 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -85,10 +86,11 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** 真实 Docker MCP、已批准 Skill 与受控 OpenAI function call 的会话闭环验证。 */
+/** 真实 Docker MCP、通过受控目录确认的 Skill 与受控 OpenAI function call 的会话闭环验证。 */
 class McpSkillConversationDockerIntegrationTest {
     private static final String ACTOR_USER_ID = "mcp-skill-e2e-user";
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
@@ -132,20 +134,21 @@ class McpSkillConversationDockerIntegrationTest {
         List<TraceEvent> traces = new ArrayList<>();
         AtomicInteger modelRequests = new AtomicInteger();
 
-        UUID snapshotId = UUID.randomUUID();
-        UUID installationId = UUID.randomUUID();
-        McpSourceSnapshot source = new McpSourceSnapshot(snapshotId, "everything", "src/everything",
-                URI.create("https://example.invalid/everything"), "0123456789012345678901234567890123456789", Map.of(),
-                "a".repeat(64), "2026.7.4", "controlled everything fixture", "MIT", "npx",
-                List.of("-y", "@modelcontextprotocol/server-everything@2026.7.4"), "mcp-server-everything", List.of(),
-                "controlled everything fixture", Instant.EPOCH);
-        McpInstallationRecord installation = new McpInstallationRecord(installationId, snapshotId,
-                InstallationScope.WORKSPACE, workspaceId, ACTOR_USER_ID, McpInstallationStatus.STOPPED,
-                "b".repeat(64), Instant.EPOCH, Instant.EPOCH, Instant.EPOCH, ToolRiskLevel.LOW,
-                Set.of(RequiredCapability.TOOL), WorkspaceMountMode.READ_ONLY, McpNetworkMode.NONE,
-                "node:22-alpine", true, null, null, null, 0);
-        mcps.confirmInstallation(new McpInstallationCommand(source, installation,
-                mcpAudit(installationId, workspaceId, source, "MCP_INSTALLATION_CONFIRMED", "STOPPED", "STOPPED")));
+        OfficialMcpCatalogClient officialCatalog = new OfficialMcpCatalogClient(
+                McpSkillConversationDockerIntegrationTest::officialCatalogResponse, json,
+                URI.create("https://api.github.com/repos/modelcontextprotocol/servers/"), "main",
+                Duration.ofSeconds(10), 512_000, Duration.ofMinutes(5));
+        OfficialMcpServerRecord officialServer = officialCatalog.fetchCatalog().stream()
+                .filter(value -> "everything".equals(value.serviceId())).findFirst().orElseThrow();
+        McpInstallationService installationService = new McpInstallationService(
+                () -> actor, access, mcps, CapabilityManagementAuditSink.noop(), clock,
+                Duration.ofMinutes(5), UUID::randomUUID, "node:22-alpine");
+        var mcpPreview = installationService.preview(workspaceId, officialServer,
+                InstallationScope.WORKSPACE, workspaceId, ToolRiskLevel.LOW,
+                Set.of(RequiredCapability.TOOL), WorkspaceMountMode.NONE);
+        McpInstallationRecord installation = installationService.confirm(workspaceId,
+                mcpPreview.previewId(), mcpPreview.confirmationToken(), InstallationScope.WORKSPACE, workspaceId);
+        UUID installationId = installation.installationId();
         Path materialRoot = Files.createDirectory(workspaceRoot.resolve("mcp-materials"));
 
         try (DockerMcpMaterialPreparationRunner preparationRunner = new DockerMcpMaterialPreparationRunner(
@@ -171,16 +174,42 @@ class McpSkillConversationDockerIntegrationTest {
                     .orElseThrow().localToolName();
             assertThat(registry.find(echoToolName)).isPresent();
 
-            installApprovedSkill(skills, workspaceId, echoToolName, source.commitSha());
+            GitHubSkillCatalogClient githubCatalog = new GitHubSkillCatalogClient(
+                    (uri, timeout, maxBytes) -> githubSkillResponse(uri, echoToolName), json,
+                    URI.create("https://api.github.com/"), Duration.ofSeconds(10), 512_000);
+            GitHubSkillInstallationService skillInstallationService = new GitHubSkillInstallationService(
+                    githubCatalog, registry, () -> actor, access, skills, CapabilityManagementAuditSink.noop(),
+                    clock, Duration.ofMinutes(5), UUID::randomUUID);
+            var skillPreview = skillInstallationService.preview(workspaceId, "agent4j/mcp-echo-skill",
+                    InstallationScope.WORKSPACE, workspaceId);
+            skillInstallationService.confirm(workspaceId, skillPreview.previewId(), skillPreview.confirmationToken(),
+                    InstallationScope.WORKSPACE, workspaceId);
             InstalledSkillCatalogProvider skillCatalog = new InstalledSkillCatalogProvider(skills, registry, json,
                     List.of(), CapabilityManagementAuditSink.noop());
             InstalledMcpCatalogProvider mcpCatalog = new InstalledMcpCatalogProvider(mcps, registry);
 
-            try (FunctionCallServer model = new FunctionCallServer(json, modelRequests)) {
+            UUID actorSecondWorkspaceId = UUID.randomUUID();
+            Path actorSecondWorkspacePath = Files.createDirectory(workspaceRoot.resolve("actor-second-workspace"));
+            conversations.ensureDefaultWorkspace(actorSecondWorkspaceId, actor, "MCP Skill E2E Second",
+                    actorSecondWorkspacePath, "mcp-skill-e2e-second", Instant.EPOCH);
+            assertThat(skillCatalog.resolve(ACTOR_USER_ID, actorSecondWorkspaceId).definitions()).isEmpty();
+            assertThat(mcpCatalog.resolve(ACTOR_USER_ID, actorSecondWorkspaceId).bindings()).isEmpty();
+
+            UUID otherWorkspaceId = UUID.randomUUID();
+            Actor otherActor = new Actor("mcp-skill-e2e-other-user", "MCP Skill E2E Other User");
+            Path otherWorkspacePath = Files.createDirectory(workspaceRoot.resolve("other-workspace"));
+            conversations.ensureDefaultWorkspace(otherWorkspaceId, otherActor, "MCP Skill E2E Other",
+                    otherWorkspacePath, "mcp-skill-e2e-other", Instant.EPOCH);
+            assertThat(skillCatalog.resolve(otherActor.userId(), otherWorkspaceId).definitions()).isEmpty();
+            assertThat(mcpCatalog.resolve(otherActor.userId(), otherWorkspaceId).bindings()).isEmpty();
+
+            List<HarnessEvent> harnessEvents = new ArrayList<>();
+            try (FunctionCallServer model = new FunctionCallServer(json, modelRequests, echoToolName)) {
                 ModelRouter router = router(json, model.baseUrl());
                 var toolAgent = new ToolAgentNode(router, registry, json, 2, true);
                 var graphRegistry = new GraphRegistry(Map.of("code-agent", () -> new StateGraph(
-                        new ExecutionBudget(Duration.ofSeconds(90), Duration.ofSeconds(30), 10_000, 4, 2))
+                        new ExecutionBudget(Duration.ofSeconds(90), Duration.ofSeconds(30), 10_000, 4, 2),
+                        InterruptPolicy.never(), new HarnessHookChain(List.of(harnessEvents::add)))
                         .addNode("tool-agent", toolAgent)
                         .setEntryPoint("tool-agent")
                         .addEdge("tool-agent", StateGraph.END)));
@@ -210,17 +239,56 @@ class McpSkillConversationDockerIntegrationTest {
                             completed.state().variables().get(ToolAgentNode.MCP_CATALOG_SNAPSHOT_KEY),
                             ACTOR_USER_ID, workspaceId).bindings())
                             .extracting(binding -> binding.localToolName()).contains(echoToolName);
-                    assertThat(toolAudits).anySatisfy(audit -> {
-                        assertThat(audit.toolName()).isEqualTo(echoToolName);
-                        assertThat(audit.status().name()).isEqualTo("SUCCEEDED");
-                        assertThat(audit.userId()).isEqualTo(ACTOR_USER_ID);
-                    });
-                    assertThat(traces).anySatisfy(trace -> assertThat(trace.type().name()).isEqualTo("COMPLETED"));
+                    assertThat(toolAudits).filteredOn(audit -> echoToolName.equals(audit.toolName()))
+                            .singleElement().satisfies(audit -> {
+                                assertThat(audit.runId()).isEqualTo(turn.runId());
+                                assertThat(audit.nodeName()).isEqualTo("tool-agent");
+                                assertThat(audit.userId()).isEqualTo(ACTOR_USER_ID);
+                                assertThat(audit.callId()).isEqualTo("echo-call");
+                                assertThat(audit.riskLevel()).contains(ToolRiskLevel.LOW);
+                                assertThat(audit.status().name()).isEqualTo("SUCCEEDED");
+                            });
+                    assertThat(model.firstRequestToolNames())
+                            .contains(model.expectedProtocolToolName());
+                    assertThat(model.firstRequestToolNames()).noneMatch(String::isBlank);
+                    assertThat(harnessEvents).filteredOn(event -> event.runId().equals(turn.runId())
+                                    && "tool-agent".equals(event.nodeName())
+                                    && (event.eventType() == HarnessEventType.BEFORE_TOOL
+                                    || event.eventType() == HarnessEventType.AFTER_TOOL))
+                            .extracting(HarnessEvent::eventType)
+                            .containsExactly(HarnessEventType.BEFORE_TOOL, HarnessEventType.AFTER_TOOL);
+                    assertThat(harnessEvents).filteredOn(event -> event.runId().equals(turn.runId())
+                                    && "tool-agent".equals(event.nodeName())
+                                    && event.eventType() == HarnessEventType.BEFORE_TOOL)
+                            .singleElement().satisfies(event -> assertThat(event.metadata())
+                                    .containsEntry("toolName", echoToolName)
+                                    .containsEntry("callId", "echo-call")
+                                    .containsEntry("riskLevel", ToolRiskLevel.LOW.name()));
+                    assertThat(harnessEvents).filteredOn(event -> event.runId().equals(turn.runId())
+                                    && "tool-agent".equals(event.nodeName())
+                                    && event.eventType() == HarnessEventType.AFTER_TOOL)
+                            .singleElement().satisfies(event -> assertThat(event.metadata())
+                                    .containsEntry("toolName", echoToolName)
+                                    .containsEntry("callId", "echo-call")
+                                    .containsEntry("riskLevel", ToolRiskLevel.LOW.name()));
+                    assertThat(traces).filteredOn(trace -> trace.runId().equals(turn.runId()))
+                            .anySatisfy(trace -> assertThat(trace).isInstanceOf(TraceEvent.NodeStarted.class)
+                                    .extracting(value -> ((TraceEvent.NodeStarted) value).nodeName())
+                                    .isEqualTo("tool-agent"));
+                    assertThat(traces).filteredOn(trace -> trace.runId().equals(turn.runId()))
+                            .anySatisfy(trace -> assertThat(trace).isInstanceOf(TraceEvent.NodeCompleted.class)
+                                    .extracting(value -> ((TraceEvent.NodeCompleted) value).nodeName())
+                                    .isEqualTo("tool-agent"));
+                    assertThat(traces).filteredOn(trace -> trace.runId().equals(turn.runId()))
+                            .anySatisfy(trace -> assertThat(trace).isInstanceOf(TraceEvent.Completed.class));
                     assertThat(modelRequests).hasValue(2);
 
                     McpInstallationRecord stopped = runtime.stop(workspaceId, installationId,
                             new McpInstallationRuntime.LifecycleRequest(running.version(), workspaceId, Map.of()));
                     assertThat(stopped.status()).isEqualTo(McpInstallationStatus.STOPPED);
+                    assertThat(mcps.findInstallation(installationId, ACTOR_USER_ID, workspaceId).orElseThrow().bindings())
+                            .isEmpty();
+                    assertThat(registry.find(echoToolName)).isEmpty();
                     AgentState revoked = toolAgent.execute(completed.state());
                     assertThat(revoked.variables().get(ToolAgentNode.ERROR_KEY))
                             .contains("Skill 引用工具未注册: " + echoToolName);
@@ -232,8 +300,28 @@ class McpSkillConversationDockerIntegrationTest {
         }
     }
 
-    private void installApprovedSkill(JdbcSkillInstallationRepository skills, UUID workspaceId,
-                                      String toolName, String commitSha) {
+    private static GitHubSkillCatalogClient.HttpResponse githubSkillResponse(URI uri, String toolName) {
+        String path = uri.getPath();
+        String commit = "0123456789012345678901234567890123456789";
+        if (path.endsWith("/repos/agent4j/mcp-echo-skill")) {
+            return new GitHubSkillCatalogClient.HttpResponse(200, """
+                    {"full_name":"agent4j/mcp-echo-skill","html_url":"https://github.com/agent4j/mcp-echo-skill",
+                    "default_branch":"main","description":"受控 MCP 回显 Skill","license":{"spdx_id":"MIT"}}
+                    """);
+        }
+        if (path.endsWith("/repos/agent4j/mcp-echo-skill/commits/main")) {
+            return new GitHubSkillCatalogClient.HttpResponse(200, "{\"sha\":\"" + commit + "\"}");
+        }
+        if (path.endsWith("/repos/agent4j/mcp-echo-skill/contents/SKILL.md")) {
+            String content = skillContent(toolName);
+            return new GitHubSkillCatalogClient.HttpResponse(200, "{\"path\":\"SKILL.md\",\"type\":\"file\","
+                    + "\"encoding\":\"base64\",\"sha\":\"mcp-echo-skill-blob\",\"content\":\""
+                    + java.util.Base64.getEncoder().encodeToString(content.getBytes(StandardCharsets.UTF_8)) + "\"}");
+        }
+        throw new AssertionError("未预期 GitHub Skill 目录请求: " + uri);
+    }
+
+    private static String skillContent(String toolName) {
         String content = """
                 ---
                 name: mcp.echo.skill
@@ -246,16 +334,7 @@ class McpSkillConversationDockerIntegrationTest {
                 ---
                 使用声明的 MCP 工具回显用户请求，并在工具完成后报告结果。
                 """.formatted(toolName).strip();
-        Instant now = Instant.now();
-        SkillSnapshotRecord snapshot = new SkillSnapshotRecord(UUID.randomUUID(),
-                URI.create("https://github.com/agent4j/mcp-echo-skill"), "agent4j/mcp-echo-skill", commitSha,
-                "mcp-echo-skill-blob", "SKILL.md", "MIT", sha256(content), "通过受控 MCP 回显文本",
-                List.of(toolName), content, now);
-        SkillInstallationRecord installation = new SkillInstallationRecord(UUID.randomUUID(), snapshot.skillSnapshotId(),
-                InstallationScope.WORKSPACE, workspaceId, ACTOR_USER_ID, SkillInstallationStatus.APPROVED,
-                "c".repeat(64), now, now, now, 0);
-        skills.confirmSkill(snapshot, installation, new CapabilityManagementAuditEvent("SKILL_INSTALLATION_CONFIRMED",
-                ACTOR_USER_ID, workspaceId, null, installation.skillInstallationId(), null, commitSha, "SUCCESS", now));
+        return content;
     }
 
     private ModelRouter router(ObjectMapper json, String baseUrl) {
@@ -285,19 +364,36 @@ class McpSkillConversationDockerIntegrationTest {
                 Duration.ofSeconds(30));
     }
 
-    private CapabilityManagementAuditEvent mcpAudit(UUID installationId, UUID workspaceId, McpSourceSnapshot snapshot,
-                                                     String type, String from, String to) {
-        return new CapabilityManagementAuditEvent(type, ACTOR_USER_ID, workspaceId, installationId, null, null,
-                snapshot.commitSha(), "SUCCESS", Instant.now(), UUID.randomUUID(), from, to, "");
+    private static OfficialMcpCatalogClient.HttpResponse officialCatalogResponse(
+            URI uri, Duration timeout, int maxBytes, String etag) {
+        String path = uri.getPath();
+        String query = uri.getQuery();
+        String commit = "0123456789012345678901234567890123456789";
+        if (path.endsWith("/commits/main")) return officialResponse("{\"sha\":\"" + commit + "\"}");
+        if (path.endsWith("/contents") && (query == null || query.contains("ref=" + commit))) {
+            return officialResponse("[{\"name\":\"src\",\"type\":\"dir\",\"path\":\"src\",\"sha\":\"src-blob\"}]");
+        }
+        if (path.endsWith("/contents/src")) {
+            return officialResponse("[{\"name\":\"everything\",\"type\":\"dir\",\"path\":\"src/everything\",\"sha\":\"everything-blob\"}]");
+        }
+        if (path.endsWith("/contents/src/everything")) {
+            return officialResponse("[{\"name\":\"package.json\",\"type\":\"file\",\"path\":\"src/everything/package.json\",\"sha\":\"package-blob\"},"
+                    + "{\"name\":\"README.md\",\"type\":\"file\",\"path\":\"src/everything/README.md\",\"sha\":\"readme-blob\"}]");
+        }
+        if (path.endsWith("/contents/src/everything/package.json")) {
+            return officialContentResponse("package-blob", "{\"name\":\"@modelcontextprotocol/server-everything\",\"version\":\"2026.7.4\",\"license\":\"MIT\",\"bin\":{\"mcp-server-everything\":\"dist/index.js\"}}");
+        }
+        if (path.endsWith("/contents/src/everything/README.md")) return officialContentResponse("readme-blob", "# Everything");
+        throw new AssertionError("未预期官方 MCP 目录请求: " + uri);
     }
 
-    private static String sha256(String content) {
-        try {
-            return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(content.getBytes(StandardCharsets.UTF_8)));
-        } catch (Exception exception) {
-            throw new IllegalStateException("SHA-256 不可用", exception);
-        }
+    private static OfficialMcpCatalogClient.HttpResponse officialContentResponse(String sha, String source) {
+        return officialResponse("{\"sha\":\"" + sha + "\",\"encoding\":\"base64\",\"content\":\""
+                + java.util.Base64.getEncoder().encodeToString(source.getBytes(StandardCharsets.UTF_8)) + "\"}");
+    }
+
+    private static OfficialMcpCatalogClient.HttpResponse officialResponse(String body) {
+        return new OfficialMcpCatalogClient.HttpResponse(200, body, "test-etag");
     }
 
     private static DataSource dataSource() {
@@ -311,8 +407,11 @@ class McpSkillConversationDockerIntegrationTest {
 
     private static final class FunctionCallServer implements AutoCloseable {
         private final HttpServer server;
+        private final String expectedProtocolToolName;
+        private final AtomicReference<List<String>> firstRequestToolNames = new AtomicReference<>(List.of());
 
-        private FunctionCallServer(ObjectMapper json, AtomicInteger requests) throws Exception {
+        private FunctionCallServer(ObjectMapper json, AtomicInteger requests, String expectedLocalToolName) throws Exception {
+            this.expectedProtocolToolName = expectedLocalToolName.replaceAll("[^A-Za-z0-9]", "_");
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             server.createContext("/v1/chat/completions", exchange -> {
                 JsonNode request = json.readTree(exchange.getRequestBody());
@@ -327,15 +426,17 @@ class McpSkillConversationDockerIntegrationTest {
                 var message = choice.putObject("message");
                 message.put("role", "assistant");
                 if (call == 1) {
-                    String exactToolName = request.path("tools").get(0).path("function").path("name").asText();
-                    if (exactToolName.isBlank()) {
-                        throw new AssertionError("OpenAI 请求未携带 function tool");
+                    List<String> functionToolNames = new java.util.ArrayList<>();
+                    request.path("tools").forEach(tool -> functionToolNames.add(tool.path("function").path("name").asText()));
+                    firstRequestToolNames.set(List.copyOf(functionToolNames));
+                    if (!functionToolNames.contains(expectedProtocolToolName)) {
+                        throw new AssertionError("OpenAI 请求工具集合未包含运行时 echo binding: " + expectedProtocolToolName);
                     }
                     message.put("content", "");
                     var toolCall = message.putArray("tool_calls").addObject();
                     toolCall.put("id", "echo-call");
                     toolCall.put("type", "function");
-                    toolCall.putObject("function").put("name", exactToolName)
+                    toolCall.putObject("function").put("name", expectedProtocolToolName)
                             .put("arguments", "{\"message\":\"联合 E2E 回显\"}");
                     choice.put("finish_reason", "tool_calls");
                 } else {
@@ -354,6 +455,14 @@ class McpSkillConversationDockerIntegrationTest {
 
         private String baseUrl() {
             return "http://127.0.0.1:" + server.getAddress().getPort();
+        }
+
+        private List<String> firstRequestToolNames() {
+            return firstRequestToolNames.get();
+        }
+
+        private String expectedProtocolToolName() {
+            return expectedProtocolToolName;
         }
 
         @Override
