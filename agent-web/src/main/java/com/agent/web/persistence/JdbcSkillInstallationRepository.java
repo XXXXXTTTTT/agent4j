@@ -156,6 +156,34 @@ public final class JdbcSkillInstallationRepository implements SkillInstallationR
     }
 
     @Override
+    public SkillInstallationRecord rejectInvalidSnapshot(
+            UUID skillInstallationId,
+            String actorUserId,
+            UUID workspaceId,
+            long expectedVersion,
+            com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+        return Objects.requireNonNull(transactions.execute(status -> {
+            int updated = jdbc.sql("""
+                    update agent_skill_installations
+                       set status = 'REJECTED', updated_at = current_timestamp, version = version + 1
+                     where skill_installation_id = :id and actor_user_id = :actorUserId
+                       and version = :expectedVersion and status = 'APPROVED'
+                       and ((scope = 'WORKSPACE' and workspace_id = :workspaceId) or scope = 'USER_GLOBAL')
+                    """)
+                    .param("id", skillInstallationId)
+                    .param("actorUserId", actorUserId)
+                    .param("workspaceId", workspaceId)
+                    .param("expectedVersion", expectedVersion)
+                    .update();
+            if (updated != 1) {
+                throw new SkillInstallationConflictException(skillInstallationId, expectedVersion);
+            }
+            insertAudit(auditEvent);
+            return findInstallation(skillInstallationId).orElseThrow();
+        }), "Skill 旧快照拒绝聚合事务返回值不能为空");
+    }
+
+    @Override
     public SkillInstallationRecord removeInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId,
                                                       long expectedVersion,
                                                       com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {

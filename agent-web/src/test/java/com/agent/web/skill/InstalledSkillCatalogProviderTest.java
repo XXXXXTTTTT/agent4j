@@ -63,6 +63,29 @@ class InstalledSkillCatalogProviderTest {
     }
 
     @Test
+    void rejectsInvalidApprovedSnapshotWithItsCurrentVersion() {
+        String oldContent = "---\nname: external.skill\ndescription: External skill\n"
+                + "tools:\n  - code.patch\n---\n"
+                + "Legacy skill content without required fields.";
+        FakeRepository repository = new FakeRepository(
+                List.of(installedSkill(oldContent, sha256(oldContent))), NOW);
+        CapturingAuditSink auditSink = new CapturingAuditSink();
+
+        try (DefaultToolRegistry tools = toolRegistry("code.patch")) {
+            SkillCatalogSnapshot resolved = provider(repository, tools, auditSink)
+                    .resolve("user-a", WORKSPACE_ID);
+
+            assertThat(resolved.definitions()).containsExactly(builtInSkill());
+            assertThat(repository.rejectedInstallationIds)
+                    .containsExactly(UUID.fromString("b09b8cc8-4a8a-47f8-a1b3-b4c2d44c6238"));
+            assertThat(repository.rejectedExpectedVersions).containsExactly(0L);
+            assertThat(repository.rejectionEvents).singleElement()
+                    .extracting(CapabilityManagementAuditEvent::eventType)
+                    .isEqualTo("SKILL_SNAPSHOT_REJECTED");
+        }
+    }
+
+    @Test
     void separatesCachedCatalogsByActorWorkspaceInstallationUpdateAndToolRegistryRevision() {
         FakeRepository repository = new FakeRepository(List.of(), NOW);
         CapturingAuditSink auditSink = new CapturingAuditSink();
@@ -178,6 +201,9 @@ class InstalledSkillCatalogProviderTest {
         private final List<InstalledSkillRecord> records;
         private Instant updatedAt;
         private int findInstalledSkillsCalls;
+        private final List<UUID> rejectedInstallationIds = new ArrayList<>();
+        private final List<Long> rejectedExpectedVersions = new ArrayList<>();
+        private final List<CapabilityManagementAuditEvent> rejectionEvents = new ArrayList<>();
 
         private FakeRepository(List<InstalledSkillRecord> records, Instant updatedAt) {
             this.records = List.copyOf(records);
@@ -193,6 +219,23 @@ class InstalledSkillCatalogProviderTest {
         @Override
         public Instant installationsUpdatedAt(String actorUserId, UUID workspaceId) {
             return updatedAt;
+        }
+
+        @Override
+        public SkillInstallationRecord rejectInvalidSnapshot(
+                UUID skillInstallationId,
+                String actorUserId,
+                UUID workspaceId,
+                long expectedVersion,
+                CapabilityManagementAuditEvent auditEvent) {
+            rejectedInstallationIds.add(skillInstallationId);
+            rejectedExpectedVersions.add(expectedVersion);
+            rejectionEvents.add(auditEvent);
+            return records.stream()
+                    .map(InstalledSkillRecord::installation)
+                    .filter(value -> value.skillInstallationId().equals(skillInstallationId))
+                    .findFirst()
+                    .orElseThrow();
         }
 
         @Override

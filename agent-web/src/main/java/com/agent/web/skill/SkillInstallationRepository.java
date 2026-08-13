@@ -21,6 +21,16 @@ public interface SkillInstallationRepository {
     default Instant installationsUpdatedAt(String actorUserId, UUID workspaceId) {
         return Instant.EPOCH;
     }
+
+    /** 原子拒绝无法重建为受控定义的已批准快照。 */
+    default SkillInstallationRecord rejectInvalidSnapshot(
+            UUID skillInstallationId,
+            String actorUserId,
+            UUID workspaceId,
+            long expectedVersion,
+            com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+        throw new UnsupportedOperationException("当前安装仓储不支持旧快照拒绝");
+    }
     SkillInstallationRecord removeInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId,
                                                long expectedVersion,
                                                com.agent.web.capability.CapabilityManagementAuditEvent auditEvent);

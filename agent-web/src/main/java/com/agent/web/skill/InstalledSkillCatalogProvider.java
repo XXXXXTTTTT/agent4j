@@ -53,18 +53,12 @@ public final class InstalledSkillCatalogProvider implements SkillCatalogProvider
         List<SkillDefinition> definitions = new ArrayList<>(builtIns);
         try {
             for (InstalledSkillRecord record : repository.findInstalledSkills(actorUserId, workspaceId)) {
-                SkillSnapshotRecord snapshot = record.snapshot();
-                String digest = sha256(snapshot.content());
-                if (!digest.equals(snapshot.contentSha256())) {
-                    throw new IllegalArgumentException("Skill 快照内容摘要不匹配: " + record.installation().skillInstallationId());
+                try {
+                    definitions.add(parseDefinition(record));
+                } catch (RuntimeException exception) {
+                    rejectInvalidSnapshot(record, actorUserId, workspaceId);
+                    throw exception;
                 }
-                GitHubSkillContent content = GitHubSkillContent.parse(
-                        snapshot.content(), toolRegistry.list().stream().map(value -> value.name()).collect(java.util.stream.Collectors.toSet()));
-                if (!snapshot.summary().equals(content.summary())
-                        || !snapshot.requestedToolNames().equals(content.requestedToolNames())) {
-                    throw new IllegalArgumentException("Skill 快照派生字段不匹配");
-                }
-                definitions.add(content.definition());
             }
             definitions.sort(Comparator.comparing(SkillDefinition::name));
             if (!definitions.isEmpty()) {
@@ -82,6 +76,31 @@ public final class InstalledSkillCatalogProvider implements SkillCatalogProvider
                     1, actorUserId, workspaceId, updatedAt, toolRegistry.revision(), builtIns, "");
             return fallback;
         }
+    }
+
+    private SkillDefinition parseDefinition(InstalledSkillRecord record) {
+        SkillSnapshotRecord snapshot = record.snapshot();
+        String digest = sha256(snapshot.content());
+        if (!digest.equals(snapshot.contentSha256())) {
+            throw new IllegalArgumentException("Skill 快照内容摘要不匹配");
+        }
+        GitHubSkillContent content = GitHubSkillContent.parse(snapshot.content(), toolRegistry.list().stream()
+                .map(value -> value.name()).collect(java.util.stream.Collectors.toSet()));
+        if (!snapshot.summary().equals(content.summary())
+                || !snapshot.requestedToolNames().equals(content.requestedToolNames())) {
+            throw new IllegalArgumentException("Skill 快照派生字段不匹配");
+        }
+        return content.definition();
+    }
+
+    private void rejectInvalidSnapshot(
+            InstalledSkillRecord record, String actorUserId, UUID workspaceId) {
+        String detail = sha256("INVALID_SNAPSHOT:" + record.installation().skillInstallationId());
+        repository.rejectInvalidSnapshot(record.installation().skillInstallationId(), actorUserId, workspaceId,
+                record.installation().version(), new CapabilityManagementAuditEvent(
+                        "SKILL_SNAPSHOT_REJECTED", actorUserId, workspaceId, null,
+                        record.installation().skillInstallationId(), null, "", "REJECTED", Instant.now(),
+                        null, SkillInstallationStatus.APPROVED.name(), SkillInstallationStatus.REJECTED.name(), detail));
     }
 
     private static String sha256(String value) {
