@@ -97,7 +97,7 @@ class GovernedCliHttpPostgresIntegrationTest {
                             .isEqualTo(readOnlyRunId.toString()));
 
             JsonNode pendingApproval = start(
-                    client, workspaceId, "test.mkdir", List.of("approved-output"));
+                    client, workspaceId, "test.mkdir", List.of("approved-output"), 600);
             UUID approvedRunId = UUID.fromString(pendingApproval.path("runId").textValue());
             List<JsonNode> traceFrames = new CopyOnWriteArrayList<>();
             List<JsonNode> logFrames = new CopyOnWriteArrayList<>();
@@ -115,12 +115,39 @@ class GovernedCliHttpPostgresIntegrationTest {
             assertThat(logFrames.getFirst().path("terminal").path("runId").textValue())
                     .isEqualTo(approvedRunId.toString());
             JsonNode waiting = awaitStatus(client, approvedRunId, "WAITING_APPROVAL");
-            assertThat(waiting.path("interruptRequest").path("details")
-                    .path("riskLevel").textValue()).isEqualTo("MUTATING");
+            JsonNode details = waiting.path("interruptRequest").path("details");
+            assertThat(details.path("commandName").textValue()).isEqualTo("test.mkdir");
+            assertThat(details.path("commandArguments").textValue()).isEqualTo("[\"approved-output\"]");
+            assertThat(details.path("command").textValue()).isEqualTo("'mkdir' '-v' 'approved-output'");
+            assertThat(details.path("riskLevel").textValue()).isEqualTo("MUTATING");
+            assertThat(details.path("commandSha256").textValue()).matches("[0-9a-f]{64}");
+            assertThat(details.path("timeoutSeconds").textValue()).isEqualTo("600");
+            assertThat(details.path("authorizationReason").textValue()).isEqualTo("等待用户批准");
             assertThat(Files.exists(workspace.resolve("approved-output"))).isFalse();
 
+            client.post()
+                    .uri("/api/runs/{runId}/approval", approvedRunId)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(Map.of(
+                            "decision", "APPROVE",
+                            "expectedVersion", waiting.path("version").longValue(),
+                            "reason", "不应修改受治理命令",
+                            "variableUpdates", Map.of("ops.command", "mkdir -v forged-output")))
+                    .exchange()
+                    .expectStatus().isBadRequest()
+                    .expectBody()
+                    .jsonPath("$.detail")
+                    .isEqualTo("governed-cli 审批不允许 variableUpdates");
+            JsonNode stillWaiting = awaitStatus(client, approvedRunId, "WAITING_APPROVAL");
+            assertThat(stillWaiting.path("version").longValue())
+                    .isEqualTo(waiting.path("version").longValue());
+            assertThat(Files.exists(workspace.resolve("forged-output"))).isFalse();
+
+            decideConflict(client, approvedRunId, waiting.path("version").longValue() - 1);
+            assertThat(awaitStatus(client, approvedRunId, "WAITING_APPROVAL")
+                    .path("version").longValue()).isEqualTo(waiting.path("version").longValue());
             JsonNode approved = decide(
-                    client, approvedRunId, waiting.path("version").longValue(), "APPROVE");
+                    client, approvedRunId, waiting.path("version").longValue(), "APPROVE", Map.of());
             assertThat(approved.path("status").textValue()).isEqualTo("RUNNING");
             assertThat(approved.path("approvalDecision").textValue()).isEqualTo("APPROVE");
             JsonNode approvedCompleted = awaitStatus(client, approvedRunId, "COMPLETED");
@@ -235,13 +262,22 @@ class GovernedCliHttpPostgresIntegrationTest {
             UUID workspaceId,
             String commandName,
             List<String> arguments) {
+        return start(client, workspaceId, commandName, arguments, 60);
+    }
+
+    private JsonNode start(
+            WebTestClient client,
+            UUID workspaceId,
+            String commandName,
+            List<String> arguments,
+            long timeoutSeconds) {
         return client.post()
                 .uri("/api/workspaces/{workspaceId}/cli/runs", workspaceId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(Map.of(
                         "commandName", commandName,
                         "arguments", arguments,
-                        "timeoutSeconds", 60))
+                        "timeoutSeconds", timeoutSeconds))
                 .exchange()
                 .expectStatus().isAccepted()
                 .expectBody(JsonNode.class)
@@ -250,18 +286,37 @@ class GovernedCliHttpPostgresIntegrationTest {
     }
 
     private JsonNode decide(WebTestClient client, UUID runId, long expectedVersion, String decision) {
+        return decide(client, runId, expectedVersion, decision, Map.of());
+    }
+
+    private JsonNode decide(WebTestClient client, UUID runId, long expectedVersion, String decision,
+                            Map<String, String> variableUpdates) {
         return client.post()
                 .uri("/api/runs/{runId}/approval", runId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(Map.of(
                         "decision", decision,
                         "expectedVersion", expectedVersion,
-                        "reason", "HTTP 集成测试审批"))
+                        "reason", "HTTP 集成测试审批",
+                        "variableUpdates", variableUpdates))
                 .exchange()
                 .expectStatus().isAccepted()
                 .expectBody(JsonNode.class)
                 .returnResult()
                 .getResponseBody();
+    }
+
+    private void decideConflict(WebTestClient client, UUID runId, long expectedVersion) {
+        client.post()
+                .uri("/api/runs/{runId}/approval", runId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of(
+                        "decision", "APPROVE",
+                        "expectedVersion", expectedVersion,
+                        "reason", "HTTP 集成测试审批",
+                        "variableUpdates", Map.of()))
+                .exchange()
+                .expectStatus().isEqualTo(409);
     }
 
     private JsonNode awaitStatus(WebTestClient client, UUID runId, String expectedStatus)

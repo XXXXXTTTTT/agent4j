@@ -27,6 +27,7 @@ import java.util.UUID;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 @WebFluxTest(controllers = RunController.class)
 @Import(RunExceptionHandler.class)
@@ -78,6 +79,19 @@ class RunControllerTest {
                 .jsonPath("$.approvalReason").doesNotExist()
                 .jsonPath("$.error").doesNotExist()
                 .jsonPath("$.createdAt").isEqualTo("2026-08-01T09:00:00Z");
+    }
+
+    @Test
+    void rejectsGovernedCliGraphFromGenericRunStart() {
+        webTestClient.post()
+                .uri("/api/runs")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(validStartBody("governed-cli"))
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.detail").isEqualTo("该图必须使用专用启动入口");
+        verifyNoInteractions(runService);
     }
 
     @Test

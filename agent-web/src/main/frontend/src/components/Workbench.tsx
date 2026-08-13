@@ -148,7 +148,7 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
               />
             </div>
             <div id="capability-view" role="tabpanel" hidden={activeTab !== 'capability'}>
-              {conversation?.activeWorkspace === undefined ? <div className="empty-tool-state">请选择工作区后管理能力</div> : <CapabilityWorkbenchRuntime workspaceId={conversation.activeWorkspace.workspaceId} />}
+              {conversation?.activeWorkspace == null ? <div className="empty-tool-state">请选择工作区后管理能力</div> : <CapabilityWorkbenchRuntime workspaceId={conversation.activeWorkspace.workspaceId} />}
             </div>
           </div>
         </aside>

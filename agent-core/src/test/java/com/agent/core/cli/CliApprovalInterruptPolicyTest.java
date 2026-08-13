@@ -13,8 +13,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -79,23 +82,48 @@ class CliApprovalInterruptPolicyTest {
     }
 
     @Test
+    void propagatesSixHundredSecondTimeoutIntoApprovalEvidence() {
+        CliApprovalInterruptPolicy policy = policy(CliRiskLevel.MUTATING);
+        AgentState state = state("test.write", List.of("value.txt"))
+                .withVariable(OpsNode.COMMAND_TIMEOUT_SECONDS_KEY, "600");
+
+        InterruptRequest interrupt = policy.evaluate(RUN_ID, "ops", state).orElseThrow();
+
+        assertThat(interrupt.details()).containsEntry("timeoutSeconds", "600");
+        assertThat(policy.authorizeForExecution(state, true)
+                .plan().request().timeout()).isEqualTo(Duration.ofSeconds(600));
+    }
+
+    @Test
     void rejectsArgumentInjectionAndWorkspaceEscapeBeforeInterrupt() throws Exception {
         CliApprovalInterruptPolicy policy = policy(CliRiskLevel.READ_ONLY);
         AgentState injected = state("test.read", List.of("value.txt;rm"));
         Path outside = Files.createTempDirectory("cli-policy-outside-");
-        PtyTarget outsideTarget = new PtyTarget(
-                Files.createFile(outside.resolve("bash.exe")), outside);
-        CliApprovalInterruptPolicy escaped = new CliApprovalInterruptPolicy(
-                catalog("test.read", CliRiskLevel.READ_ONLY),
-                outsideTarget,
-                Duration.ofSeconds(30),
-                objectMapper);
+        try {
+            PtyTarget outsideTarget = new PtyTarget(
+                    Files.createFile(outside.resolve("bash.exe")), outside);
+            CliApprovalInterruptPolicy escaped = new CliApprovalInterruptPolicy(
+                    catalog("test.read", CliRiskLevel.READ_ONLY),
+                    outsideTarget,
+                    Duration.ofSeconds(30),
+                    objectMapper);
 
-        assertThatThrownBy(() -> policy.evaluate(RUN_ID, "ops", injected))
-                .isInstanceOf(CliArgumentException.class);
-        assertThatThrownBy(() -> escaped.evaluate(
-                RUN_ID, "ops", state("test.read", List.of("value.txt"))))
-                .isInstanceOf(CliWorkspaceViolationException.class);
+            assertThatThrownBy(() -> policy.evaluate(RUN_ID, "ops", injected))
+                    .isInstanceOf(CliArgumentException.class);
+            assertThatThrownBy(() -> escaped.evaluate(
+                    RUN_ID, "ops", state("test.read", List.of("value.txt"))))
+                    .isInstanceOf(CliWorkspaceViolationException.class);
+        } finally {
+            try (var paths = Files.walk(outside)) {
+                paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                    try {
+                        Files.deleteIfExists(path);
+                    } catch (IOException exception) {
+                        throw new UncheckedIOException(exception);
+                    }
+                });
+            }
+        }
     }
 
     @Test
@@ -135,10 +163,10 @@ class CliApprovalInterruptPolicyTest {
         CliApprovalInterruptPolicy policy = policy(CliRiskLevel.READ_ONLY);
         AgentState base = stateWithoutTimeout("test.read", List.of("value.txt"));
         for (String value : new String[] {null, "", "abc", "0", "601"}) {
-            AgentState candidate = value == null
+            AgentState stateWithTimeout = value == null
                     ? base
                     : base.withVariable(OpsNode.COMMAND_TIMEOUT_SECONDS_KEY, value);
-            assertThatThrownBy(() -> policy.authorizeForExecution(candidate, true))
+            assertThatThrownBy(() -> policy.authorizeForExecution(stateWithTimeout, true))
                     .isInstanceOf(IllegalArgumentException.class);
         }
     }
