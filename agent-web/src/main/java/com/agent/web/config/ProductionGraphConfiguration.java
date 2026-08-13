@@ -236,10 +236,11 @@ public class ProductionGraphConfiguration {
     CliApprovalInterruptPolicy productionCliApprovalInterruptPolicy(
             ProductionAgentProperties properties,
             CliCommandCatalog catalog,
+            WorkspaceTerminalTargetResolver workspaceTargetResolver,
             ObjectMapper objectMapper) {
         return new CliApprovalInterruptPolicy(
                 catalog,
-                workspaceTargetResolver(properties),
+                workspaceTargetResolver,
                 properties.commandTimeout(),
                 objectMapper);
     }
@@ -717,6 +718,7 @@ public class ProductionGraphConfiguration {
     }
 
     /** 按当前轮次的真实工作区目录解析 PTY 或 Docker 执行目标。 */
+    @Bean
     WorkspaceTerminalTargetResolver workspaceTargetResolver(
             ProductionAgentProperties properties) {
         Objects.requireNonNull(properties, "properties 不能为空");

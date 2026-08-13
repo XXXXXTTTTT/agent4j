@@ -264,7 +264,6 @@ public class HarnessConfiguration {
 
     @Bean
     @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
-    @ConditionalOnBean(ToolRegistry.class)
     GitHubSkillInstallationService gitHubSkillInstallationService(
             GitHubSkillCatalogClient client, ToolRegistry toolRegistry, ActorResolver actorResolver,
             WorkspaceAccessService workspaceAccess, SkillInstallationRepository repository,
@@ -361,8 +360,6 @@ public class HarnessConfiguration {
     /** 将已批准 Skill 安装接入会话初始状态快照。 */
     @Bean
     @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
-    @ConditionalOnBean({SkillInstallationRepository.class, ToolRegistry.class,
-            CapabilityManagementAuditSink.class})
     SkillCatalogProvider installedSkillCatalogProvider(
             SkillInstallationRepository repository,
             ToolRegistry toolRegistry,
