@@ -96,13 +96,9 @@ class GovernedCliHttpPostgresIntegrationTest {
                     .allSatisfy(frame -> assertThat(frame.path("event").path("runId").textValue())
                             .isEqualTo(readOnlyRunId.toString()));
 
-            JsonNode pendingApproval = start(client, workspaceId, "test.touch", List.of("approved.txt"));
+            JsonNode pendingApproval = start(
+                    client, workspaceId, "test.mkdir", List.of("approved-output"));
             UUID approvedRunId = UUID.fromString(pendingApproval.path("runId").textValue());
-            JsonNode waiting = awaitStatus(client, approvedRunId, "WAITING_APPROVAL");
-            assertThat(waiting.path("interruptRequest").path("details")
-                    .path("riskLevel").textValue()).isEqualTo("MUTATING");
-            assertThat(Files.exists(workspace.resolve("approved.txt"))).isFalse();
-
             List<JsonNode> traceFrames = new CopyOnWriteArrayList<>();
             List<JsonNode> logFrames = new CopyOnWriteArrayList<>();
             CountDownLatch traceSnapshot = new CountDownLatch(1);
@@ -118,6 +114,10 @@ class GovernedCliHttpPostgresIntegrationTest {
             assertSnapshotRun(traceFrames, approvedRunId);
             assertThat(logFrames.getFirst().path("terminal").path("runId").textValue())
                     .isEqualTo(approvedRunId.toString());
+            JsonNode waiting = awaitStatus(client, approvedRunId, "WAITING_APPROVAL");
+            assertThat(waiting.path("interruptRequest").path("details")
+                    .path("riskLevel").textValue()).isEqualTo("MUTATING");
+            assertThat(Files.exists(workspace.resolve("approved-output"))).isFalse();
 
             JsonNode approved = decide(
                     client, approvedRunId, waiting.path("version").longValue(), "APPROVE");
@@ -126,29 +126,54 @@ class GovernedCliHttpPostgresIntegrationTest {
             JsonNode approvedCompleted = awaitStatus(client, approvedRunId, "COMPLETED");
             trace.get(30, TimeUnit.SECONDS);
             logs.get(30, TimeUnit.SECONDS);
-            assertThat(Files.exists(workspace.resolve("approved.txt"))).isTrue();
+            assertThat(approvedCompleted.path("state").path("variables")
+                    .path("ops.stdout").textValue()).contains("approved-output");
+            assertThat(Files.isDirectory(workspace.resolve("approved-output"))).isTrue();
             assertThat(traceFrames).extracting(this::traceType)
-                    .containsSubsequence("APPROVED", "COMPLETED");
+                    .containsSubsequence("INTERRUPTED", "APPROVED", "COMPLETED");
+            assertTraceEventsBelongToRun(traceFrames, approvedRunId);
             assertThat(logFrames).extracting(frame -> frame.path("kind").textValue())
-                    .containsOnly("SNAPSHOT");
+                    .contains("SNAPSHOT", "LOG");
+            assertThat(logFrames).filteredOn(frame -> "LOG".equals(
+                            frame.path("kind").textValue()))
+                    .allSatisfy(frame -> {
+                        assertThat(frame.path("event").path("runId").textValue())
+                                .isEqualTo(approvedRunId.toString());
+                        assertThat(frame.path("event").path("text").textValue())
+                                .contains("approved-output");
+                    });
 
-            JsonNode pendingRejection = start(client, workspaceId, "test.touch", List.of("rejected.txt"));
+            JsonNode pendingRejection = start(
+                    client, workspaceId, "test.mkdir", List.of("rejected-output"));
             UUID rejectedRunId = UUID.fromString(pendingRejection.path("runId").textValue());
-            JsonNode rejectionWaiting = awaitStatus(client, rejectedRunId, "WAITING_APPROVAL");
             List<JsonNode> rejectionTraceFrames = new CopyOnWriteArrayList<>();
+            List<JsonNode> rejectionLogFrames = new CopyOnWriteArrayList<>();
             CountDownLatch rejectionSnapshot = new CountDownLatch(1);
+            CountDownLatch rejectionLogSnapshot = new CountDownLatch(1);
             CompletableFuture<Void> rejectionTrace = subscribeSse(
                     context, objectMapper, "/api/runs/" + rejectedRunId + "/events",
                     rejectionTraceFrames, rejectionSnapshot);
+            CompletableFuture<Void> rejectionLogs = subscribeSse(
+                    context, objectMapper, "/api/runs/" + rejectedRunId + "/logs",
+                    rejectionLogFrames, rejectionLogSnapshot);
             assertThat(rejectionSnapshot.await(10, TimeUnit.SECONDS)).isTrue();
+            assertThat(rejectionLogSnapshot.await(10, TimeUnit.SECONDS)).isTrue();
             assertSnapshotRun(rejectionTraceFrames, rejectedRunId);
+            assertThat(rejectionLogFrames.getFirst().path("terminal").path("runId").textValue())
+                    .isEqualTo(rejectedRunId.toString());
+            JsonNode rejectionWaiting = awaitStatus(client, rejectedRunId, "WAITING_APPROVAL");
 
             JsonNode rejected = decide(
                     client, rejectedRunId, rejectionWaiting.path("version").longValue(), "REJECT");
             assertThat(rejected.path("status").textValue()).isEqualTo("REJECTED");
             rejectionTrace.get(10, TimeUnit.SECONDS);
-            assertThat(Files.exists(workspace.resolve("rejected.txt"))).isFalse();
-            assertThat(rejectionTraceFrames).extracting(this::traceType).contains("REJECTED");
+            rejectionLogs.get(10, TimeUnit.SECONDS);
+            assertThat(Files.exists(workspace.resolve("rejected-output"))).isFalse();
+            assertThat(rejectionTraceFrames).extracting(this::traceType)
+                    .containsSubsequence("INTERRUPTED", "REJECTED");
+            assertTraceEventsBelongToRun(rejectionTraceFrames, rejectedRunId);
+            assertThat(rejectionLogFrames).extracting(frame -> frame.path("kind").textValue())
+                    .containsOnly("SNAPSHOT");
         } finally {
             context.close();
         }
@@ -302,6 +327,12 @@ class GovernedCliHttpPostgresIntegrationTest {
         return frame.path("event").path("type").textValue();
     }
 
+    private void assertTraceEventsBelongToRun(List<JsonNode> frames, UUID runId) {
+        assertThat(frames).filteredOn(frame -> "EVENT".equals(frame.path("kind").textValue()))
+                .allSatisfy(frame -> assertThat(frame.path("event").path("runId").textValue())
+                        .isEqualTo(runId.toString()));
+    }
+
     @TestConfiguration(proxyBeanMethods = false)
     static class GovernedCliTestConfiguration {
 
@@ -316,9 +347,9 @@ class GovernedCliHttpPostgresIntegrationTest {
                             CliRiskLevel.READ_ONLY,
                             java.util.Set.of(RequiredCapability.TERMINAL)),
                     new CliCommandDefinition(
-                            "test.touch",
-                            "touch",
-                            List.of(),
+                            "test.mkdir",
+                            "mkdir",
+                            List.of("-v"),
                             CliRiskLevel.MUTATING,
                             java.util.Set.of(RequiredCapability.TERMINAL))));
         }
