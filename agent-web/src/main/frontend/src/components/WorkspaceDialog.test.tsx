@@ -68,4 +68,44 @@ describe('WorkspaceDialog', () => {
 
     expect(importWorkspace).toHaveBeenCalledWith({ displayName: 'Demo', repositoryId: 'demo', files: [file] })
   })
+
+  it('在桌面桥存在时选择归档并通过桌面导入链提交', async () => {
+    const user = userEvent.setup()
+    const selectProjectArchive = vi.fn(async () => ({
+      archive: new Uint8Array([80, 75, 3, 4]), fileCount: 2, totalBytes: 42, suggestedDisplayName: 'demo',
+    }))
+    const importDesktopWorkspace = vi.fn(async () => undefined)
+    window.agent4jDesktop = { selectProjectArchive }
+    render(<WorkspaceDialog
+      createWorkspace={async () => undefined}
+      importDesktopWorkspace={importDesktopWorkspace}
+      onClose={() => undefined}
+    />)
+
+    await user.click(screen.getByRole('tab', { name: '导入本地文件夹' }))
+    await user.type(screen.getByLabelText('工作区名称'), 'Demo')
+    await user.click(screen.getByRole('button', { name: '选择本地项目文件夹' }))
+    await user.type(screen.getByLabelText('仓库标识'), 'demo')
+    expect(screen.getByText('已选择 2 个文件，共 42 字节')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '导入并创建' }))
+
+    expect(importDesktopWorkspace).toHaveBeenCalledWith({
+      displayName: 'Demo', repositoryId: 'demo', archive: new Uint8Array([80, 75, 3, 4]),
+    })
+    expect(JSON.stringify(importDesktopWorkspace.mock.calls)).not.toContain('C:\\')
+    delete window.agent4jDesktop
+  })
+
+  it('桌面目录选择取消时不提交导入', async () => {
+    const user = userEvent.setup()
+    const selectProjectArchive = vi.fn(async () => null)
+    const importDesktopWorkspace = vi.fn(async () => undefined)
+    window.agent4jDesktop = { selectProjectArchive }
+    render(<WorkspaceDialog createWorkspace={async () => undefined} importDesktopWorkspace={importDesktopWorkspace} onClose={() => undefined} />)
+
+    await user.click(screen.getByRole('tab', { name: '导入本地文件夹' }))
+    await user.click(screen.getByRole('button', { name: '选择本地项目文件夹' }))
+    expect(importDesktopWorkspace).not.toHaveBeenCalled()
+    delete window.agent4jDesktop
+  })
 })

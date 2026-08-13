@@ -197,6 +197,21 @@ export interface ImportWorkspaceCommand {
   files: File[]
 }
 
+/** Electron 主进程已安全归档的项目，不包含宿主文件路径。 */
+export interface ImportDesktopWorkspaceCommand {
+  displayName: string
+  repositoryId: string
+  archive: Uint8Array
+}
+
+async function uploadWorkspaceArchive(displayName: string, repositoryId: string, archive: Uint8Array, fetcher: typeof fetch): Promise<Workspace> {
+  const form = new FormData()
+  form.append('displayName', displayName)
+  form.append('repositoryId', repositoryId)
+  form.append('archive', new Blob([archive], { type: 'application/zip' }), 'project.zip')
+  return decodeWorkspace(await requestJson('/api/workspace-imports', { method: 'POST', body: form }, fetcher))
+}
+
 export async function importWorkspace(command: ImportWorkspaceCommand, fetcher: typeof fetch = globalThis.fetch): Promise<Workspace> {
   const displayName = nonBlankStringAt(command.displayName, 'displayName')
   const repositoryId = nonBlankStringAt(command.repositoryId, 'repositoryId')
@@ -209,11 +224,15 @@ export async function importWorkspace(command: ImportWorkspaceCommand, fetcher: 
     files[relativePath] = new Uint8Array(await file.arrayBuffer())
   }
   const archive = zipSync(files)
-  const form = new FormData()
-  form.append('displayName', displayName)
-  form.append('repositoryId', repositoryId)
-  form.append('archive', new Blob([archive], { type: 'application/zip' }), 'project.zip')
-  return decodeWorkspace(await requestJson('/api/workspace-imports', { method: 'POST', body: form }, fetcher))
+  return uploadWorkspaceArchive(displayName, repositoryId, archive, fetcher)
+}
+
+/** 上传桌面桥返回的 ZIP，服务端仍执行现有受治理导入链。 */
+export async function importDesktopWorkspace(command: ImportDesktopWorkspaceCommand, fetcher: typeof fetch = globalThis.fetch): Promise<Workspace> {
+  const displayName = nonBlankStringAt(command.displayName, 'displayName')
+  const repositoryId = nonBlankStringAt(command.repositoryId, 'repositoryId')
+  if (!(command.archive instanceof Uint8Array) || command.archive.byteLength === 0) throw new TypeError('archive 必须是非空 Uint8Array')
+  return uploadWorkspaceArchive(displayName, repositoryId, command.archive, fetcher)
 }
 
 export async function listConversations(workspaceId: string, includeArchivedOrFetcher: boolean | typeof fetch = false, fetcher: typeof fetch = globalThis.fetch): Promise<Conversation[]> {

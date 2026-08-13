@@ -9,6 +9,7 @@ import {
   decodeConversationTurn,
   decodeWorkspace,
   getIdentity,
+  importDesktopWorkspace,
   importWorkspace,
   listConversations,
   listConversationTurns,
@@ -163,6 +164,23 @@ describe('Conversation API HTTP 请求', () => {
     })
 
     await expect(importWorkspace({ displayName: 'Demo', repositoryId: 'demo', files: [file] }, fetcher)).resolves.toEqual(WORKSPACE)
+    expect(fetcher).toHaveBeenCalledWith('/api/workspace-imports', expect.objectContaining({ method: 'POST' }))
+  })
+
+  it('将桌面归档按既有导入字段上传且不携带宿主路径', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const form = init?.body as FormData
+      expect(form.get('displayName')).toBe('Demo')
+      expect(form.get('repositoryId')).toBe('demo')
+      expect(form.get('archive')).toBeInstanceOf(Blob)
+      expect([...form.keys()]).toEqual(['displayName', 'repositoryId', 'archive'])
+      expect(JSON.stringify([...form.values()])).not.toContain('C:\\source\\demo')
+      return response(WORKSPACE, 201)
+    })
+
+    await expect(importDesktopWorkspace({
+      displayName: 'Demo', repositoryId: 'demo', archive: new Uint8Array([80, 75, 3, 4]),
+    }, fetcher)).resolves.toEqual(WORKSPACE)
     expect(fetcher).toHaveBeenCalledWith('/api/workspace-imports', expect.objectContaining({ method: 'POST' }))
   })
 })

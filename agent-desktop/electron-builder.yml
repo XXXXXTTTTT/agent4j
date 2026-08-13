@@ -1,0 +1,14 @@
+appId: com.agent4j.desktop
+productName: Agent4J Desktop
+electronDist: node_modules/electron/dist
+directories:
+  output: release
+files:
+  - dist/**
+  - package.json
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

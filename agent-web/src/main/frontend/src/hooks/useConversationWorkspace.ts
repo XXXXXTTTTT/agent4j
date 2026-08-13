@@ -10,6 +10,7 @@ import {
   listConversations,
   listWorkspaces,
   importWorkspace,
+  importDesktopWorkspace,
   searchConversations,
   submitConversationTurn,
   listModelConfiguration,
@@ -32,7 +33,7 @@ import type {
   WorkspaceDirectoryListing,
   ModelConfigurationSnapshot,
 } from '../api/contracts'
-import type { CreateWorkspaceCommand, ImportWorkspaceCommand, UpdateModelEndpointCommand, UpdateModelGroupCommand, UpdateModelProviderCommand } from '../api/conversationApi'
+import type { CreateWorkspaceCommand, ImportDesktopWorkspaceCommand, ImportWorkspaceCommand, UpdateModelEndpointCommand, UpdateModelGroupCommand, UpdateModelProviderCommand } from '../api/conversationApi'
 
 export interface ConversationWorkspaceApi {
   getIdentity(): Promise<Actor>
@@ -42,6 +43,7 @@ export interface ConversationWorkspaceApi {
   createWorkspace(command: CreateWorkspaceCommand): Promise<Workspace>
   browseWorkspaceDirectories?(path: string): Promise<WorkspaceDirectoryListing>
   importWorkspace?(command: ImportWorkspaceCommand): Promise<Workspace>
+  importDesktopWorkspace?(command: ImportDesktopWorkspaceCommand): Promise<Workspace>
   createConversation(workspaceId: string): Promise<Conversation>
   submitConversationTurn(conversationId: string, command: { content: string; reviewerUrl?: string; modelGroupId?: string }): Promise<ConversationTurn>
   listConversationTurns(conversationId: string): Promise<ConversationTurn[]>
@@ -67,6 +69,7 @@ const DEFAULT_API: ConversationWorkspaceApi = {
   createWorkspace: (command) => createWorkspace(command),
   browseWorkspaceDirectories: (path) => browseWorkspaceDirectories(path),
   importWorkspace: (command) => importWorkspace(command),
+  importDesktopWorkspace: (command) => importDesktopWorkspace(command),
   createConversation: (workspaceId) => createConversation(workspaceId),
   submitConversationTurn: (conversationId, command) => submitConversationTurn(conversationId, command),
   listConversationTurns: (conversationId) => listConversationTurns(conversationId),
@@ -105,6 +108,7 @@ export interface UseConversationWorkspaceResult {
   createWorkspace(command: CreateWorkspaceCommand): Promise<void>
   browseWorkspaceDirectories(path: string): Promise<WorkspaceDirectoryListing>
   importWorkspace(command: ImportWorkspaceCommand): Promise<void>
+  importDesktopWorkspace(command: ImportDesktopWorkspaceCommand): Promise<void>
   selectConversation(conversationId: string): Promise<void>
   search(query: string): Promise<void>
   toggleArchived(): Promise<void>
@@ -309,6 +313,20 @@ export function useConversationWorkspace(
     }
   }, [selectWorkspace])
 
+  const importDesktopWorkspaceEntry = useCallback(async (command: ImportDesktopWorkspaceCommand): Promise<void> => {
+    const importProject = apiRef.current.importDesktopWorkspace
+    if (importProject === undefined) throw new Error('桌面工作区导入接口未配置')
+    setError(null)
+    try {
+      const created = await importProject(command)
+      setWorkspaces((items) => [created, ...items.filter((item) => item.workspaceId !== created.workspaceId)])
+      await selectWorkspace(created.workspaceId)
+    } catch (failure) {
+      setError(asError(failure))
+      throw failure
+    }
+  }, [selectWorkspace])
+
   const submit = useCallback(async (content: string, reviewerUrl?: string, modelGroupId?: string): Promise<ConversationTurn> => {
     if (activeConversationId === null) throw new Error('当前没有会话')
     const exactContent = content.trim()
@@ -330,9 +348,15 @@ export function useConversationWorkspace(
   const deleteActiveConversation = useCallback(async (): Promise<void> => {
     if (activeConversationId === null) throw new Error('当前没有会话')
     if (apiRef.current.deleteConversation === undefined) throw new Error('删除会话接口未配置')
-    await apiRef.current.deleteConversation(activeConversationId)
-    setConversations((items) => items.filter((item) => item.conversationId !== activeConversationId))
-    setActiveConversationId(null); setTurns([]); writeSelection(activeWorkspaceId, null)
+    setError(null)
+    try {
+      await apiRef.current.deleteConversation(activeConversationId)
+      setConversations((items) => items.filter((item) => item.conversationId !== activeConversationId))
+      setActiveConversationId(null); setTurns([]); writeSelection(activeWorkspaceId, null)
+    } catch (failure) {
+      setError(asError(failure))
+      throw failure
+    }
   }, [activeConversationId, activeWorkspaceId])
 
   const reloadModelConfiguration = useCallback(async (): Promise<void> => {
@@ -361,7 +385,9 @@ export function useConversationWorkspace(
     if (activeConversationId === null) throw new Error('当前没有会话')
     try {
       const archived = await apiRef.current.archiveConversation(activeConversationId)
-      setConversations((items) => items.map((item) => item.conversationId === archived.conversationId ? archived : item))
+      setConversations((items) => includeArchived
+        ? items.map((item) => item.conversationId === archived.conversationId ? archived : item)
+        : items.filter((item) => item.conversationId !== archived.conversationId))
       setActiveConversationId(null)
       setTurns([])
       writeSelection(activeWorkspaceId, null)
@@ -369,7 +395,7 @@ export function useConversationWorkspace(
       setError(asError(failure))
       throw failure
     }
-  }, [activeConversationId, activeWorkspaceId])
+  }, [activeConversationId, activeWorkspaceId, includeArchived])
 
   useEffect(() => {
     let disposed = false
@@ -424,6 +450,7 @@ export function useConversationWorkspace(
     createConversation: create, createWorkspace: createWorkspaceEntry,
     browseWorkspaceDirectories: browseWorkspaceDirectoryEntries,
     importWorkspace: importWorkspaceEntry,
+    importDesktopWorkspace: importDesktopWorkspaceEntry,
     submit, archive, deleteConversation: deleteActiveConversation, reload, reloadModelConfiguration,
     createModelProvider: (command) => runModelConfigurationCommand(apiRef.current.createModelProvider === undefined ? undefined : () => apiRef.current.createModelProvider!(command), '模型 Provider 接口未配置'),
     createModelGroup: (command) => runModelConfigurationCommand(apiRef.current.createModelGroup === undefined ? undefined : () => apiRef.current.createModelGroup!(command), '模型组接口未配置'),

@@ -1,25 +1,30 @@
 import { Archive, FolderGit2, FolderPlus, Plus, Search, Trash2, Settings } from 'lucide-react'
 import { useState } from 'react'
 
+import { AccountPlaceholder } from './AccountPlaceholder'
+import { DesktopConnectionStatus } from './DesktopConnectionStatus'
+import type { WorkbenchConnectionState } from '../hooks/useRunWorkbench'
 import type { UseConversationWorkspaceResult } from '../hooks/useConversationWorkspace'
 import { WorkspaceDialog } from './WorkspaceDialog'
 import { ModelSettingsDialog } from './ModelSettingsDialog'
 
 interface ConversationSidebarProps {
   controller: UseConversationWorkspaceResult
+  connectionState: WorkbenchConnectionState
+  activeContext?: string
 }
 
 /** 展示身份、工作区和服务端持久化会话列表。 */
-export function ConversationSidebar({ controller }: ConversationSidebarProps) {
+export function ConversationSidebar({ controller, connectionState, activeContext }: ConversationSidebarProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
+  const connected = connectionState.trace === WebSocket.OPEN && connectionState.terminal === WebSocket.OPEN
+  const connectionLabel = connected ? '运行通道已连接' : '运行通道未连接'
+  const connectionDetail = connected ? 'Trace 与 PTY 已连接' : '等待下一次任务运行'
   return (
-    <aside className="conversation-sidebar" aria-label="会话与工作区">
-      <div className="sidebar-identity">
-        <span className="sidebar-eyebrow">WORKSPACE</span>
-        <strong>{controller.identity?.displayName ?? '加载身份中'}</strong>
-        <code>{controller.identity?.userId ?? ''}</code>
-      </div>
+    <aside className="conversation-sidebar" aria-label="会话与工作区" data-active-context={activeContext}>
+      <AccountPlaceholder identity={controller.identity} />
+      <DesktopConnectionStatus connected={connected} label={connectionLabel} detail={connectionDetail} />
       <button type="button" className="sidebar-model-settings" onClick={() => setModelDialogOpen(true)}><Settings aria-hidden="true" size={14} /> 模型池配置</button>
       <label className="sidebar-label" htmlFor="workspace-select">工作区</label>
       <div className="sidebar-workspace-row">
@@ -90,6 +95,7 @@ export function ConversationSidebar({ controller }: ConversationSidebarProps) {
           createWorkspace={controller.createWorkspace}
           browseWorkspaceDirectories={controller.browseWorkspaceDirectories}
           importWorkspace={controller.importWorkspace}
+          importDesktopWorkspace={controller.importDesktopWorkspace}
           onClose={() => setDialogOpen(false)}
         />
       ) : null}

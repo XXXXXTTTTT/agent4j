@@ -41,6 +41,29 @@ docker compose -f docker-compose.local.yml --env-file .env up -d --build
 
 `Copy-Item` 只在 `.env` 不存在时执行，避免覆盖已有模型密钥、数据库密码和工作区配置。首次启动后，数据库凭据会保存在 PostgreSQL 数据卷中；修改 `.env` 中的 `POSTGRES_USER` 或 `POSTGRES_PASSWORD` 不会自动修改已初始化的数据卷。
 
+### Windows 桌面工作台
+
+`agent-desktop` 是独立的 Electron 外壳，默认且只连接本机 `http://127.0.0.1:8080`。它不会替代 Docker 服务；先按上方本地模式确认 readiness 为 `UP`，再启动桌面端：
+
+```powershell
+Set-Location agent-desktop
+npm ci
+npm run dev
+```
+
+桌面端启动时仅接受 `GET /actuator/health/readiness` 返回 HTTP `200` 且 JSON `status` 精确为 `UP`。服务未就绪时只显示自动重试页，不开放 Agent 操作。
+
+在“新建工作区 -> 导入本地文件夹”中，桌面端使用 Windows 原生目录选择器，主进程仅把普通文件安全归档为 ZIP，再上传既有 `POST /api/workspace-imports`。宿主绝对路径、符号链接和超出服务端导入限制的项目不会发送到服务端。
+
+构建 Windows 安装包：
+
+```powershell
+Set-Location agent-desktop
+npm run package
+```
+
+安装包写入 `agent-desktop/release/`。打包复用已经安装的 Electron 运行时；若 npm 首次下载 Electron 受网络限制，请先执行 `npm ci` 后重试。
+
 两套 Compose 都会强制启用完整产品工作台，因此即使宿主直跑配置中的 `AGENT_PRODUCTION_ENABLED=false`，Docker 内仍会注册工作区、会话和 Agent 执行接口。
 
 打开 <http://localhost:8080>，输入任务描述并点击 **运行 Agent**，即可观察 `Planner -> Coder -> Ops -> Reviewer` 链路。停止本地服务：

@@ -1,20 +1,21 @@
 import { ArrowLeft, ChevronRight, FolderOpen, FolderPlus, LoaderCircle, Upload, X } from 'lucide-react'
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 
-import type { CreateWorkspaceCommand, ImportWorkspaceCommand } from '../api/conversationApi'
+import type { CreateWorkspaceCommand, ImportDesktopWorkspaceCommand, ImportWorkspaceCommand } from '../api/conversationApi'
 import type { WorkspaceDirectoryListing } from '../api/contracts'
 
 interface WorkspaceDialogProps {
   createWorkspace(command: CreateWorkspaceCommand): Promise<void>
   browseWorkspaceDirectories?(path: string): Promise<WorkspaceDirectoryListing>
   importWorkspace?(command: ImportWorkspaceCommand): Promise<void>
+  importDesktopWorkspace?(command: ImportDesktopWorkspaceCommand): Promise<void>
   onClose(): void
 }
 
 type WorkspaceSource = 'mounted' | 'import'
 
 /** 选择受控挂载目录或导入浏览器选择的外部项目文件夹。 */
-export function WorkspaceDialog({ createWorkspace, browseWorkspaceDirectories, importWorkspace, onClose }: WorkspaceDialogProps) {
+export function WorkspaceDialog({ createWorkspace, browseWorkspaceDirectories, importWorkspace, importDesktopWorkspace, onClose }: WorkspaceDialogProps) {
   const [source, setSource] = useState<WorkspaceSource>('mounted')
   const [displayName, setDisplayName] = useState('')
   const [workspacePath, setWorkspacePath] = useState(() => browseWorkspaceDirectories === undefined ? '' : '/agent-workspace')
@@ -22,6 +23,7 @@ export function WorkspaceDialog({ createWorkspace, browseWorkspaceDirectories, i
   const [directory, setDirectory] = useState<WorkspaceDirectoryListing | null>(null)
   const [directoryLoading, setDirectoryLoading] = useState(false)
   const [files, setFiles] = useState<File[]>([])
+  const [desktopArchive, setDesktopArchive] = useState<Agent4jDesktopProjectArchive | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<Error | null>(null)
 
@@ -59,12 +61,17 @@ export function WorkspaceDialog({ createWorkspace, browseWorkspaceDirectories, i
     setError(null)
     try {
       if (source === 'import') {
-        if (files.length === 0) {
+        if (desktopArchive === null && files.length === 0) {
           setError(new Error('请选择要导入的文件夹'))
           return
         }
-        if (importWorkspace === undefined) throw new Error('工作区导入接口未配置')
-        await importWorkspace({ displayName: name, repositoryId: repository, files })
+        if (desktopArchive !== null) {
+          if (importDesktopWorkspace === undefined) throw new Error('桌面工作区导入接口未配置')
+          await importDesktopWorkspace({ displayName: name, repositoryId: repository, archive: desktopArchive.archive })
+        } else {
+          if (importWorkspace === undefined) throw new Error('工作区导入接口未配置')
+          await importWorkspace({ displayName: name, repositoryId: repository, files })
+        }
       } else {
         const command = { displayName: name, workspacePath: workspacePath.trim(), repositoryId: repository }
         if (command.workspacePath.length === 0) {
@@ -93,6 +100,19 @@ export function WorkspaceDialog({ createWorkspace, browseWorkspaceDirectories, i
       })
       .catch((failure) => setError(failure instanceof Error ? failure : new Error(String(failure))))
       .finally(() => setDirectoryLoading(false))
+  }
+
+  async function selectDesktopProject(): Promise<void> {
+    if (window.agent4jDesktop === undefined) return
+    setError(null)
+    try {
+      const selected = await window.agent4jDesktop.selectProjectArchive()
+      if (selected === null) return
+      setDesktopArchive(selected)
+      if (displayName.trim().length === 0) setDisplayName(selected.suggestedDisplayName)
+    } catch (failure) {
+      setError(failure instanceof Error ? failure : new Error(String(failure)))
+    }
   }
 
   return (
@@ -146,16 +166,28 @@ export function WorkspaceDialog({ createWorkspace, browseWorkspaceDirectories, i
           ) : (
             <>
               <label className="field-label" htmlFor="workspace-folder">本地项目文件夹</label>
-              <input
-                id="workspace-folder"
-                type="file"
-                multiple
-                {...({ webkitdirectory: 'true', directory: 'true' } as Record<string, string>)}
-                onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
-                disabled={submitting}
-              />
-              <p className="workspace-dialog-hint">浏览器会将所选文件夹打包上传到 Agent 的受控导入目录，不会读取目录之外的文件。</p>
-              {files.length === 0 ? null : <p className="workspace-dialog-hint">已选择 {files.length} 个文件，共 {fileBytes.toLocaleString()} 字节</p>}
+              {window.agent4jDesktop === undefined ? (
+                <>
+                  <input
+                    id="workspace-folder"
+                    type="file"
+                    multiple
+                    {...({ webkitdirectory: 'true', directory: 'true' } as Record<string, string>)}
+                    onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
+                    disabled={submitting}
+                  />
+                  <p className="workspace-dialog-hint">浏览器会将所选文件夹打包上传到 Agent 的受控导入目录，不会读取目录之外的文件。</p>
+                  {files.length === 0 ? null : <p className="workspace-dialog-hint">已选择 {files.length} 个文件，共 {fileBytes.toLocaleString()} 字节</p>}
+                </>
+              ) : (
+                <>
+                  <button type="button" className="secondary-command" onClick={() => void selectDesktopProject()} disabled={submitting}>
+                    <FolderOpen aria-hidden="true" size={15} />选择本地项目文件夹
+                  </button>
+                  <p className="workspace-dialog-hint">桌面端只上传安全归档，不向服务端传递本机文件夹路径。</p>
+                  {desktopArchive === null ? null : <p className="workspace-dialog-hint">已选择 {desktopArchive.fileCount} 个文件，共 {desktopArchive.totalBytes.toLocaleString()} 字节</p>}
+                </>
+              )}
             </>
           )}
           <label className="field-label" htmlFor="workspace-repository-id">仓库标识</label>

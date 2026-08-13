@@ -25,6 +25,10 @@ node_modules/
 coverage/
 .vite/
 .frontend/
+.electron/
+agent-desktop/dist/
+agent-desktop/release/
+agent-desktop/vite.config.js
 .worktrees/
 .agent4j/
 !.agent4j/

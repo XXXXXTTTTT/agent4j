@@ -1,4 +1,4 @@
-import { Activity, Code2, Globe2, RefreshCw, ShieldCheck, Terminal } from 'lucide-react'
+import { Activity, Code2, Globe2, MessageSquare, RefreshCw, ShieldCheck, Terminal, FolderGit2 } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
 import { useEffect } from 'react'
 
@@ -27,6 +27,7 @@ interface WorkbenchProps {
 }
 
 type WorkbenchTab = 'code' | 'terminal' | 'review' | 'trace' | 'capability'
+type ActivityView = 'conversation' | 'project' | 'evidence' | 'capability'
 
 const TABS: Array<{ id: WorkbenchTab; label: string; icon: typeof Code2 }> = [
   { id: 'code', label: '代码变更', icon: Code2 },
@@ -36,9 +37,17 @@ const TABS: Array<{ id: WorkbenchTab; label: string; icon: typeof Code2 }> = [
   { id: 'capability', label: '能力', icon: ShieldCheck },
 ]
 
+const ACTIVITY_ITEMS: Array<{ id: ActivityView; label: string; icon: typeof Code2 }> = [
+  { id: 'conversation', label: '对话', icon: MessageSquare },
+  { id: 'project', label: '项目', icon: FolderGit2 },
+  { id: 'evidence', label: '运行证据', icon: Activity },
+  { id: 'capability', label: '能力', icon: ShieldCheck },
+]
+
 /** 编排对话式任务流与执行证据检查器。 */
 export function Workbench({ controller, onTerminalReady, conversation }: WorkbenchProps) {
   const [activeTab, setActiveTab] = useState<WorkbenchTab>('code')
+  const [activeActivity, setActiveActivity] = useState<ActivityView>('conversation')
   const [reviewOpened, setReviewOpened] = useState(false)
   const belongsToConversation = conversation === undefined
     || controller.run === null
@@ -52,6 +61,11 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
   const currentNode = latestTrace?.type === 'NODE_STARTED'
     ? latestTrace.nodeName
     : run?.nextNode ?? null
+  function selectActivity(view: ActivityView): void {
+    setActiveActivity(view)
+    if (view === 'evidence') setActiveTab('trace')
+    if (view === 'capability') setActiveTab('capability')
+  }
 
   useEffect(() => {
     if (conversation === undefined || run === null) return
@@ -87,8 +101,28 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
       </header>
 
       <div className={`agent-layout ${conversation === undefined ? '' : 'has-conversation-sidebar'}`}>
-        {conversation === undefined ? null : <ConversationSidebar controller={conversation} />}
-        <main className="conversation-column" data-testid="workspace-main">
+        {conversation === undefined ? null : (
+          <nav className="workbench-activity-bar" role="navigation" aria-label="工作台活动栏">
+            {ACTIVITY_ITEMS.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                aria-label={label}
+                aria-current={activeActivity === id ? 'page' : undefined}
+                title={label}
+                onClick={() => selectActivity(id)}
+              >
+                <Icon aria-hidden="true" size={18} />
+              </button>
+            ))}
+          </nav>
+        )}
+        {conversation === undefined ? null : (
+          <div id="activity-project-panel" className="workbench-project-column" data-active-context={activeActivity}>
+            <ConversationSidebar controller={conversation} connectionState={belongsToConversation ? controller.connectionState : { trace: null, terminal: null }} activeContext={activeActivity} />
+          </div>
+        )}
+        <main id="activity-conversation-panel" className="conversation-column" data-testid="workspace-main" data-active-context={activeActivity}>
           <div className="conversation-scroll">
             <AgentConversation run={run} currentNode={currentNode} turns={conversation?.turns} />
             {run === null ? null : <ApprovalDialog run={run} decide={controller.decide} />}
@@ -96,7 +130,7 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
           {conversation === undefined ? <RunLauncher controller={controller} /> : <ConversationComposer conversation={conversation} runController={controller} />}
         </main>
 
-        <aside className="execution-inspector" aria-label="执行检查器">
+        <aside id="execution-inspector" className="execution-inspector" aria-label="执行检查器" data-active-context={activeActivity}>
           <div className="inspector-heading">
             <div>
               <p className="section-kicker">RUN EVIDENCE</p>

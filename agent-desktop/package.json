@@ -1,0 +1,25 @@
+{
+  "name": "agent4j-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Agent4J local desktop workbench",
+  "author": "Agent4J",
+  "type": "module",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "npm run build && electron .",
+    "test:run": "vitest run",
+    "package": "npm run build && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "fflate": "0.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "electron": "43.4.0",
+    "electron-builder": "26.15.3",
+    "typescript": "5.8.3",
+    "vitest": "4.1.10"
+  }
+}

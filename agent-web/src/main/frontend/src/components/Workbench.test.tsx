@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Actor, Conversation, ConversationTurn, ModelConfigurationSnapshot, RunView, TraceEvent, Workspace } from '../api/contracts'
 import type { UseConversationWorkspaceResult } from '../hooks/useConversationWorkspace'
 import type { UseRunWorkbenchResult } from '../hooks/useRunWorkbench'
+import { AccountPlaceholder } from './AccountPlaceholder'
+import { DesktopConnectionStatus } from './DesktopConnectionStatus'
 import { Workbench } from './Workbench'
 
 vi.mock('../monaco/MonacoEditors', () => ({
@@ -109,6 +111,70 @@ function traceEvents(): TraceEvent[] {
 }
 
 describe('Workbench', () => {
+  it('在活动栏切换真实工作上下文焦点并保留所有三栏可访问', async () => {
+    const user = userEvent.setup()
+    render(<Workbench controller={controller()} conversation={conversationController()} onTerminalReady={() => undefined} />)
+
+    const activityBar = screen.getByRole('navigation', { name: '工作台活动栏' })
+    for (const label of ['对话', '项目', '运行证据', '能力']) {
+      expect(within(activityBar).getByRole('button', { name: label })).toBeVisible()
+    }
+    const conversationTab = within(activityBar).getByRole('button', { name: '对话' })
+    const projectTab = within(activityBar).getByRole('button', { name: '项目' })
+    const evidenceTab = within(activityBar).getByRole('button', { name: '运行证据' })
+    const capabilityTab = within(activityBar).getByRole('button', { name: '能力' })
+    expect(conversationTab).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByTestId('workspace-main')).toBeVisible()
+    expect(screen.getByLabelText('会话与工作区')).toBeVisible()
+    expect(screen.getByLabelText('会话与工作区')).toHaveAttribute('data-active-context', 'conversation')
+
+    await user.click(projectTab)
+    expect(projectTab).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByLabelText('会话与工作区')).toBeVisible()
+    expect(screen.getByLabelText('会话与工作区')).toHaveAttribute('data-active-context', 'project')
+    expect(screen.getByTestId('workspace-main')).toBeVisible()
+
+    await user.click(evidenceTab)
+    expect(evidenceTab).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByLabelText('执行检查器')).toBeVisible()
+    expect(screen.getByLabelText('执行检查器')).toHaveAttribute('data-active-context', 'evidence')
+    expect(screen.getByRole('tab', { name: 'Trace' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('workspace-main')).toBeVisible()
+
+    await user.click(capabilityTab)
+    expect(capabilityTab).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByLabelText('执行检查器')).toHaveAttribute('data-active-context', 'capability')
+    expect(within(screen.getByRole('tablist', { name: '检查器视图' })).getByRole('tab', { name: '能力' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('workspace-main')).toBeVisible()
+  })
+
+  it('在项目侧栏显示未建立运行通道与本地身份占位', async () => {
+    const user = userEvent.setup()
+    render(<Workbench controller={controller()} conversation={conversationController()} onTerminalReady={() => undefined} />)
+
+    await user.click(screen.getByRole('button', { name: '项目' }))
+    expect(screen.getByText('运行通道未连接')).toBeVisible()
+    expect(screen.getByText('等待下一次任务运行')).toBeVisible()
+    expect(screen.getByText('本地身份')).toBeVisible()
+    expect(screen.getByText('Alice')).toBeVisible()
+    expect(screen.getByText('user-1')).toBeVisible()
+    expect(screen.getByTestId('account-menu-mount')).toBeEmptyDOMElement()
+  })
+
+  it('使用明确连接 props 呈现已连接状态与服务端身份字段', () => {
+    render(
+      <>
+        <DesktopConnectionStatus connected label="运行通道已连接" detail="Trace 与 PTY 已连接" />
+        <AccountPlaceholder identity={{ userId: 'server-user', displayName: 'Server User' }} />
+      </>,
+    )
+
+    expect(screen.getByText('运行通道已连接')).toBeVisible()
+    expect(screen.getByText('Trace 与 PTY 已连接')).toBeVisible()
+    expect(screen.getByText('Server User')).toBeVisible()
+    expect(screen.getByText('server-user')).toBeVisible()
+  })
+
   it('展示持久化会话侧栏、历史轮次并将新轮次接入 Run 证据', async () => {
     const user = userEvent.setup()
     const conversations = conversationController()
@@ -390,7 +456,7 @@ describe('Workbench', () => {
     expect(screen.getByRole('button', { name: '运行 Agent' })).toBeEnabled()
   })
 
-  it('通过四个检查器视图访问代码、终端、审查和 Trace', async () => {
+  it('通过五个检查器视图访问代码、终端、审查、Trace 和能力', async () => {
     const user = userEvent.setup()
     render(
       <Workbench
@@ -400,11 +466,12 @@ describe('Workbench', () => {
     )
 
     const inspector = screen.getByLabelText('执行检查器')
-    for (const label of ['代码变更', '终端', '浏览器', 'Trace']) {
+    for (const label of ['代码变更', '终端', '浏览器', 'Trace', '能力']) {
       expect(within(inspector).getByRole('tab', { name: label })).toBeVisible()
     }
     await user.click(within(inspector).getByRole('tab', { name: 'Trace' }))
     expect(screen.getByTestId('trace-timeline')).toBeVisible()
+    expect(within(inspector).getByRole('tab', { name: 'Trace' })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('没有实时事件时从权威 state.trace 恢复阶段轨迹', async () => {
