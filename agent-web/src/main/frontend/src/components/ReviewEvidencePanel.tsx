@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from 'react'
 
 import type { RunView } from '../api/contracts'
 import { Editor } from '../monaco/MonacoEditors'
+import { getEditorTheme } from '../appearance/editorTheme'
+import { useAppearance } from '../appearance/AppearanceProvider'
 
 interface ReviewEvidencePanelProps {
   run: RunView | null
@@ -14,6 +16,7 @@ const PNG_DATA_URL = /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/
 
 /** 按 Checkpoint 版本展示 ReviewerNode 的截图与纯文本 DOM 证据。 */
 export function ReviewEvidencePanel({ run, history }: ReviewEvidencePanelProps) {
+  const { resolvedColorMode } = useAppearance()
   const evidenceRuns = useMemo(() => {
     const byVersion = new Map<number, RunView>()
     for (const item of history) byVersion.set(item.version, item)
@@ -117,7 +120,7 @@ export function ReviewEvidencePanel({ run, history }: ReviewEvidencePanelProps) 
             height="100%"
             value={dom}
             language="html"
-            theme="vs"
+            theme={getEditorTheme(resolvedColorMode)}
             options={{
               readOnly: true,
               minimap: { enabled: false },

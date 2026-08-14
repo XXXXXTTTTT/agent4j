@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { parseUnifiedDiff, type UnifiedDiffFile } from '../diff/unifiedDiff'
 import { DiffEditor } from '../monaco/MonacoEditors'
+import { getEditorTheme } from '../appearance/editorTheme'
+import { useAppearance } from '../appearance/AppearanceProvider'
 
 interface CodeDiffPanelProps {
   unifiedDiff: string | undefined
@@ -25,6 +27,7 @@ function useNarrowLayout(): boolean {
 
 /** 将 Unified Diff 拆分为可选择的只读 Monaco 文件视图。 */
 export function CodeDiffPanel({ unifiedDiff }: CodeDiffPanelProps) {
+  const { resolvedColorMode } = useAppearance()
   const parsed = useMemo<{ files: UnifiedDiffFile[]; error: string | null }>(() => {
     if (unifiedDiff === undefined || unifiedDiff.length === 0) return { files: [], error: null }
     try {
@@ -70,7 +73,7 @@ export function CodeDiffPanel({ unifiedDiff }: CodeDiffPanelProps) {
           original={selected.original}
           modified={selected.modified}
           language="java"
-          theme="vs"
+          theme={getEditorTheme(resolvedColorMode)}
           options={{
             readOnly: true,
             originalEditable: false,

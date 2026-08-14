@@ -4,11 +4,17 @@ import { APPEARANCE_STORAGE_KEY, DEFAULT_APPEARANCE, type AppearancePreferences,
 
 interface AppearanceContextValue {
   preferences: AppearancePreferences
+  resolvedColorMode: 'LIGHT' | 'DARK'
   updatePreferences(update: Partial<AppearancePreferences>): void
   resetPreferences(): void
 }
 
-const AppearanceContext = createContext<AppearanceContextValue | null>(null)
+const AppearanceContext = createContext<AppearanceContextValue>({
+  preferences: DEFAULT_APPEARANCE,
+  resolvedColorMode: 'LIGHT',
+  updatePreferences: () => undefined,
+  resetPreferences: () => undefined,
+})
 
 function readPreferences(): AppearancePreferences {
   try { return normalizeAppearancePreferences(JSON.parse(window.localStorage.getItem(APPEARANCE_STORAGE_KEY) ?? 'null')) } catch { return DEFAULT_APPEARANCE }
@@ -40,14 +46,13 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
   }, [preferences, systemMode])
   const value = useMemo<AppearanceContextValue>(() => ({
     preferences,
+    resolvedColorMode: preferences.colorMode === 'SYSTEM' ? systemMode : preferences.colorMode,
     updatePreferences: (update) => setPreferences((current) => ({ ...current, ...update })),
     resetPreferences: () => setPreferences(DEFAULT_APPEARANCE),
-  }), [preferences])
+  }), [preferences, systemMode])
   return <AppearanceContext.Provider value={value}>{children}</AppearanceContext.Provider>
 }
 
 export function useAppearance(): AppearanceContextValue {
-  const value = useContext(AppearanceContext)
-  if (value === null) throw new Error('外观设置必须在 AppearanceProvider 内使用')
-  return value
+  return useContext(AppearanceContext)
 }

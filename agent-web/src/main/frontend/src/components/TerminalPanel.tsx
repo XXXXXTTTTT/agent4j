@@ -2,6 +2,8 @@ import '@xterm/xterm/css/xterm.css'
 
 import { Terminal as TerminalIcon } from 'lucide-react'
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react'
+import { useAppearance } from '../appearance/AppearanceProvider'
+import { getTerminalTheme } from '../appearance/terminalTheme'
 
 export interface TerminalPanelHandle {
   reset(): void
@@ -15,6 +17,7 @@ interface TerminalPanelProps {
 
 /** 保存 ANSI 原文，并负责 xterm、FitAddon 与 ResizeObserver 的成对释放。 */
 export function TerminalPanel({ active, terminalRef }: TerminalPanelProps) {
+  const { resolvedColorMode } = useAppearance()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<import('@xterm/xterm').Terminal | null>(null)
   const bufferRef = useRef('')
@@ -48,13 +51,7 @@ export function TerminalPanel({ active, terminalRef }: TerminalPanelProps) {
           fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, monospace',
           fontSize: 13,
           lineHeight: 1.25,
-          theme: {
-            background: '#11120f', foreground: '#f1f0e9', cursor: '#8ab4ff',
-            black: '#171814', brightBlack: '#4a4d43', red: '#ef8991', brightRed: '#ef8991',
-            green: '#71c58c', brightGreen: '#71c58c', yellow: '#e3b86b', brightYellow: '#e3b86b',
-            blue: '#8ab4ff', brightBlue: '#8ab4ff', magenta: '#c6a0dc', brightMagenta: '#c6a0dc',
-            cyan: '#8fbfc1', brightCyan: '#8fbfc1', white: '#bebdb4', brightWhite: '#f1f0e9',
-          },
+          theme: getTerminalTheme(resolvedColorMode),
         })
         const fitAddon = new FitAddon()
         terminal.loadAddon(fitAddon)
@@ -75,7 +72,7 @@ export function TerminalPanel({ active, terminalRef }: TerminalPanelProps) {
       xtermRef.current?.dispose()
       xtermRef.current = null
     }
-  }, [])
+  }, [resolvedColorMode])
 
   useEffect(() => {
     if (active) window.dispatchEvent(new Event('resize'))
