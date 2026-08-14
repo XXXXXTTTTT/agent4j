@@ -25,9 +25,9 @@
 - Modify: `agent-web/src/main/frontend/src/styles.css`
 - Test: `agent-web/src/main/frontend/src/components/Workbench.test.tsx`
 
-- [ ] 写测试断言工作台使用暖中性主题标记、顶栏 44px 语义类、活动栏焦点和检查器收纳按钮。
+- [ ] 写测试断言 `aria-current`、检查器收纳/展开、断点状态 class、隐藏面板不可聚焦；颜色与像素尺寸只由真实浏览器验收证明。
 - [ ] 删除旧的浅色规则与末尾覆盖补丁，按 token、布局、组件、状态、媒体查询五段重写 CSS；保证所有既有 class 都有同一主题下的背景和文字色。
-- [ ] 将布局改为 48px 活动栏、248px 项目栏、中心自适应、380px 检查器；新增检查器收纳态和 1280/760px 媒体查询。
+- [ ] 将布局改为 48px 活动栏、248px 项目栏、中心自适应、380px 检查器；实现 `1280/900/760` 三个确定断点的收纳态和 Terminal/Trace 激活生命周期。
 - [ ] 运行定向测试和 `npm run build`。
 - [ ] 提交 `feat(web): establish warm neutral workbench theme`。
 
@@ -64,7 +64,8 @@
 - Modify: `README.md`
 - Create: `agent-web/src/main/frontend/src/components/Workbench.visual.test.tsx`
 
-- [ ] 增加基于 jsdom 的布局语义回归测试，覆盖收纳态、移动态 class 和主输入可访问名称。
-- [ ] 在本地运行 `npm run test:run` 与 `npm run build`，使用 Electron/可用浏览器对 1440x900、1024x768、390x844 验收无横向溢出和混合白色控件。
+- [ ] 增加基于 jsdom 的布局语义回归测试，覆盖收纳态、移动态 class、隐藏面板可访问性和主输入可访问名称；在 `AgentConversation` 测试中覆盖原始请求/响应默认折叠。
+- [ ] 启动 `npm run dev -- --host 127.0.0.1`，用 Chromium headless 在 1440x900、1024x768、390x844 访问同一空态 fixture，保存 `.tmp/visual-acceptance/workbench-<width>x<height>.png`，并执行滚动宽度/可见输入/隐藏面板焦点断言。
+- [ ] 回归 `WorkspaceDialog`、`AccountPlaceholder`、`DesktopConnectionStatus`、`ModelSettingsDialog`、`CapabilityWorkbenchPanel`、`ApprovalDialog`、`TerminalPanel`、`TraceTimeline` 和图片工件测试。
 - [ ] 更新 README 的桌面工作台视觉和检查器收纳说明，不宣称不存在的截图或模型能力。
 - [ ] 提交 `docs(web): document warm neutral workbench acceptance`。
