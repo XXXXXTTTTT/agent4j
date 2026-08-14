@@ -94,7 +94,7 @@ export function ReviewEvidencePanel({ run, history }: ReviewEvidencePanelProps) 
       )}
       {finalUrl === undefined ? null : <p className="evidence-url">{finalUrl}</p>}
       {reviewerRequest === undefined && reviewerResponse === undefined ? null : (
-        <details className="evidence-details review-call-details" open>
+        <details className="evidence-details review-call-details">
           <summary>Reviewer 模型调用</summary>
           {reviewerRequest === undefined ? null : <pre>{reviewerRequest}</pre>}
           {reviewerResponse === undefined ? null : <pre>{reviewerResponse}</pre>}

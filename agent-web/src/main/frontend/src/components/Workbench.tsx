@@ -1,6 +1,5 @@
 import { Activity, Code2, Globe2, MessageSquare, PanelRightClose, PanelRightOpen, RefreshCw, ShieldCheck, Terminal, FolderGit2 } from 'lucide-react'
-import { lazy, Suspense, useState } from 'react'
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 
 import type { UseRunWorkbenchResult } from '../hooks/useRunWorkbench'
 import { AgentConversation } from './AgentConversation'
@@ -48,7 +47,11 @@ const ACTIVITY_ITEMS: Array<{ id: ActivityView; label: string; icon: typeof Code
 export function Workbench({ controller, onTerminalReady, conversation }: WorkbenchProps) {
   const [activeTab, setActiveTab] = useState<WorkbenchTab>('code')
   const [activeActivity, setActiveActivity] = useState<ActivityView>('conversation')
-  const [inspectorOpen, setInspectorOpen] = useState(true)
+  const [inspectorOpen, setInspectorOpen] = useState(() =>
+    typeof window.matchMedia !== 'function' || !window.matchMedia('(max-width: 1280px)').matches,
+  )
+  const [focusInspectorAfterOpen, setFocusInspectorAfterOpen] = useState(false)
+  const inspectorHeadingRef = useRef<HTMLHeadingElement>(null)
   const [reviewOpened, setReviewOpened] = useState(false)
   const belongsToConversation = conversation === undefined
     || controller.run === null
@@ -64,9 +67,23 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
     : run?.nextNode ?? null
   function selectActivity(view: ActivityView): void {
     setActiveActivity(view)
-    if (view === 'evidence') setActiveTab('trace')
-    if (view === 'capability') setActiveTab('capability')
+    if (view === 'evidence') { setActiveTab('trace'); setInspectorOpen(true); setFocusInspectorAfterOpen(true) }
+    if (view === 'capability') { setActiveTab('capability'); setInspectorOpen(true); setFocusInspectorAfterOpen(true) }
   }
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return undefined
+    const media = window.matchMedia('(max-width: 1280px)')
+    const closeForNarrowLayout = () => { if (media.matches) setInspectorOpen(false) }
+    media.addEventListener('change', closeForNarrowLayout)
+    return () => media.removeEventListener('change', closeForNarrowLayout)
+  }, [])
+
+  useEffect(() => {
+    if (!inspectorOpen || !focusInspectorAfterOpen) return
+    inspectorHeadingRef.current?.focus()
+    setFocusInspectorAfterOpen(false)
+  }, [focusInspectorAfterOpen, inspectorOpen])
 
   useEffect(() => {
     if (conversation === undefined || run === null) return
@@ -106,7 +123,12 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
             aria-expanded={inspectorOpen}
             aria-label={inspectorOpen ? '收纳检查器' : '展开检查器'}
             title={inspectorOpen ? '收纳检查器' : '展开检查器'}
-            onClick={() => setInspectorOpen((open) => !open)}
+            onClick={() => {
+              setInspectorOpen((open) => {
+                if (!open) setFocusInspectorAfterOpen(true)
+                return !open
+              })
+            }}
           >
             {inspectorOpen ? <PanelRightClose aria-hidden="true" size={16} /> : <PanelRightOpen aria-hidden="true" size={16} />}
           </button>
@@ -147,7 +169,7 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
           <div className="inspector-heading">
             <div>
               <p className="section-kicker">RUN EVIDENCE</p>
-              <h2>执行详情</h2>
+              <h2 ref={inspectorHeadingRef} tabIndex={-1}>执行详情</h2>
             </div>
             <span className="checkpoint-label">{run === null ? '尚未运行' : `Checkpoint ${run.version}`}</span>
           </div>
@@ -176,7 +198,7 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
               </Suspense>
             </div>
             <div id="terminal-view" role="tabpanel" hidden={activeTab !== 'terminal'}>
-              <TerminalPanel active={activeTab === 'terminal'} terminalRef={onTerminalReady} />
+              <TerminalPanel active={inspectorOpen && activeTab === 'terminal'} terminalRef={onTerminalReady} />
             </div>
             <div id="review-view" role="tabpanel" hidden={activeTab !== 'review'}>
               {reviewOpened ? (
@@ -186,13 +208,13 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
               ) : null}
             </div>
             <div id="trace-view" role="tabpanel" hidden={activeTab !== 'trace'}>
-              <TraceTimeline
+              {inspectorOpen ? <TraceTimeline
                 events={traceEvents}
                 connectionState={belongsToConversation
                   ? controller.connectionState
                   : { trace: null, terminal: null }}
                 persistedNodes={run?.state.trace ?? []}
-              />
+              /> : null}
             </div>
             <div id="capability-view" role="tabpanel" hidden={activeTab !== 'capability'}>
               {conversation?.activeWorkspace == null ? <div className="empty-tool-state">请选择工作区后管理能力</div> : <CapabilityWorkbenchRuntime workspaceId={conversation.activeWorkspace.workspaceId} />}

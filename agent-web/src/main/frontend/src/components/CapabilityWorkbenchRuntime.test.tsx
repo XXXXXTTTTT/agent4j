@@ -103,7 +103,7 @@ describe('CapabilityWorkbenchRuntime', () => {
     capabilityApi.listSkillInstallations.mockResolvedValue([])
 
     render(<CapabilityWorkbenchRuntime workspaceId="ws-1" />)
-    expect(await screen.findByLabelText('目录版本')).toHaveTextContent(catalog.commitSha)
+    await waitFor(() => expect(screen.getByLabelText('目录版本')).toHaveTextContent(catalog.commitSha))
     await user.click(screen.getByRole('button', { name: '刷新' }))
 
     expect(screen.getByLabelText('目录版本')).toHaveTextContent(catalog.commitSha)
