@@ -47,6 +47,9 @@ import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.skill.SkillInstallationRepository;
 import com.agent.web.capability.CapabilityManagementAuditSink;
 import com.agent.core.tool.ToolRegistry;
+import com.agent.core.tool.DefaultToolRegistry;
+import com.agent.core.cli.CliCommandCatalog;
+import com.agent.core.cli.WorkspaceTerminalTargetResolver;
 import com.agent.core.skill.SkillCatalogProvider;
 import com.agent.web.skill.InstalledSkillCatalogProvider;
 import com.agent.core.skill.SkillDefinition;
@@ -93,6 +96,32 @@ public class HarnessConfiguration {
     @ConditionalOnMissingBean(ActorResolver.class)
     ActorResolver defaultActorResolver() {
         return new ConfiguredActorResolver("local", "本地用户");
+    }
+
+    /** 生产图未启用时仍提供空治理注册表，保证能力管理装配可用。 */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    @ConditionalOnMissingBean(ToolRegistry.class)
+    ToolRegistry fallbackToolRegistry() {
+        return new DefaultToolRegistry();
+    }
+
+    /** 生产图未装配时保持 CLI API 可发现，但不暴露可执行命令。 */
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    @ConditionalOnMissingBean(CliCommandCatalog.class)
+    CliCommandCatalog fallbackCliCommandCatalog() {
+        return new CliCommandCatalog(List.of());
+    }
+
+    /** 空 CLI 目录不会解析终端目标；误用时明确拒绝执行。 */
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    @ConditionalOnMissingBean(WorkspaceTerminalTargetResolver.class)
+    WorkspaceTerminalTargetResolver fallbackWorkspaceTerminalTargetResolver() {
+        return ignored -> {
+            throw new IllegalStateException("当前运行未配置 CLI 终端目标");
+        };
     }
 
     /** 创建 PostgreSQL Checkpointer 适配器。 */

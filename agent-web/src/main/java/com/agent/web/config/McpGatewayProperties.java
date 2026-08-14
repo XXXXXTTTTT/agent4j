@@ -23,7 +23,7 @@ public record McpGatewayProperties(
         protocolVersion = text(protocolVersion, "protocolVersion");
         clientName = text(clientName, "clientName");
         clientVersion = text(clientVersion, "clientVersion");
-        servers = List.copyOf(Objects.requireNonNull(servers, "servers 不能为空"));
+        servers = servers == null ? List.of() : List.copyOf(servers);
         if (enabled && servers.isEmpty()) {
             throw new IllegalArgumentException("MCP 启用时 servers 不能为空列表");
         }
