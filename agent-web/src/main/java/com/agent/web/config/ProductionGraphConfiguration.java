@@ -257,9 +257,9 @@ public class ProductionGraphConfiguration {
                         CliRiskLevel.READ_ONLY,
                         Set.of(RequiredCapability.TERMINAL)),
                 new CliCommandDefinition(
-                        "mvn",
-                        "mvn",
-                        List.of(),
+                        "project.files",
+                        "find",
+                        List.of(".", "-maxdepth", "2", "-type", "f"),
                         CliRiskLevel.READ_ONLY,
                         Set.of(RequiredCapability.TERMINAL))));
     }

@@ -148,12 +148,16 @@ class ProductionGraphConfigurationTest {
     }
 
     @Test
-    void exposesNaturalMavenCommandNameToCodeModel() {
+    void exposesUsefulProjectInspectionCommands() {
         var catalog = new ProductionGraphConfiguration().productionCliCommandCatalog();
 
-        var maven = catalog.find("mvn").orElseThrow();
+        var maven = catalog.find("test.maven").orElseThrow();
         assertThat(maven.executable()).isEqualTo("mvn");
-        assertThat(maven.fixedArguments()).isEmpty();
+        assertThat(maven.fixedArguments()).containsExactly("test");
+        var files = catalog.find("project.files").orElseThrow();
+        assertThat(files.executable()).isEqualTo("find");
+        assertThat(files.fixedArguments()).containsExactly(".", "-maxdepth", "2", "-type", "f");
+        assertThat(catalog.find("mvn")).isEmpty();
     }
 
     @Test
@@ -213,8 +217,8 @@ class ProductionGraphConfigurationTest {
                     java.util.UUID.randomUUID(),
                     AgentState.empty()
                             .withVariable(CoderNode.WORKSPACE_PATH_KEY, workspace.toString())
-                            .withVariable(OpsNode.COMMAND_NAME_KEY, "mvn")
-                            .withVariable(OpsNode.COMMAND_ARGUMENTS_KEY, "[\"test\"]")
+                            .withVariable(OpsNode.COMMAND_NAME_KEY, "test.maven")
+                            .withVariable(OpsNode.COMMAND_ARGUMENTS_KEY, "[]")
                             .withVariable(PlannerNode.REQUIRED_CAPABILITIES_KEY, "TERMINAL"),
                     "ops", false), new com.agent.core.engine.GraphExecutionListener() {
                         @Override
