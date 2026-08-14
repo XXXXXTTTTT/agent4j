@@ -4,6 +4,10 @@ import com.agent.core.engine.AgentState;
 import com.agent.core.engine.GraphFactory;
 import com.agent.core.engine.StateGraph;
 import com.agent.core.llm.ChatMessage;
+import com.agent.core.cli.CliCommandCatalog;
+import com.agent.core.cli.WorkspaceTerminalTargetResolver;
+import com.agent.core.tool.DefaultToolRegistry;
+import com.agent.core.tool.ToolRegistry;
 import com.agent.web.AgentWebApplication;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.AfterAll;
@@ -172,6 +176,23 @@ class ConversationFlowIntegrationTest {
                     })
                     .setEntryPoint("planner")
                     .addEdge("planner", StateGraph.END);
+        }
+
+        @Bean(destroyMethod = "close")
+        ToolRegistry testToolRegistry() {
+            return new DefaultToolRegistry();
+        }
+
+        @Bean
+        CliCommandCatalog testCliCommandCatalog() {
+            return new CliCommandCatalog(List.of());
+        }
+
+        @Bean
+        WorkspaceTerminalTargetResolver testWorkspaceTerminalTargetResolver() {
+            return ignored -> {
+                throw new IllegalStateException("会话连续性测试不执行 CLI 命令");
+            };
         }
     }
 }
