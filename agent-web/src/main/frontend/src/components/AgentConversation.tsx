@@ -260,7 +260,7 @@ export function AgentConversation({ run, currentNode, turns = [] }: AgentConvers
             <div className="plan-block"><strong>执行计划</strong><MarkdownMessage markdown={plan} /></div>
           )}
           {plannerRequest === undefined && plannerResponse === undefined ? null : (
-            <details className="evidence-details" open>
+            <details className="evidence-details">
               <summary>Planner 模型调用 {plannerModel === undefined ? '' : `· ${plannerModel}`}</summary>
               {plannerRequest === undefined ? null : <pre>{plannerRequest}</pre>}
               {plannerResponse === undefined ? null : <pre>{plannerResponse}</pre>}
@@ -331,7 +331,7 @@ export function AgentConversation({ run, currentNode, turns = [] }: AgentConvers
               {coderModel === undefined ? null : <code>{coderModel}</code>}
             </div>
             {coderSummary === undefined ? null : <MarkdownMessage markdown={coderSummary} />}
-            {coderRequest === undefined ? null : <details className="evidence-details" open><summary>模型请求</summary><pre>{coderRequest}</pre></details>}
+            {coderRequest === undefined ? null : <details className="evidence-details"><summary>模型请求</summary><pre>{coderRequest}</pre></details>}
             {coderResponse === undefined ? null : <details className="evidence-details"><summary>模型响应</summary><pre>{coderResponse}</pre></details>}
             {coderError === undefined ? null : <pre className="run-error-detail">{coderError}</pre>}
           </div>

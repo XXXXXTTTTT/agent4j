@@ -1,4 +1,4 @@
-import { Activity, Code2, Globe2, MessageSquare, RefreshCw, ShieldCheck, Terminal, FolderGit2 } from 'lucide-react'
+import { Activity, Code2, Globe2, MessageSquare, PanelRightClose, PanelRightOpen, RefreshCw, ShieldCheck, Terminal, FolderGit2 } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
 import { useEffect } from 'react'
 
@@ -48,6 +48,7 @@ const ACTIVITY_ITEMS: Array<{ id: ActivityView; label: string; icon: typeof Code
 export function Workbench({ controller, onTerminalReady, conversation }: WorkbenchProps) {
   const [activeTab, setActiveTab] = useState<WorkbenchTab>('code')
   const [activeActivity, setActiveActivity] = useState<ActivityView>('conversation')
+  const [inspectorOpen, setInspectorOpen] = useState(true)
   const [reviewOpened, setReviewOpened] = useState(false)
   const belongsToConversation = conversation === undefined
     || controller.run === null
@@ -74,12 +75,13 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
   }, [conversation?.reload, run?.runId, run?.status])
 
   return (
-    <div className="workbench-shell" data-testid="workbench-shell">
+    <div className="workbench-shell" data-testid="workbench-shell" data-inspector-open={inspectorOpen} data-active-activity={activeActivity}>
       <header className="workbench-header">
         <div className="brand-lockup">
           <span className="brand-mark">A4J</span>
           <div><h1>Agent4J</h1><p>Code Agent</p></div>
         </div>
+        {conversation === undefined ? null : <p className="header-context">{conversation.activeWorkspace?.displayName ?? '未选择工作区'} <span>/</span> {conversation.activeConversation?.title ?? '新会话'}</p>}
         <div className="header-run-state" aria-live="polite">
           {run === null ? <span>新任务</span> : (
             <>
@@ -97,6 +99,17 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
               </button>
             </>
           )}
+          <button
+            className="icon-button inspector-toggle"
+            type="button"
+            aria-controls="execution-inspector"
+            aria-expanded={inspectorOpen}
+            aria-label={inspectorOpen ? '收纳检查器' : '展开检查器'}
+            title={inspectorOpen ? '收纳检查器' : '展开检查器'}
+            onClick={() => setInspectorOpen((open) => !open)}
+          >
+            {inspectorOpen ? <PanelRightClose aria-hidden="true" size={16} /> : <PanelRightOpen aria-hidden="true" size={16} />}
+          </button>
         </div>
       </header>
 
@@ -130,7 +143,7 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
           {conversation === undefined ? <RunLauncher controller={controller} /> : <ConversationComposer conversation={conversation} runController={controller} />}
         </main>
 
-        <aside id="execution-inspector" className="execution-inspector" aria-label="执行检查器" data-active-context={activeActivity}>
+        <aside id="execution-inspector" className="execution-inspector" aria-label="执行检查器" data-active-context={activeActivity} hidden={!inspectorOpen}>
           <div className="inspector-heading">
             <div>
               <p className="section-kicker">RUN EVIDENCE</p>
