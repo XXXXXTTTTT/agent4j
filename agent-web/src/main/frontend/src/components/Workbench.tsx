@@ -67,6 +67,7 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
     : run?.nextNode ?? null
   function selectActivity(view: ActivityView): void {
     setActiveActivity(view)
+    if (view === 'conversation' || view === 'project') setInspectorOpen(false)
     if (view === 'evidence') { setActiveTab('trace'); setInspectorOpen(true); setFocusInspectorAfterOpen(true) }
     if (view === 'capability') { setActiveTab('capability'); setInspectorOpen(true); setFocusInspectorAfterOpen(true) }
   }

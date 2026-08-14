@@ -48,7 +48,13 @@ export function TerminalPanel({ active, terminalRef }: TerminalPanelProps) {
           fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, monospace',
           fontSize: 13,
           lineHeight: 1.25,
-          theme: { background: '#101716', foreground: '#dce7e3', green: '#58c69b' },
+          theme: {
+            background: '#11120f', foreground: '#f1f0e9', cursor: '#8ab4ff',
+            black: '#171814', brightBlack: '#4a4d43', red: '#ef8991', brightRed: '#ef8991',
+            green: '#71c58c', brightGreen: '#71c58c', yellow: '#e3b86b', brightYellow: '#e3b86b',
+            blue: '#8ab4ff', brightBlue: '#8ab4ff', magenta: '#c6a0dc', brightMagenta: '#c6a0dc',
+            cyan: '#8fbfc1', brightCyan: '#8fbfc1', white: '#bebdb4', brightWhite: '#f1f0e9',
+          },
         })
         const fitAddon = new FitAddon()
         terminal.loadAddon(fitAddon)
