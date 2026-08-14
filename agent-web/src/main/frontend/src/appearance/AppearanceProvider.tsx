@@ -42,6 +42,8 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
     root.dataset.uiFont = preferences.font
     root.dataset.uiDensity = preferences.density
     root.dataset.uiRadius = preferences.radius
+    if (preferences.accentColor === null) root.style.removeProperty('--accent')
+    else root.style.setProperty('--accent', preferences.accentColor)
     window.localStorage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(preferences))
   }, [preferences, systemMode])
   const value = useMemo<AppearanceContextValue>(() => ({

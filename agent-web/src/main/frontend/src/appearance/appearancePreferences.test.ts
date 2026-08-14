@@ -5,9 +5,9 @@ import { DEFAULT_APPEARANCE, normalizeAppearancePreferences } from './appearance
 describe('appearancePreferences', () => {
   it('restores a complete valid appearance selection', () => {
     expect(normalizeAppearancePreferences({
-      colorMode: 'LIGHT', themePreset: 'HARBOR', font: 'SERIF', density: 'COMFORTABLE', radius: 'ROUND',
+      colorMode: 'LIGHT', themePreset: 'HARBOR', font: 'SERIF', density: 'COMFORTABLE', radius: 'ROUND', accentColor: '#d97757',
     })).toEqual({
-      colorMode: 'LIGHT', themePreset: 'HARBOR', font: 'SERIF', density: 'COMFORTABLE', radius: 'ROUND',
+      colorMode: 'LIGHT', themePreset: 'HARBOR', font: 'SERIF', density: 'COMFORTABLE', radius: 'ROUND', accentColor: '#d97757',
     })
   })
 

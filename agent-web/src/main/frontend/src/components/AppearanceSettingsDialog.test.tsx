@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -20,6 +20,8 @@ describe('AppearanceSettingsDialog', () => {
 
     await user.click(screen.getByRole('button', { name: '纸页' }))
     expect(document.documentElement).toHaveAttribute('data-theme-preset', 'PAPER')
+    fireEvent.change(screen.getByLabelText('自定义强调色'), { target: { value: '#d97757' } })
+    expect(document.documentElement.style.getPropertyValue('--accent')).toBe('#d97757')
     expect(dialog).toBeVisible()
   })
 
