@@ -160,7 +160,7 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
         )}
         <main id="activity-conversation-panel" className="conversation-column" data-testid="workspace-main" data-active-context={activeActivity}>
           <div className="conversation-scroll">
-            <AgentConversation run={run} currentNode={currentNode} turns={conversation?.turns} />
+            <AgentConversation run={run} currentNode={currentNode} turns={conversation?.turns} traceEvents={traceEvents} />
             {run === null ? null : <ApprovalDialog run={run} decide={controller.decide} />}
           </div>
           {conversation === undefined ? <RunLauncher controller={controller} /> : <ConversationComposer conversation={conversation} runController={controller} />}

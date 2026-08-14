@@ -35,6 +35,7 @@ const TRACE_TYPES = new Set<TraceEvent['type']>([
   'NODE_STARTED',
   'NODE_PROGRESS',
   'NODE_COMPLETED',
+  'HANDOFF',
   'INTERRUPTED',
   'APPROVED',
   'REJECTED',
@@ -424,6 +425,18 @@ function decodeTraceEvent(value: unknown): TraceEvent {
         ...common,
         nodeName: nonBlankStringAt(object.nodeName, 'traceFrame.event.nodeName'),
         nextNode: nonBlankStringAt(object.nextNode, 'traceFrame.event.nextNode'),
+      }
+    case 'HANDOFF':
+      exactKeys(object, [...commonKeys, 'taskId', 'parentRunId', 'childRunId', 'fromAgent', 'toAgent', 'lifecycle'], 'traceFrame.event')
+      return {
+        type,
+        ...common,
+        taskId: nonBlankStringAt(object.taskId, 'traceFrame.event.taskId'),
+        parentRunId: nonBlankStringAt(object.parentRunId, 'traceFrame.event.parentRunId'),
+        childRunId: nonBlankStringAt(object.childRunId, 'traceFrame.event.childRunId'),
+        fromAgent: nonBlankStringAt(object.fromAgent, 'traceFrame.event.fromAgent'),
+        toAgent: nonBlankStringAt(object.toAgent, 'traceFrame.event.toAgent'),
+        lifecycle: nonBlankStringAt(object.lifecycle, 'traceFrame.event.lifecycle'),
       }
     case 'INTERRUPTED':
       exactKeys(object, [...commonKeys, 'nodeName', 'request'], 'traceFrame.event')

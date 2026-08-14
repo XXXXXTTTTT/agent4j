@@ -137,6 +137,31 @@ describe('Run API 协议解码', () => {
       ? frame.event.summary
       : null).toBe('正在识别任务意图')
   })
+
+  it('解码父 Run 中的受治理 handoff 元数据', () => {
+    const frame = decodeTraceFrame({
+      kind: 'EVENT',
+      event: {
+        type: 'HANDOFF',
+        eventId: EVENT_ID,
+        runId: RUN_ID,
+        checkpointVersion: 4,
+        occurredAt: '2026-08-14T08:00:00Z',
+        taskId: '8e3ec65b-dcd4-422d-b80c-7c7fc7667b81',
+        parentRunId: RUN_ID,
+        childRunId: '1786a4d3-dc79-4e59-a688-7e6b7db5848d',
+        fromAgent: 'coordinator',
+        toAgent: 'researcher',
+        lifecycle: 'NODE_PROGRESS',
+      },
+    })
+
+    expect(frame.kind).toBe('EVENT')
+    if (frame.kind === 'EVENT') {
+      expect(frame.event.type).toBe('HANDOFF')
+      expect(frame.event.type === 'HANDOFF' ? frame.event.childRunId : null).toBe('1786a4d3-dc79-4e59-a688-7e6b7db5848d')
+    }
+  })
 })
 
 describe('Run API HTTP 请求', () => {

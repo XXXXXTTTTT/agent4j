@@ -10,13 +10,14 @@ import {
   User,
 } from 'lucide-react'
 
-import type { ChatMessage, ConversationTurn, RunView } from '../api/contracts'
+import type { ChatMessage, ConversationTurn, RunView, TraceEvent } from '../api/contracts'
 import { MarkdownMessage } from './MarkdownMessage'
 
 interface AgentConversationProps {
   run: RunView | null
   currentNode: string | null
   turns?: ConversationTurn[]
+  traceEvents?: TraceEvent[]
 }
 
 const STAGES = [
@@ -174,7 +175,7 @@ function PersistedMessages({ messages }: { messages: ChatMessage[] }) {
 }
 
 /** 将权威 Run 状态转换为用户可读的连续 Agent 会话。 */
-export function AgentConversation({ run, currentNode, turns = [] }: AgentConversationProps) {
+export function AgentConversation({ run, currentNode, turns = [], traceEvents = [] }: AgentConversationProps) {
   if (run === null && turns.length === 0) {
     return (
       <section className="conversation-empty" aria-label="Agent 会话">
@@ -232,6 +233,7 @@ export function AgentConversation({ run, currentNode, turns = [] }: AgentConvers
   const currentTask = turns.length > 0
     ? currentTurn?.userContent ?? task
     : hasUserMessage ? undefined : task
+  const handoffEvents = traceEvents.filter((event): event is Extract<TraceEvent, { type: 'HANDOFF' }> => event.type === 'HANDOFF')
 
   return (
     <section className="conversation-stream" aria-label="Agent 会话">
@@ -283,6 +285,20 @@ export function AgentConversation({ run, currentNode, turns = [] }: AgentConvers
           )}
         </div>
       </article>
+
+      {handoffEvents.map((event) => (
+        <article className="conversation-message handoff-message" key={event.eventId}>
+          <span className="message-avatar agent-avatar"><Bot aria-hidden="true" size={17} /></span>
+          <div className="message-body">
+            <div className="event-heading">
+              <span className="message-author">子 Agent</span>
+              <span className="handoff-lifecycle">{event.lifecycle}</span>
+            </div>
+            <p className="handoff-route">{event.fromAgent} → {event.toAgent}</p>
+            <code className="handoff-child-run">{event.childRunId}</code>
+          </div>
+        </article>
+      ))}
 
       {toolRequest === undefined && toolResponse === undefined && toolResult === undefined && toolError === undefined ? null : (
         <article className={`conversation-message event-message ${toolError === undefined ? '' : 'is-failed'}`}>

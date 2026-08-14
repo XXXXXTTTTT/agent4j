@@ -168,6 +168,10 @@ code { overflow-wrap: anywhere; }
 .capability-metadata dd { color: var(--text-secondary); font-size: 11px; margin: 0; overflow-wrap: anywhere; }
 .capability-error { margin: 12px; }
 .conversation-list { flex: 1 1 auto; }
+.handoff-message { border-left: 2px solid var(--accent); }
+.handoff-route { color: var(--text-secondary); font-size: 11px; margin: 6px 0 3px; }
+.handoff-lifecycle { color: var(--accent); font: 10px "Cascadia Mono", Consolas, monospace; }
+.handoff-child-run { color: var(--text-muted); font-size: 9px; }
 
 /* 外观设置抽屉与可组合界面令牌。 */
 .workbench-header, .workbench-project-column, .execution-inspector, .agent-message, .run-launcher, .tool-panel, .capability-panel, .workspace-dialog, .approval-dialog, .desktop-connection-status, .sidebar-select-wrap, .sidebar-search, .conversation-list-item, .capability-row button, .primary-command, .secondary-command, .icon-button { border-radius: var(--ui-radius); }

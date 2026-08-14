@@ -109,6 +109,15 @@ export type TraceEvent =
       nextNode: string
     })
   | (TraceCommon & {
+      type: 'HANDOFF'
+      taskId: string
+      parentRunId: string
+      childRunId: string
+      fromAgent: string
+      toAgent: string
+      lifecycle: string
+    })
+  | (TraceCommon & {
       type: 'INTERRUPTED'
       nodeName: string
       request: InterruptRequest

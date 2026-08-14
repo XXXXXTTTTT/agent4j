@@ -5,6 +5,7 @@ public enum TraceEventType {
     NODE_STARTED,
     NODE_PROGRESS,
     NODE_COMPLETED,
+    HANDOFF,
     INTERRUPTED,
     APPROVED,
     REJECTED,

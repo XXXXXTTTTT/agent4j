@@ -15,6 +15,7 @@ import java.util.UUID;
         @JsonSubTypes.Type(value = TraceEvent.NodeStarted.class, name = "NODE_STARTED"),
         @JsonSubTypes.Type(value = TraceEvent.NodeProgress.class, name = "NODE_PROGRESS"),
         @JsonSubTypes.Type(value = TraceEvent.NodeCompleted.class, name = "NODE_COMPLETED"),
+        @JsonSubTypes.Type(value = TraceEvent.Handoff.class, name = "HANDOFF"),
         @JsonSubTypes.Type(value = TraceEvent.Interrupted.class, name = "INTERRUPTED"),
         @JsonSubTypes.Type(value = TraceEvent.Approved.class, name = "APPROVED"),
         @JsonSubTypes.Type(value = TraceEvent.Rejected.class, name = "REJECTED"),
@@ -25,6 +26,7 @@ public sealed interface TraceEvent
         permits TraceEvent.NodeStarted,
                 TraceEvent.NodeProgress,
                 TraceEvent.NodeCompleted,
+                TraceEvent.Handoff,
                 TraceEvent.Interrupted,
                 TraceEvent.Approved,
                 TraceEvent.Rejected,
@@ -50,6 +52,7 @@ public sealed interface TraceEvent
             case NodeStarted ignored -> TraceEventType.NODE_STARTED;
             case NodeProgress ignored -> TraceEventType.NODE_PROGRESS;
             case NodeCompleted ignored -> TraceEventType.NODE_COMPLETED;
+            case Handoff ignored -> TraceEventType.HANDOFF;
             case Interrupted ignored -> TraceEventType.INTERRUPTED;
             case Approved ignored -> TraceEventType.APPROVED;
             case Rejected ignored -> TraceEventType.REJECTED;
@@ -104,6 +107,37 @@ public sealed interface TraceEvent
             validateCommon(eventId, runId, checkpointVersion, occurredAt);
             requireText(nodeName, "nodeName");
             requireText(nextNode, "nextNode");
+        }
+    }
+
+    /** 主 Run 中公开的受治理子 Agent handoff 生命周期事件。 */
+    record Handoff(
+            UUID eventId,
+            UUID runId,
+            long checkpointVersion,
+            Instant occurredAt,
+            UUID taskId,
+            UUID parentRunId,
+            UUID childRunId,
+            String fromAgent,
+            String toAgent,
+            String lifecycle) implements TraceEvent {
+
+        /** 校验 handoff 事件只能归属于父 Run，且不暴露子 Agent 内部推理。 */
+        public Handoff {
+            validateCommon(eventId, runId, checkpointVersion, occurredAt);
+            Objects.requireNonNull(taskId, "taskId 不能为空");
+            Objects.requireNonNull(parentRunId, "parentRunId 不能为空");
+            Objects.requireNonNull(childRunId, "childRunId 不能为空");
+            if (!runId.equals(parentRunId)) {
+                throw new IllegalArgumentException("runId 必须与 parentRunId 一致");
+            }
+            if (parentRunId.equals(childRunId)) {
+                throw new IllegalArgumentException("childRunId 必须与 parentRunId 不同");
+            }
+            requireText(fromAgent, "fromAgent");
+            requireText(toAgent, "toAgent");
+            requireText(lifecycle, "lifecycle");
         }
     }
 

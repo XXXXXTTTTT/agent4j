@@ -17,6 +17,8 @@ class TraceEventTest {
 
     private static final UUID EVENT_ID = UUID.fromString("1ddd5c1d-a140-49ac-b452-9e5390524253");
     private static final UUID RUN_ID = UUID.fromString("34af026e-0b87-4cb4-93f8-bcf4a1130285");
+    private static final UUID CHILD_RUN_ID = UUID.fromString("1786a4d3-dc79-4e59-a688-7e6b7db5848d");
+    private static final UUID HANDOFF_TASK_ID = UUID.fromString("8e3ec65b-dcd4-422d-b80c-7c7fc7667b81");
     private static final UUID INTERRUPT_ID = UUID.fromString("56613819-20c5-4e66-afae-f7dfd64e75aa");
     private static final Instant OCCURRED_AT = Instant.parse("2026-08-01T07:00:00Z");
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
@@ -34,6 +36,17 @@ class TraceEventTest {
                         EVENT_ID, RUN_ID, 0, OCCURRED_AT, "coder", "正在读取工作区"),
                 new TraceEvent.NodeCompleted(
                         EVENT_ID, RUN_ID, 1, OCCURRED_AT, "coder", "ops"),
+                new TraceEvent.Handoff(
+                        EVENT_ID,
+                        RUN_ID,
+                        5,
+                        OCCURRED_AT,
+                        HANDOFF_TASK_ID,
+                        RUN_ID,
+                        CHILD_RUN_ID,
+                        "coordinator",
+                        "researcher",
+                        "NODE_PROGRESS"),
                 new TraceEvent.Interrupted(
                         EVENT_ID, RUN_ID, 2, OCCURRED_AT, "ops", request),
                 new TraceEvent.Approved(
@@ -56,6 +69,14 @@ class TraceEventTest {
             assertThat(tree.path("type").textValue()).isEqualTo(event.type().name());
             assertThat(tree.path("eventId").textValue()).isEqualTo(EVENT_ID.toString());
             assertThat(tree.path("runId").textValue()).isEqualTo(RUN_ID.toString());
+            if (event instanceof TraceEvent.Handoff handoff) {
+                assertThat(tree.path("parentRunId").textValue()).isEqualTo(RUN_ID.toString());
+                assertThat(tree.path("childRunId").textValue()).isEqualTo(CHILD_RUN_ID.toString());
+                assertThat(tree.path("fromAgent").textValue()).isEqualTo("coordinator");
+                assertThat(tree.path("toAgent").textValue()).isEqualTo("researcher");
+                assertThat(tree.path("lifecycle").textValue()).isEqualTo("NODE_PROGRESS");
+                assertThat(handoff.type()).isEqualTo(TraceEventType.HANDOFF);
+            }
             assertThat(objectMapper.readValue(json, TraceEvent.class)).isEqualTo(event);
         }
     }
