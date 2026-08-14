@@ -1,5 +1,5 @@
 import { Send, Terminal } from 'lucide-react'
-import { type FormEvent, type KeyboardEvent, useState } from 'react'
+import { type FormEvent, type KeyboardEvent, useEffect, useState } from 'react'
 
 import {
   createGovernedCliRun,
@@ -32,12 +32,20 @@ export function ConversationComposer({ conversation, runController }: Conversati
   const [argumentsInput, setArgumentsInput] = useState('')
   const [timeoutSeconds, setTimeoutSeconds] = useState('30')
 
+  useEffect(() => {
+    if (orchestrationMode === 'SERIAL_DEVELOPMENT' || modelGroupId.trim().length > 0 || modelGroups.length === 0) return
+    setModelGroupId(modelGroups[0].groupId)
+  }, [modelGroupId, modelGroups, orchestrationMode])
+
   const slashMode = content.startsWith('/') && selectedCommand === null
   const commandQuery = slashMode ? content.slice(1).trim().toLocaleLowerCase() : ''
   const visibleCommands = commands.filter((command) =>
     command.riskLevel !== 'DESTRUCTIVE'
       && command.name.toLocaleLowerCase().includes(commandQuery),
   )
+  const missingPrimaryModelGroup = selectedCommand === null
+    && orchestrationMode !== 'SERIAL_DEVELOPMENT'
+    && modelGroupId.trim().length === 0
 
   async function loadCommands(): Promise<void> {
     const workspaceId = conversation.activeWorkspace?.workspaceId
@@ -181,12 +189,17 @@ export function ConversationComposer({ conversation, runController }: Conversati
           <div className="composer-context"><span>{conversation.activeWorkspace?.displayName ?? '未选择工作区'}</span></div>
           <label className="composer-model-select">
             <span className="sr-only">模型组</span>
-            <select aria-label="模型组" value={modelGroupId} onChange={(event) => setModelGroupId(event.target.value)} disabled={modelGroups.length === 0}>
+            <select aria-label="模型组" value={modelGroupId} onChange={(event) => {
+              const selectedGroupId = event.target.value
+              setModelGroupId(selectedGroupId.length > 0 || orchestrationMode === 'SERIAL_DEVELOPMENT'
+                ? selectedGroupId
+                : (modelGroups[0]?.groupId ?? ''))
+            }} disabled={modelGroups.length === 0}>
               <option value="">默认模型组</option>
               {modelGroups.map((group) => <option key={group.groupId} value={group.groupId}>{group.displayName}</option>)}
             </select>
           </label>
-          <button className="primary-command" type="submit" aria-label={selectedCommand === null ? '发送消息' : '执行命令'} title={selectedCommand === null ? '发送消息' : '执行命令'} disabled={conversation.activeWorkspace === null || conversation.submitting || (selectedCommand === null && (conversation.activeConversation === null || content.trim().length === 0))}>
+          <button className="primary-command" type="submit" aria-label={selectedCommand === null ? '发送消息' : '执行命令'} title={selectedCommand === null ? '发送消息' : '执行命令'} disabled={conversation.activeWorkspace === null || conversation.submitting || missingPrimaryModelGroup || (selectedCommand === null && (conversation.activeConversation === null || content.trim().length === 0))}>
             <Send aria-hidden="true" size={17} />
           </button>
         </div>

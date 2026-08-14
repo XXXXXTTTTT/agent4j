@@ -122,7 +122,7 @@ describe('ConversationComposer', () => {
       expect(screen.getByRole('combobox', { name })).toHaveTextContent('Terra')
       expect(screen.getByRole('combobox', { name })).toHaveTextContent('Sol')
     }
-    await user.selectOptions(screen.getByRole('combobox', { name: '模型组' }), 'group-terra')
+    expect(screen.getByRole('combobox', { name: '模型组' })).toHaveValue('group-terra')
     await user.selectOptions(screen.getByRole('combobox', { name: '协调者模型组' }), 'group-sol')
     await user.selectOptions(screen.getByRole('combobox', { name: '研究者模型组' }), 'group-terra')
     await user.type(screen.getByRole('textbox', { name: '发送消息' }), '调查项目结构')
@@ -131,6 +131,34 @@ describe('ConversationComposer', () => {
     await waitFor(() => expect(state.submit).toHaveBeenCalledWith('调查项目结构', undefined, 'group-terra', 'PARALLEL_RESEARCH', {
       COORDINATOR: 'group-sol', RESEARCHER: 'group-terra',
     }))
+  })
+
+  it('评审闭环自动使用主模型组并提交验证者覆盖', async () => {
+    const user = userEvent.setup()
+    const state = conversation()
+    render(<ConversationComposer conversation={state} runController={runController()} />)
+
+    await user.selectOptions(screen.getByRole('combobox', { name: '编排模式' }), 'REVIEW_LOOP')
+    expect(screen.getByRole('combobox', { name: '模型组' })).toHaveValue('group-terra')
+    await user.selectOptions(screen.getByRole('combobox', { name: '验证者模型组' }), 'group-sol')
+    await user.type(screen.getByRole('textbox', { name: '发送消息' }), '修复校验失败')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+
+    await waitFor(() => expect(state.submit).toHaveBeenCalledWith('修复校验失败', undefined, 'group-terra', 'REVIEW_LOOP', {
+      VERIFIER: 'group-sol',
+    }))
+  })
+
+  it('没有已加载模型组时禁止提交非串行编排', async () => {
+    const user = userEvent.setup()
+    const state = conversation()
+    render(<ConversationComposer conversation={{ ...state, modelConfiguration: { providers: [], endpoints: [], groups: [] } }} runController={runController()} />)
+
+    await user.selectOptions(screen.getByRole('combobox', { name: '编排模式' }), 'PARALLEL_RESEARCH')
+    await user.type(screen.getByRole('textbox', { name: '发送消息' }), '调查项目结构')
+
+    expect(screen.getByRole('button', { name: '发送消息' })).toBeDisabled()
+    expect(state.submit).not.toHaveBeenCalled()
   })
 
   it('没有已选会话时仍允许从工作区执行受治理命令', async () => {
