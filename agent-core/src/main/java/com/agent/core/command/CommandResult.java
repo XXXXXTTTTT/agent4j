@@ -32,6 +32,11 @@ public record CommandResult(
         return new CommandResult(Status.COMPLETED, null, message, Map.of());
     }
 
+    /** 创建已进入工作流桥接端口的结果。 */
+    public static CommandResult forwarded(String message) {
+        return new CommandResult(Status.FORWARDED, null, message, Map.of());
+    }
+
     /** 创建带状态和稳定错误消息的结果。 */
     public static CommandResult failure(Status status, String message) {
         if (status == Status.COMPLETED || status == Status.FORWARDED) {
