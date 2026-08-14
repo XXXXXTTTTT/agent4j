@@ -120,6 +120,27 @@ describe('Conversation API HTTP 请求', () => {
     })
   })
 
+  it('提交多 Agent 编排时发送精确模式和角色模型组字段', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response(TURN, 202))
+
+    await submitConversationTurn('conv-1', {
+      content: '调查项目结构',
+      modelGroupId: 'group-terra',
+      orchestrationMode: 'PARALLEL_RESEARCH',
+      roleModelGroups: { COORDINATOR: 'group-sol', RESEARCHER: 'group-terra' },
+    }, fetcher)
+
+    expect(fetcher).toHaveBeenCalledWith('/api/conversations/conv-1/turns', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: '调查项目结构',
+        modelGroupId: 'group-terra',
+        orchestrationMode: 'PARALLEL_RESEARCH',
+        roleModelGroups: { COORDINATOR: 'group-sol', RESEARCHER: 'group-terra' },
+      }),
+    })
+  })
+
   it('工作区创建失败时保留 ProblemDetail 的 detail', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({
       type: 'about:blank',

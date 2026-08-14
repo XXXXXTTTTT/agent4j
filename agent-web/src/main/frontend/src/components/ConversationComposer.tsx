@@ -9,6 +9,8 @@ import {
 } from '../api/cliApi'
 import type { UseConversationWorkspaceResult } from '../hooks/useConversationWorkspace'
 import type { UseRunWorkbenchResult } from '../hooks/useRunWorkbench'
+import { OrchestrationModeSelector } from './OrchestrationModeSelector'
+import type { AgentRole, OrchestrationMode, RoleModelGroups } from '../api/conversationApi'
 
 interface ConversationComposerProps {
   conversation: UseConversationWorkspaceResult
@@ -19,6 +21,8 @@ interface ConversationComposerProps {
 export function ConversationComposer({ conversation, runController }: ConversationComposerProps) {
   const [content, setContent] = useState('')
   const [modelGroupId, setModelGroupId] = useState('')
+  const [orchestrationMode, setOrchestrationMode] = useState<OrchestrationMode>('SERIAL_DEVELOPMENT')
+  const [roleModelGroups, setRoleModelGroups] = useState<RoleModelGroups>({})
   const modelGroups = conversation.modelConfiguration?.groups ?? []
   const [inputError, setInputError] = useState<string | null>(null)
   const [commands, setCommands] = useState<GovernedCliCommand[]>([])
@@ -112,8 +116,11 @@ export function ConversationComposer({ conversation, runController }: Conversati
         await submitCli()
         return
       }
-      const turn = modelGroupId
-        ? await conversation.submit(content, undefined, modelGroupId)
+      const selectedOrchestration = orchestrationMode === 'SERIAL_DEVELOPMENT' && Object.keys(roleModelGroups).length === 0
+        ? undefined
+        : orchestrationMode
+      const turn = (modelGroupId || selectedOrchestration !== undefined || Object.keys(roleModelGroups).length > 0)
+        ? await conversation.submit(content, undefined, modelGroupId || undefined, selectedOrchestration, Object.keys(roleModelGroups).length > 0 ? roleModelGroups : undefined)
         : await conversation.submit(content)
       setContent('')
       if (turn.runId !== null) await runController.followRun(turn.runId)
@@ -149,6 +156,27 @@ export function ConversationComposer({ conversation, runController }: Conversati
           </div>
         )}
         {inputError === null ? null : <p className="inline-error" role="alert">{inputError}</p>}
+        {selectedCommand === null ? (
+          <OrchestrationModeSelector
+            mode={orchestrationMode}
+            roleModelGroups={roleModelGroups}
+            modelGroups={modelGroups}
+            onModeChange={(mode) => {
+              setOrchestrationMode(mode)
+              if (mode === 'SERIAL_DEVELOPMENT') setRoleModelGroups({})
+            }}
+            onRoleModelGroupChange={(role: AgentRole, groupId: string) => {
+              setRoleModelGroups((current) => {
+                if (groupId.length === 0) {
+                  const next = { ...current }
+                  delete next[role]
+                  return next
+                }
+                return { ...current, [role]: groupId }
+              })
+            }}
+          />
+        ) : null}
         <div className="composer-toolbar">
           <div className="composer-context"><span>{conversation.activeWorkspace?.displayName ?? '未选择工作区'}</span></div>
           <label className="composer-model-select">

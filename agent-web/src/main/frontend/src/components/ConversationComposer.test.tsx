@@ -16,7 +16,12 @@ function conversation(): UseConversationWorkspaceResult {
     conversationId: 'conv-1', workspaceId: 'ws-1', createdBy: 'user-1', title: '测试', status: 'ACTIVE',
     createdAt: '2026-08-12T00:00:00Z', updatedAt: '2026-08-12T00:00:00Z',
   }
-  const modelConfiguration: ModelConfigurationSnapshot = { providers: [], endpoints: [], groups: [] }
+  const modelConfiguration: ModelConfigurationSnapshot = {
+    providers: [], endpoints: [], groups: [
+      { groupId: 'group-terra', ownerUserId: 'user-1', displayName: 'Terra', taskType: 'CODE', endpointIds: [], createdAt: '2026-08-12T00:00:00Z', updatedAt: '2026-08-12T00:00:00Z' },
+      { groupId: 'group-sol', ownerUserId: 'user-1', displayName: 'Sol', taskType: 'CODE', endpointIds: [], createdAt: '2026-08-12T00:00:00Z', updatedAt: '2026-08-12T00:00:00Z' },
+    ],
+  }
   return {
     identity: null, workspaces: [workspace], activeWorkspace: workspace, conversations: [activeConversation],
     activeConversation, turns: [], searchQuery: '', includeArchived: false, loading: false, submitting: false,
@@ -96,6 +101,36 @@ describe('ConversationComposer', () => {
 
     expect(workspace.submit).toHaveBeenCalledWith('继续说明')
     expect(runs.followRun).toHaveBeenCalledWith('chat-run')
+  })
+
+  it('串行开发模式不渲染角色模型组选择', () => {
+    render(<ConversationComposer conversation={conversation()} runController={runController()} />)
+
+    expect(screen.getByRole('combobox', { name: '编排模式' })).toHaveValue('SERIAL_DEVELOPMENT')
+    expect(screen.queryByRole('combobox', { name: '协调者模型组' })).not.toBeInTheDocument()
+  })
+
+  it('选择并行研究模式和角色模型组后提交精确编排字段', async () => {
+    const user = userEvent.setup()
+    const state = conversation()
+    const runs = runController()
+    render(<ConversationComposer conversation={state} runController={runs} />)
+
+    await user.selectOptions(screen.getByRole('combobox', { name: '编排模式' }), 'PARALLEL_RESEARCH')
+    for (const name of ['协调者模型组', '研究者模型组', '实施者模型组', '验证者模型组']) {
+      expect(screen.getByRole('combobox', { name })).toBeInTheDocument()
+      expect(screen.getByRole('combobox', { name })).toHaveTextContent('Terra')
+      expect(screen.getByRole('combobox', { name })).toHaveTextContent('Sol')
+    }
+    await user.selectOptions(screen.getByRole('combobox', { name: '模型组' }), 'group-terra')
+    await user.selectOptions(screen.getByRole('combobox', { name: '协调者模型组' }), 'group-sol')
+    await user.selectOptions(screen.getByRole('combobox', { name: '研究者模型组' }), 'group-terra')
+    await user.type(screen.getByRole('textbox', { name: '发送消息' }), '调查项目结构')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+
+    await waitFor(() => expect(state.submit).toHaveBeenCalledWith('调查项目结构', undefined, 'group-terra', 'PARALLEL_RESEARCH', {
+      COORDINATOR: 'group-sol', RESEARCHER: 'group-terra',
+    }))
   })
 
   it('没有已选会话时仍允许从工作区执行受治理命令', async () => {

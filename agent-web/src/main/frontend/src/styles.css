@@ -126,6 +126,13 @@ code { overflow-wrap: anywhere; }
 
 /* 固定桌面工作台：外壳不滚动，各工作区自行承载内容滚动。 */
 .run-launcher { flex: 0 0 auto; }
+.orchestration-selector { border-top: 1px solid var(--border-subtle); display: grid; gap: 8px; margin-top: 10px; padding-top: 10px; }
+.composer-orchestration-mode, .composer-role-select { align-items: center; color: var(--text-muted); display: flex; font-size: 10px; gap: 7px; }
+.composer-orchestration-mode select, .composer-role-select select { background: var(--surface-overlay); border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-secondary); font-size: 10px; min-width: 0; padding: 6px; }
+.composer-orchestration-mode select { width: 150px; }
+.orchestration-role-groups { display: grid; gap: 7px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.composer-role-select { display: grid; gap: 3px; min-width: 0; }
+.composer-role-select select { width: 100%; }
 .workspace-views { flex: 1 1 auto; height: auto; min-height: 0; overflow: hidden; }
 .workspace-views > [role="tabpanel"] { height: 100%; min-height: 0; overflow: auto; }
 .workspace-views > #capability-view { overflow: hidden; }
@@ -177,4 +184,5 @@ code { overflow-wrap: anywhere; }
 @media (max-width: 1280px) { .agent-layout.has-conversation-sidebar { grid-template-columns: 48px 248px minmax(0,1fr); }.execution-inspector { position: fixed; right: 0; top: 44px; width: min(380px, 92vw); z-index: 8; } }
 @media (max-width: 900px) { .agent-layout.has-conversation-sidebar { grid-template-columns: 48px minmax(0,1fr); }.workbench-project-column { display: none; }.workbench-project-column[data-active-context="project"] { display: block; position: fixed; inset: 44px auto 0 48px; width: min(280px, calc(100vw - 48px)); z-index: 8; }.header-context { text-align: left; }.execution-stages { flex-wrap: wrap; } }
 @media (max-width: 760px) { .workbench-header { grid-template-columns: auto minmax(0,1fr); }.header-context { display: none; }.header-run-state { justify-content: flex-end; }.agent-layout, .agent-layout.has-conversation-sidebar { grid-template-columns: minmax(0,1fr); height: calc(100vh - 44px); }.workbench-activity-bar { background: var(--surface-raised); border-right: 0; border-top: 1px solid var(--border-subtle); bottom: 0; flex-direction: row; justify-content: space-around; left: 0; padding: 6px; position: fixed; right: 0; z-index: 12; }.conversation-scroll { padding: 20px 16px 90px; }.run-launcher { bottom: 48px; left: 0; padding: 8px 12px; position: fixed; right: 0; z-index: 9; }.run-launcher > form > textarea { min-height: 52px; }.workbench-project-column[data-active-context="project"], .workbench-shell[data-active-activity="evidence"] .execution-inspector, .workbench-shell[data-active-activity="capability"] .execution-inspector { bottom: 48px; left: 0; right: 0; top: 44px; width: 100%; }.execution-inspector { border-left: 0; }.conversation-message { gap: 8px; grid-template-columns: 24px minmax(0,1fr); }.agent-message { padding: 11px; }.composer-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) 96px 32px; min-width: 0; width: 100%; }.composer-context { display: none; }.composer-model-select { grid-column: 2; min-width: 0; }.composer-model-select select { max-width: 96px; overflow: hidden; text-overflow: ellipsis; width: 96px; }.composer-toolbar .primary-command { grid-column: 3; min-width: 32px; padding: 0; }.header-run-state > span:not(.header-dot), .header-run-state code { display: none; } }
+@media (max-width: 760px) { .orchestration-role-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }.composer-orchestration-mode select { flex: 1; } }
 .appearance-accent-picker { align-items: center; display: flex; gap: 9px; }.appearance-accent-picker input { border: 1px solid var(--border-subtle); border-radius: var(--ui-radius); height: 34px; padding: 3px; width: 48px; }.appearance-accent-picker span { color: var(--text-muted); flex: 1; font: 11px "Cascadia Mono", Consolas, monospace; }

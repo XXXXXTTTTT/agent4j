@@ -33,7 +33,7 @@ import type {
   WorkspaceDirectoryListing,
   ModelConfigurationSnapshot,
 } from '../api/contracts'
-import type { CreateWorkspaceCommand, ImportDesktopWorkspaceCommand, ImportWorkspaceCommand, UpdateModelEndpointCommand, UpdateModelGroupCommand, UpdateModelProviderCommand } from '../api/conversationApi'
+import type { CreateWorkspaceCommand, ImportDesktopWorkspaceCommand, ImportWorkspaceCommand, OrchestrationMode, RoleModelGroups, UpdateModelEndpointCommand, UpdateModelGroupCommand, UpdateModelProviderCommand } from '../api/conversationApi'
 
 export interface ConversationWorkspaceApi {
   getIdentity(): Promise<Actor>
@@ -45,7 +45,7 @@ export interface ConversationWorkspaceApi {
   importWorkspace?(command: ImportWorkspaceCommand): Promise<Workspace>
   importDesktopWorkspace?(command: ImportDesktopWorkspaceCommand): Promise<Workspace>
   createConversation(workspaceId: string): Promise<Conversation>
-  submitConversationTurn(conversationId: string, command: { content: string; reviewerUrl?: string; modelGroupId?: string }): Promise<ConversationTurn>
+  submitConversationTurn(conversationId: string, command: { content: string; reviewerUrl?: string; modelGroupId?: string; orchestrationMode?: OrchestrationMode; roleModelGroups?: RoleModelGroups }): Promise<ConversationTurn>
   listConversationTurns(conversationId: string): Promise<ConversationTurn[]>
   archiveConversation(conversationId: string): Promise<Conversation>
   deleteConversation?(conversationId: string): Promise<Conversation>
@@ -113,7 +113,7 @@ export interface UseConversationWorkspaceResult {
   search(query: string): Promise<void>
   toggleArchived(): Promise<void>
   createConversation(): Promise<void>
-  submit(content: string, reviewerUrl?: string, modelGroupId?: string): Promise<ConversationTurn>
+  submit(content: string, reviewerUrl?: string, modelGroupId?: string, orchestrationMode?: OrchestrationMode, roleModelGroups?: RoleModelGroups): Promise<ConversationTurn>
   deleteConversation(): Promise<void>
   archive(): Promise<void>
   reload(): Promise<void>
@@ -327,14 +327,20 @@ export function useConversationWorkspace(
     }
   }, [selectWorkspace])
 
-  const submit = useCallback(async (content: string, reviewerUrl?: string, modelGroupId?: string): Promise<ConversationTurn> => {
+  const submit = useCallback(async (content: string, reviewerUrl?: string, modelGroupId?: string, orchestrationMode?: OrchestrationMode, roleModelGroups?: RoleModelGroups): Promise<ConversationTurn> => {
     if (activeConversationId === null) throw new Error('当前没有会话')
     const exactContent = content.trim()
     if (exactContent.length === 0) throw new Error('消息内容不能为空')
     setSubmitting(true)
     setError(null)
     try {
-      const created = await apiRef.current.submitConversationTurn(activeConversationId, { content: exactContent, ...(reviewerUrl?.trim() ? { reviewerUrl: reviewerUrl.trim() } : {}), ...(modelGroupId?.trim() ? { modelGroupId: modelGroupId.trim() } : {}) })
+      const created = await apiRef.current.submitConversationTurn(activeConversationId, {
+        content: exactContent,
+        ...(reviewerUrl?.trim() ? { reviewerUrl: reviewerUrl.trim() } : {}),
+        ...(modelGroupId?.trim() ? { modelGroupId: modelGroupId.trim() } : {}),
+        ...(orchestrationMode !== undefined ? { orchestrationMode } : {}),
+        ...(roleModelGroups !== undefined && Object.keys(roleModelGroups).length > 0 ? { roleModelGroups } : {}),
+      })
       setTurns((items) => [...items.filter((item) => item.turnId !== created.turnId), created].sort((a, b) => a.turnIndex - b.turnIndex))
       return created
     } catch (failure) {

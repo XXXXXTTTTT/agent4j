@@ -366,13 +366,33 @@ export async function createConversation(workspaceId: string, fetcher: typeof fe
   return decodeConversation(await requestJson(`/api/workspaces/${encodeURIComponent(id)}/conversations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, fetcher))
 }
 
-export interface SubmitConversationTurnCommand { content: string; reviewerUrl?: string; modelGroupId?: string }
+export type OrchestrationMode = 'SERIAL_DEVELOPMENT' | 'PARALLEL_RESEARCH' | 'REVIEW_LOOP'
+export type AgentRole = 'COORDINATOR' | 'RESEARCHER' | 'IMPLEMENTER' | 'VERIFIER'
+export type RoleModelGroups = Partial<Record<AgentRole, string>>
+
+export interface SubmitConversationTurnCommand {
+  content: string
+  reviewerUrl?: string
+  modelGroupId?: string
+  orchestrationMode?: OrchestrationMode
+  roleModelGroups?: RoleModelGroups
+}
 
 export async function submitConversationTurn(conversationId: string, command: SubmitConversationTurnCommand, fetcher: typeof fetch = globalThis.fetch): Promise<ConversationTurn> {
   const id = nonBlankStringAt(conversationId, 'conversationId')
-  const body: Record<string, string> = { content: nonBlankStringAt(command.content, 'content') }
+  const body: Record<string, unknown> = { content: nonBlankStringAt(command.content, 'content') }
   if (command.reviewerUrl !== undefined && command.reviewerUrl.trim().length > 0) body.reviewerUrl = command.reviewerUrl.trim()
   if (command.modelGroupId !== undefined && command.modelGroupId.trim().length > 0) body.modelGroupId = command.modelGroupId.trim()
+  if (command.orchestrationMode !== undefined) body.orchestrationMode = enumAt(command.orchestrationMode, new Set<OrchestrationMode>(['SERIAL_DEVELOPMENT', 'PARALLEL_RESEARCH', 'REVIEW_LOOP']), 'orchestrationMode')
+  if (command.roleModelGroups !== undefined && Object.keys(command.roleModelGroups).length > 0) {
+    const roles = new Set<AgentRole>(['COORDINATOR', 'RESEARCHER', 'IMPLEMENTER', 'VERIFIER'])
+    const exactRoleModelGroups: Record<string, string> = {}
+    for (const [role, groupId] of Object.entries(command.roleModelGroups)) {
+      if (!roles.has(role as AgentRole)) throw new TypeError(`roleModelGroups 包含未知角色: ${role}`)
+      exactRoleModelGroups[role] = nonBlankStringAt(groupId, `roleModelGroups.${role}`)
+    }
+    body.roleModelGroups = exactRoleModelGroups
+  }
   return decodeConversationTurn(await requestJson(`/api/conversations/${encodeURIComponent(id)}/turns`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, fetcher))
 }
 
