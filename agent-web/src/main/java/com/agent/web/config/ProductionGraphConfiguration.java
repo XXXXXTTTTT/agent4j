@@ -649,6 +649,10 @@ public class ProductionGraphConfiguration {
                 properties.plannerContextMaxTokens(),
                 new DefaultPromptInjectionDetector(),
                 securityViolationSink);
+        Node coordinator = orchestrator == null
+                ? planner
+                : orchestrator.withRoleModelGroup(
+                        planner, com.agent.core.orchestration.AgentRole.COORDINATOR);
         CoderNode coder = new CoderNode(
                 astService, modelRouter, objectMapper, snapshotService, toolRegistry,
                 commandCatalog);
@@ -678,7 +682,7 @@ public class ProductionGraphConfiguration {
                 modelRouter, toolRegistry, objectMapper, properties.maxSteps(), true);
         return new StateGraph(
                 properties.executionBudget(), InterruptPolicy.never(), harness)
-                .addNode("planner", planner)
+                .addNode("planner", coordinator)
                 .addNode("orchestration-research", research)
                 .addNode("coder", implementer)
                 .addNode("ops", ops)
