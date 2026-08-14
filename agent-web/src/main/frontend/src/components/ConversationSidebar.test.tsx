@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { Conversation, ModelConfigurationSnapshot, Workspace } from '../api/contracts'
 import type { UseConversationWorkspaceResult } from '../hooks/useConversationWorkspace'
+import { AppearanceProvider } from '../appearance/AppearanceProvider'
 import { ConversationSidebar } from './ConversationSidebar'
 
 function controller(overrides: Partial<UseConversationWorkspaceResult> = {}): UseConversationWorkspaceResult {
@@ -28,12 +29,16 @@ describe('ConversationSidebar', () => {
   it('展示服务端身份、运行通道状态并转发文件夹导入回调', async () => {
     const user = userEvent.setup()
     const importWorkspace = vi.fn(async () => undefined)
-    render(<ConversationSidebar controller={controller({ importWorkspace })} connectionState={{ trace: null, terminal: null }} />)
+    render(<AppearanceProvider><ConversationSidebar controller={controller({ importWorkspace })} connectionState={{ trace: null, terminal: null }} /></AppearanceProvider>)
 
     expect(screen.getByText('本地身份')).toBeVisible()
     expect(screen.getByText('Alice')).toBeVisible()
     expect(screen.getByText('user-1')).toBeVisible()
     expect(screen.getByText('运行通道未连接')).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: '外观设置' }))
+    expect(screen.getByRole('dialog', { name: '外观设置' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '关闭外观设置' }))
 
     await user.click(screen.getByRole('button', { name: '新建工作区' }))
     await user.click(screen.getByRole('tab', { name: '导入本地文件夹' }))

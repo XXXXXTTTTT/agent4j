@@ -1,4 +1,4 @@
-import { Archive, FolderGit2, FolderPlus, Plus, Search, Trash2, Settings } from 'lucide-react'
+import { Archive, FolderGit2, FolderPlus, Palette, Plus, Search, Trash2, Settings } from 'lucide-react'
 import { useState } from 'react'
 
 import { AccountPlaceholder } from './AccountPlaceholder'
@@ -7,6 +7,7 @@ import type { WorkbenchConnectionState } from '../hooks/useRunWorkbench'
 import type { UseConversationWorkspaceResult } from '../hooks/useConversationWorkspace'
 import { WorkspaceDialog } from './WorkspaceDialog'
 import { ModelSettingsDialog } from './ModelSettingsDialog'
+import { AppearanceSettingsDialog } from './AppearanceSettingsDialog'
 
 interface ConversationSidebarProps {
   controller: UseConversationWorkspaceResult
@@ -18,6 +19,7 @@ interface ConversationSidebarProps {
 export function ConversationSidebar({ controller, connectionState, activeContext }: ConversationSidebarProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
+  const [appearanceDialogOpen, setAppearanceDialogOpen] = useState(false)
   const connected = connectionState.trace === WebSocket.OPEN && connectionState.terminal === WebSocket.OPEN
   const connectionLabel = connected ? '运行通道已连接' : '运行通道未连接'
   const connectionDetail = connected ? 'Trace 与 PTY 已连接' : '等待下一次任务运行'
@@ -25,6 +27,7 @@ export function ConversationSidebar({ controller, connectionState, activeContext
     <aside className="conversation-sidebar" aria-label="会话与工作区" data-active-context={activeContext}>
       <AccountPlaceholder identity={controller.identity} />
       <DesktopConnectionStatus connected={connected} label={connectionLabel} detail={connectionDetail} />
+      <button type="button" className="sidebar-model-settings" onClick={() => setAppearanceDialogOpen(true)}><Palette aria-hidden="true" size={14} /> 外观设置</button>
       <button type="button" className="sidebar-model-settings" onClick={() => setModelDialogOpen(true)}><Settings aria-hidden="true" size={14} /> 模型池配置</button>
       <label className="sidebar-label" htmlFor="workspace-select">工作区</label>
       <div className="sidebar-workspace-row">
@@ -100,6 +103,7 @@ export function ConversationSidebar({ controller, connectionState, activeContext
         />
       ) : null}
       {modelDialogOpen ? <ModelSettingsDialog controller={controller} onClose={() => setModelDialogOpen(false)} /> : null}
+      {appearanceDialogOpen ? <AppearanceSettingsDialog onClose={() => setAppearanceDialogOpen(false)} /> : null}
     </aside>
   )
 }
