@@ -37,6 +37,6 @@ function includes<T extends readonly string[]>(values: T, value: unknown): value
 export function normalizeAppearancePreferences(value: unknown): AppearancePreferences {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return DEFAULT_APPEARANCE
   const record = value as Record<string, unknown>
-  if (!includes(COLOR_MODES, record.colorMode) || !includes(THEME_PRESETS, record.themePreset) || !includes(UI_FONTS, record.font) || !includes(UI_DENSITIES, record.density) || !includes(UI_RADII, record.radius) || (record.accentColor !== null && (typeof record.accentColor !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(record.accentColor)))) return DEFAULT_APPEARANCE
-  return { colorMode: record.colorMode, themePreset: record.themePreset, font: record.font, density: record.density, radius: record.radius, accentColor: record.accentColor }
+  if (!includes(COLOR_MODES, record.colorMode) || !includes(THEME_PRESETS, record.themePreset) || !includes(UI_FONTS, record.font) || !includes(UI_DENSITIES, record.density) || !includes(UI_RADII, record.radius) || (record.accentColor !== undefined && record.accentColor !== null && (typeof record.accentColor !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(record.accentColor)))) return DEFAULT_APPEARANCE
+  return { colorMode: record.colorMode, themePreset: record.themePreset, font: record.font, density: record.density, radius: record.radius, accentColor: record.accentColor === undefined ? null : record.accentColor }
 }

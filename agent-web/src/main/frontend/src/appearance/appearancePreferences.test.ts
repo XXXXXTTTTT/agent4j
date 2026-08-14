@@ -15,4 +15,10 @@ describe('appearancePreferences', () => {
     expect(normalizeAppearancePreferences({ colorMode: 'MIDNIGHT', themePreset: 'UNKNOWN' })).toEqual(DEFAULT_APPEARANCE)
     expect(normalizeAppearancePreferences(null)).toEqual(DEFAULT_APPEARANCE)
   })
+
+  it('keeps valid preferences from the previous schema when accentColor is absent', () => {
+    expect(normalizeAppearancePreferences({ colorMode: 'DARK', themePreset: 'PINE', font: 'MONO', density: 'COMPACT', radius: 'SHARP' })).toEqual({
+      colorMode: 'DARK', themePreset: 'PINE', font: 'MONO', density: 'COMPACT', radius: 'SHARP', accentColor: null,
+    })
+  })
 })
