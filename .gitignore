@@ -20,6 +20,7 @@ Thumbs.db
 *.log
 logs/
 tmp/
+.tmp/
 *.out
 node_modules/
 coverage/

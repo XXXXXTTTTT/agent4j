@@ -111,6 +111,19 @@ function traceEvents(): TraceEvent[] {
 }
 
 describe('Workbench', () => {
+  it('允许收纳低频检查器，让中心对话保持主工作区', async () => {
+    const user = userEvent.setup()
+    render(<Workbench controller={controller()} conversation={conversationController()} onTerminalReady={() => undefined} />)
+
+    const inspector = screen.getByLabelText('执行检查器')
+    expect(inspector).not.toHaveAttribute('hidden')
+    await user.click(screen.getByRole('button', { name: '收纳检查器' }))
+    expect(inspector).toHaveAttribute('hidden')
+    expect(screen.getByTestId('workbench-shell')).toHaveAttribute('data-inspector-open', 'false')
+    await user.click(screen.getByRole('button', { name: '展开检查器' }))
+    expect(inspector).not.toHaveAttribute('hidden')
+  })
+
   it('在活动栏切换真实工作上下文焦点并保留所有三栏可访问', async () => {
     const user = userEvent.setup()
     render(<Workbench controller={controller()} conversation={conversationController()} onTerminalReady={() => undefined} />)
@@ -400,9 +413,11 @@ describe('Workbench', () => {
     expect(within(conversation).getByText('mvn test')).toBeVisible()
     expect(within(conversation).getByText('任务链路已完成')).toBeVisible()
     expect(within(conversation).getByText('代码变更与测试结果通过审查')).toBeVisible()
-    expect(within(conversation).getByText('用户任务：修复登录超时并运行测试')).toBeVisible()
-    expect(within(conversation).getByText('生成登录超时修复 Diff')).toBeVisible()
+    expect(within(conversation).getByText('用户任务：修复登录超时并运行测试')).toBeInTheDocument()
+    expect(within(conversation).getByText('生成登录超时修复 Diff')).toBeInTheDocument()
     expect(within(conversation).getByText('{"summary":"修复超时","command":"mvn test"}')).toBeInTheDocument()
+    expect(within(conversation).getByText('用户任务：修复登录超时并运行测试')).not.toBeVisible()
+    expect(within(conversation).getByText('生成登录超时修复 Diff')).not.toBeVisible()
   })
 
   it('呈现持久化消息与 Ops 失败证据，而不是只显示成功摘要', () => {

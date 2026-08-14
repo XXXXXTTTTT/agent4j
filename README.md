@@ -324,6 +324,20 @@ The model layer remains framework-independent: `ModelRouter` accepts endpoint ch
 
 ## Development
 
+### 桌面工作台布局
+
+Web 与 Electron 桌面壳共用暖中性工作台主题。宽屏显示活动栏、工作区/会话栏、中心对话和检查器；小于 1280px 时检查器默认收纳，小于 900px 时项目栏默认收纳，小于 760px 时活动栏移至底部。选择“运行证据”或“能力”会打开检查器，选择“对话”或“项目”会关闭它。Trace 与 PTY 仍按 Run 持续接收真实事件，检查器关闭时不渲染对应视觉组件。
+
+前端回归检查在系统盘空间不足时可将临时目录置于工作盘：
+
+```powershell
+Set-Location agent-web/src/main/frontend
+$env:TEMP = "$PWD/../../../.tmp/vitest"
+$env:TMP = $env:TEMP
+npm run test:run -- --maxWorkers=1
+npm run build
+```
+
 Requirements: JDK 21, Maven 3.8.8+, Docker Desktop for integration tests. Node/npm is installed by `agent-web`'s Maven plugin (Node 22.22.2, npm 10.9.2).
 
 ```powershell
