@@ -140,6 +140,34 @@ class OpenTelemetryRunTracePublisherTest {
     }
 
     @Test
+    void recordsGovernedHandoffOnParentRunSpan() {
+        InMemorySpanExporter exporter = InMemorySpanExporter.create();
+        try (SdkTracerProvider provider = provider(exporter)) {
+            OpenTelemetryRunTracePublisher publisher =
+                    new OpenTelemetryRunTracePublisher(provider.get("test"));
+            UUID parentRunId = UUID.randomUUID();
+            publisher.publish(new TraceEvent.Handoff(
+                    UUID.randomUUID(), parentRunId, 0, START,
+                    UUID.randomUUID(), parentRunId, UUID.randomUUID(),
+                    "coordinator", "researcher", "STARTED"));
+            publisher.publish(new TraceEvent.Completed(
+                    UUID.randomUUID(), parentRunId, 0, START.plusSeconds(1)));
+            provider.forceFlush().join(5, TimeUnit.SECONDS);
+
+            SpanData run = span(exporter.getFinishedSpanItems(), "agent.run");
+            assertThat(run.getEvents()).singleElement().satisfies(event -> {
+                assertThat(event.getName()).isEqualTo("agent.handoff");
+                assertThat(event.getAttributes().get(
+                        io.opentelemetry.api.common.AttributeKey.stringKey(
+                                "agent.handoff.from_agent"))).isEqualTo("coordinator");
+                assertThat(event.getAttributes().get(
+                        io.opentelemetry.api.common.AttributeKey.stringKey(
+                                "agent.handoff.to_agent"))).isEqualTo("researcher");
+            });
+        }
+    }
+
+    @Test
     void startsNewRunSegmentAfterInterruptAndApproval() {
         InMemorySpanExporter exporter = InMemorySpanExporter.create();
         try (SdkTracerProvider provider = provider(exporter)) {

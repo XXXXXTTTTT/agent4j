@@ -5,6 +5,7 @@ import {
   CircleCheck,
   CirclePause,
   CirclePlay,
+  GitBranch,
   ShieldCheck,
   ShieldX,
   Wifi,
@@ -37,6 +38,13 @@ function presentation(event: TraceEvent): TracePresentation {
       return { label: '执行进度', detail: `${event.nodeName} · ${event.summary}`, tone: 'running', icon: Activity }
     case 'NODE_COMPLETED':
       return { label: '节点完成', detail: `${event.nodeName} → ${event.nextNode}`, tone: 'success', icon: CircleCheck }
+    case 'HANDOFF':
+      return {
+        label: 'Agent 交接',
+        detail: `${event.fromAgent} → ${event.toAgent} · ${event.lifecycle} · 子 Run ${event.childRunId}`,
+        tone: 'running',
+        icon: GitBranch,
+      }
     case 'INTERRUPTED':
       return { label: '已挂起', detail: event.request.reason, tone: 'warning', icon: CirclePause }
     case 'APPROVED':

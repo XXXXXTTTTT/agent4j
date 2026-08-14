@@ -40,8 +40,6 @@ import com.agent.core.security.SecurityViolationSink;
 import com.agent.core.intent.ModelIntentClassifier;
 import com.agent.core.intent.ModelRouterIntentModel;
 import com.agent.core.trace.RunLogPublisher;
-import com.agent.core.trace.RunLogEvent;
-import com.agent.core.trace.RunLogStream;
 import com.agent.core.tool.DefaultToolAuthorizer;
 import com.agent.core.tool.DefaultToolRegistry;
 import com.agent.core.tool.JacksonToolSchemaValidator;
@@ -61,7 +59,8 @@ import com.agent.sandbox.pty.SandboxTerminalService;
 import com.agent.sandbox.pty.TerminalTarget;
 import com.agent.web.security.JdbcSecurityViolationSink;
 import com.agent.web.orchestration.ProductionMultiAgentOrchestrator;
-import com.agent.web.log.InMemoryRunLogEventBus;
+import com.agent.web.trace.InMemoryTraceEventBus;
+import com.agent.web.trace.ProductionHandoffTraceEventPublisher;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -94,18 +93,8 @@ public class ProductionGraphConfiguration {
     /** 生产多 Agent 子运行 Trace 发布端口；宿主 Run Trace 另行投影。 */
     @Bean
     AgentHandoffEventPublisher productionHandoffEventPublisher(
-            InMemoryRunLogEventBus runLogEventBus) {
-        java.util.concurrent.ConcurrentHashMap<java.util.UUID, java.util.concurrent.atomic.AtomicLong>
-                sequences = new java.util.concurrent.ConcurrentHashMap<>();
-        return event -> {
-            var sequence = sequences.computeIfAbsent(
-                    event.childRunId(), ignored -> new java.util.concurrent.atomic.AtomicLong());
-            runLogEventBus.publish(new RunLogEvent(
-                    java.util.UUID.randomUUID(), event.childRunId(),
-                    "handoff:" + event.fromAgent() + "->" + event.toAgent(),
-                    sequence.getAndIncrement(), RunLogStream.STDOUT,
-                    event.getClass().getSimpleName(), event.occurredAt()));
-        };
+            InMemoryTraceEventBus traceEventBus) {
+        return new ProductionHandoffTraceEventPublisher(traceEventBus);
     }
 
     /** 复用核心目录、状态投影和虚拟线程 handoff 执行器。 */

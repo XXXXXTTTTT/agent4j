@@ -159,6 +159,7 @@ public final class OpenTelemetryRunTracePublisher
                 case TraceEvent.NodeStarted started -> nodeStarted(started);
                 case TraceEvent.NodeProgress progress -> nodeProgress(progress);
                 case TraceEvent.NodeCompleted completed -> nodeCompleted(completed);
+                case TraceEvent.Handoff handoff -> handoff(handoff);
                 case TraceEvent.Interrupted interrupted -> interrupted(interrupted);
                 case TraceEvent.Approved approved -> approved(approved);
                 case TraceEvent.Rejected rejected -> rejected(rejected);
@@ -196,6 +197,21 @@ public final class OpenTelemetryRunTracePublisher
             nodeSpan.addEvent(
                     "agent.node.progress",
                     Attributes.of(PROGRESS_SUMMARY, event.summary()),
+                    event.occurredAt());
+        }
+
+        private void handoff(TraceEvent.Handoff event) {
+            ensureRun(event.checkpointVersion(), event.occurredAt());
+            runSpan.addEvent(
+                    "agent.handoff",
+                    Attributes.builder()
+                            .put("agent.handoff.task_id", event.taskId().toString())
+                            .put("agent.handoff.parent_run_id", event.parentRunId().toString())
+                            .put("agent.handoff.child_run_id", event.childRunId().toString())
+                            .put("agent.handoff.from_agent", event.fromAgent())
+                            .put("agent.handoff.to_agent", event.toAgent())
+                            .put("agent.handoff.lifecycle", event.lifecycle())
+                            .build(),
                     event.occurredAt());
         }
 
