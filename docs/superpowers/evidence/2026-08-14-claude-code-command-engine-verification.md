@@ -45,4 +45,4 @@ mvn -pl agent-web -Dfrontend.skip=true -Dtest=CommandEngineEddTest test
 
 ## 既有测试残余风险
 
-全量 `mvn -Dfrontend.skip=true test` 在执行窗口内未完成。Surefire 报告显示一个既有的 `DockerMcpMaterialPreparationRunnerTest.rejectsSymbolicLinkCreatedInsideMaterialTree` 因材料准备等待约 72 秒后失败；该失败不涉及 Slash Command 引擎。命令引擎定向 Core/Web 测试均通过。
+`DockerMcpMaterialPreparationRunnerTest.rejectsSymbolicLinkCreatedInsideMaterialTree` 依赖 Linux bind mount 保留符号链接 inode。当前 Docker Desktop Windows 环境不满足该前置条件，隔离运行结果为 JUnit 跳过，而不是产品失败；Node 物料安装命令已用同等 Docker 参数复现成功。全量 Maven 仍包含这类长耗时 Docker 环境测试，命令引擎定向 Core/Web 测试均通过。
