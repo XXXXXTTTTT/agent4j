@@ -2,7 +2,11 @@ package com.agent.web.config;
 
 import com.agent.core.engine.GraphFactory;
 import com.agent.core.engine.InterruptPolicy;
+import com.agent.core.engine.Node;
 import com.agent.core.engine.StateGraph;
+import com.agent.core.engine.GraphRegistry;
+import com.agent.core.multiagent.AgentHandoffEventPublisher;
+import com.agent.core.multiagent.AgentHandoffExecutor;
 import com.agent.core.gui.BrowserSessionRegistry;
 import com.agent.core.harness.HarnessHookChain;
 import com.agent.core.cli.CliApprovalInterruptPolicy;
@@ -14,6 +18,9 @@ import com.agent.core.intent.RequiredCapability;
 import com.agent.core.intent.TaskKind;
 import com.agent.core.llm.ModelRouter;
 import com.agent.core.llm.ImageGenerationClient;
+import com.agent.core.llm.ModelRequest;
+import com.agent.core.llm.RoutedCompletion;
+import com.agent.core.llm.ChatMessage;
 import com.agent.core.llm.TaskType;
 import com.agent.core.profile.AgentProfile;
 import com.agent.core.knowledge.KnowledgeContextProvider;
@@ -33,6 +40,8 @@ import com.agent.core.security.SecurityViolationSink;
 import com.agent.core.intent.ModelIntentClassifier;
 import com.agent.core.intent.ModelRouterIntentModel;
 import com.agent.core.trace.RunLogPublisher;
+import com.agent.core.trace.RunLogEvent;
+import com.agent.core.trace.RunLogStream;
 import com.agent.core.tool.DefaultToolAuthorizer;
 import com.agent.core.tool.DefaultToolRegistry;
 import com.agent.core.tool.JacksonToolSchemaValidator;
@@ -51,6 +60,8 @@ import com.agent.sandbox.pty.PtyTarget;
 import com.agent.sandbox.pty.SandboxTerminalService;
 import com.agent.sandbox.pty.TerminalTarget;
 import com.agent.web.security.JdbcSecurityViolationSink;
+import com.agent.web.orchestration.ProductionMultiAgentOrchestrator;
+import com.agent.web.log.InMemoryRunLogEventBus;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -58,6 +69,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -78,6 +90,39 @@ import java.util.Set;
 @ConditionalOnBean(ModelRouter.class)
 @EnableConfigurationProperties(ProductionAgentProperties.class)
 public class ProductionGraphConfiguration {
+
+    /** 生产多 Agent 子运行 Trace 发布端口；宿主 Run Trace 另行投影。 */
+    @Bean
+    AgentHandoffEventPublisher productionHandoffEventPublisher(
+            InMemoryRunLogEventBus runLogEventBus) {
+        java.util.concurrent.ConcurrentHashMap<java.util.UUID, java.util.concurrent.atomic.AtomicLong>
+                sequences = new java.util.concurrent.ConcurrentHashMap<>();
+        return event -> {
+            var sequence = sequences.computeIfAbsent(
+                    event.childRunId(), ignored -> new java.util.concurrent.atomic.AtomicLong());
+            runLogEventBus.publish(new RunLogEvent(
+                    java.util.UUID.randomUUID(), event.childRunId(),
+                    "handoff:" + event.fromAgent() + "->" + event.toAgent(),
+                    sequence.getAndIncrement(), RunLogStream.STDOUT,
+                    event.getClass().getSimpleName(), event.occurredAt()));
+        };
+    }
+
+    /** 复用核心目录、状态投影和虚拟线程 handoff 执行器。 */
+    @Bean(destroyMethod = "close")
+    AgentHandoffExecutor productionAgentHandoffExecutor(
+            GraphRegistry graphRegistry,
+            AgentHandoffEventPublisher eventPublisher) {
+        return new AgentHandoffExecutor(
+                ProductionMultiAgentOrchestrator.catalog(), graphRegistry, eventPublisher);
+    }
+
+    /** 创建生产多 Agent 编排节点包装器。 */
+    @Bean(destroyMethod = "close")
+    ProductionMultiAgentOrchestrator productionMultiAgentOrchestrator(
+            AgentHandoffExecutor handoffExecutor) {
+        return new ProductionMultiAgentOrchestrator(handoffExecutor);
+    }
 
     private static final Logger LOGGER = LoggerFactory.getLogger(
             ProductionGraphConfiguration.class);
@@ -315,7 +360,8 @@ public class ProductionGraphConfiguration {
             ToolRegistry toolRegistry,
             CliCommandCatalog commandCatalog,
             WorkspaceTerminalTargetResolver workspaceTargetResolver,
-            BrowserSessionRegistry browserSessions) {
+            BrowserSessionRegistry browserSessions,
+            ObjectProvider<ProductionMultiAgentOrchestrator> orchestratorProvider) {
         Objects.requireNonNull(properties, "properties 不能为空");
         Objects.requireNonNull(knowledgeProperties, "knowledgeProperties 不能为空");
         knowledgeProperties.validate();
@@ -351,7 +397,34 @@ public class ProductionGraphConfiguration {
                 toolRegistry,
                 commandCatalog,
                 workspaceTargetResolver,
-                browserSessions);
+                browserSessions,
+                orchestratorProvider == null ? null : orchestratorProvider.getIfAvailable());
+    }
+
+    /** 测试与兼容调用使用的无编排包装重载。 */
+    GraphFactory codeAgentGraph(
+            ProductionAgentProperties properties,
+            KnowledgeProperties knowledgeProperties,
+            ModelRouter modelRouter,
+            MemoryContextProvider memoryContextProvider,
+            KnowledgeContextProvider knowledgeContextProvider,
+            SandboxTerminalService terminalService,
+            BrowserAutomation browserAutomation,
+            AstService astService,
+            WorkspaceSnapshotService snapshotService,
+            RunLogPublisher logPublisher,
+            ObjectMapper objectMapper,
+            HarnessHookChain harness,
+            SecurityViolationSink securityViolationSink,
+            ToolRegistry toolRegistry,
+            CliCommandCatalog commandCatalog,
+            WorkspaceTerminalTargetResolver workspaceTargetResolver,
+            BrowserSessionRegistry browserSessions) {
+        return codeAgentGraph(properties, knowledgeProperties, modelRouter,
+                memoryContextProvider, knowledgeContextProvider, terminalService,
+                browserAutomation, astService, snapshotService, logPublisher,
+                objectMapper, harness, securityViolationSink, toolRegistry,
+                commandCatalog, workspaceTargetResolver, browserSessions, null);
     }
 
     /** 注册只含受治理 Ops 节点的 CLI 专用执行图。 */
@@ -371,6 +444,48 @@ public class ProductionGraphConfiguration {
                 .addNode("ops", new OpsNode(terminalService, approvalPolicy, logPublisher))
                 .setEntryPoint("ops")
                 .addEdge("ops", StateGraph.END);
+    }
+
+    /** 代码研究子图只写入研究证据键，不持有工作区写权限。 */
+    @Bean("multiagent-research-code")
+    GraphFactory multiAgentResearchCodeGraph(ModelRouter modelRouter) {
+        return () -> new StateGraph(2)
+                .addNode("research-code", state -> state.withVariable(
+                        "research.codeEvidence",
+                        researchEvidence(modelRouter, state, "代码结构")))
+                .setEntryPoint("research-code")
+                .addEdge("research-code", StateGraph.END);
+    }
+
+    /** 测试研究子图只写入研究证据键，不持有工作区写权限。 */
+    @Bean("multiagent-research-tests")
+    GraphFactory multiAgentResearchTestsGraph(ModelRouter modelRouter) {
+        return () -> new StateGraph(2)
+                .addNode("research-tests", state -> state.withVariable(
+                        "research.testEvidence",
+                        researchEvidence(modelRouter, state, "测试与验证")))
+                .setEntryPoint("research-tests")
+                .addEdge("research-tests", StateGraph.END);
+    }
+
+    /** FRESH 验证子图使用现有 ReviewerNode，继续经过真实模型路由。 */
+    @Bean("multiagent-verifier")
+    GraphFactory multiAgentVerifierGraph(
+            ModelRouter modelRouter,
+            BrowserAutomation browserAutomation,
+            ObjectMapper objectMapper,
+            ProductionAgentProperties properties) {
+        ReviewerNode reviewer = new ReviewerNode(
+                browserAutomation, modelRouter, objectMapper, properties.browserTimeout());
+        return () -> new StateGraph(properties.executionBudget(), InterruptPolicy.never(),
+                HarnessHookChain.noop())
+                .addNode("verifier", state -> reviewer.execute(state.withVariable(
+                        "model.groupId",
+                        state.variables().get(
+                                ProductionMultiAgentOrchestrator.MODEL_GROUP_KEY_PREFIX
+                                        + com.agent.core.orchestration.AgentRole.VERIFIER.name()))))
+                .setEntryPoint("verifier")
+                .addEdge("verifier", StateGraph.END);
     }
 
     /** 声明精确关联 `code-agent` 图的生产 Profile。 */
@@ -515,7 +630,8 @@ public class ProductionGraphConfiguration {
             ToolRegistry toolRegistry,
             CliCommandCatalog commandCatalog,
             WorkspaceTerminalTargetResolver workspaceTargetResolver,
-            BrowserSessionRegistry browserSessions) {
+            BrowserSessionRegistry browserSessions,
+            ProductionMultiAgentOrchestrator orchestrator) {
         var promptCatalog = PlannerPromptTemplates.catalog();
         PlannerNode planner = new PlannerNode(
                 modelRouter,
@@ -541,6 +657,16 @@ public class ProductionGraphConfiguration {
                 properties.commandTimeout(), logPublisher);
         ReviewerNode reviewer = new ReviewerNode(
                 browserAutomation, modelRouter, objectMapper, properties.browserTimeout());
+        Node research = orchestrator == null
+                ? state -> state
+                : orchestrator.researchNode();
+        Node implementer = orchestrator == null
+                ? coder
+                : orchestrator.withRoleModelGroup(
+                        coder, com.agent.core.orchestration.AgentRole.IMPLEMENTER);
+        Node review = orchestrator == null
+                ? reviewer
+                : orchestrator.reviewNode(reviewer);
         GuiAgentNode gui = new GuiAgentNode(
                 browserSessions,
                 modelRouter,
@@ -553,9 +679,10 @@ public class ProductionGraphConfiguration {
         return new StateGraph(
                 properties.executionBudget(), InterruptPolicy.never(), harness)
                 .addNode("planner", planner)
-                .addNode("coder", coder)
+                .addNode("orchestration-research", research)
+                .addNode("coder", implementer)
                 .addNode("ops", ops)
-                .addNode("reviewer", reviewer)
+                .addNode("reviewer", review)
                 .addNode(REVIEWER_FAILURE_NODE, state -> state.withVariable(
                         ReviewerNode.ERROR_KEY, reviewerFailure(state)))
                 .addNode("gui", gui)
@@ -563,7 +690,7 @@ public class ProductionGraphConfiguration {
                 .setEntryPoint("planner")
                 .addConditionalEdges(
                         "planner",
-                        state -> plannerGraphRoute(state),
+                        state -> plannerGraphRouteWithOrchestration(state),
                         Map.of(
                                 PlannerNode.CHAT_ROUTE, StateGraph.END,
                                 PlannerNode.KNOWLEDGE_ROUTE, StateGraph.END,
@@ -572,6 +699,7 @@ public class ProductionGraphConfiguration {
                                 CODER_ROUTE, "coder",
                                 PlannerNode.FAILED_ROUTE, StateGraph.END))
                 .addEdge(TOOL_ROUTE, StateGraph.END)
+                .addEdge("orchestration-research", "coder")
                 .addConditionalEdges(
                         "coder",
                         state -> state.variables().containsKey(CoderNode.ERROR_KEY)
@@ -637,6 +765,60 @@ public class ProductionGraphConfiguration {
             case TOOL_OPERATION -> TOOL_ROUTE;
             default -> CODER_ROUTE;
         };
+    }
+
+    /** 仅并行研究模式插入只读研究节点，串行模式保持 Planner 直达 Coder。 */
+    String plannerGraphRouteWithOrchestration(com.agent.core.engine.AgentState state) {
+        String route = plannerGraphRoute(state);
+        if (!CODER_ROUTE.equals(route)) {
+            return route;
+        }
+        String mode = state.variables().get(ProductionMultiAgentOrchestrator.MODE_KEY);
+        return com.agent.core.orchestration.OrchestrationMode.PARALLEL_RESEARCH.name()
+                        .equals(mode)
+                ? "orchestration-research"
+                : CODER_ROUTE;
+    }
+
+    private String workspaceEvidence(
+            com.agent.core.engine.AgentState state,
+            String label) {
+        String workspace = state.variables().get(CoderNode.WORKSPACE_PATH_KEY);
+        if (workspace == null || workspace.isBlank()) {
+            throw new IllegalStateException("研究子图缺少状态变量: " + CoderNode.WORKSPACE_PATH_KEY);
+        }
+        try (var paths = java.nio.file.Files.walk(java.nio.file.Path.of(workspace), 2)) {
+            long files = paths.filter(java.nio.file.Files::isRegularFile).count();
+            return label + "证据: 文件数=" + files
+                    + ", 计划=" + state.variables().get(PlannerNode.PLAN_KEY);
+        } catch (java.io.IOException exception) {
+            throw new IllegalStateException("研究子图读取工作区失败", exception);
+        }
+    }
+
+    private String researchEvidence(
+            ModelRouter modelRouter,
+            com.agent.core.engine.AgentState state,
+            String label) {
+        String evidence = workspaceEvidence(state, label);
+        String modelGroup = state.variables().get(
+                ProductionMultiAgentOrchestrator.MODEL_GROUP_KEY_PREFIX
+                        + com.agent.core.orchestration.AgentRole.RESEARCHER.name());
+        if (modelGroup == null || modelGroup.isBlank()) {
+            throw new IllegalStateException("研究子图缺少研究角色模型组");
+        }
+        RoutedCompletion completion = modelRouter.complete(
+                TaskType.CODE,
+                new ModelRequest(
+                        List.of(
+                                ChatMessage.system("你是只读研究 Agent，只能总结证据，不得修改工作区。"),
+                                ChatMessage.user(evidence)),
+                        List.of(), null, 0.0, modelGroup));
+        ChatMessage message = completion.response().choices().getFirst().message();
+        if (!(message.content() instanceof ChatMessage.TextContent text)) {
+            throw new IllegalStateException("研究模型响应 content 必须是 TextContent");
+        }
+        return evidence + "\n模型研究: " + text.text();
     }
 
     String reviewerRoute(
