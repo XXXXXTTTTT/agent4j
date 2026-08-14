@@ -38,6 +38,8 @@ class SystemCommandHandlersTest {
         assertThat(contextService.calls()).containsExactlyInAnyOrder(
                 "context", "compact", "clear", "cost", "permissions");
         assertThat(rewindCalls).containsExactly("cp-1");
+        assertThat(registry.find("usage")).isPresent()
+                .get().extracting(CommandDefinition::name).isEqualTo("cost");
     }
 
     @Test

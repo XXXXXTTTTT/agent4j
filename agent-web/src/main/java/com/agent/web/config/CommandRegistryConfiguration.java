@@ -7,14 +7,15 @@ import com.agent.core.command.CommandDefinition;
 import com.agent.core.command.CommandDispatcher;
 import com.agent.core.command.CommandPermission;
 import com.agent.core.command.CommandRegistry;
-import com.agent.core.command.CommandResult;
 import com.agent.core.command.CommandSource;
 import com.agent.core.command.CommandTemplateRenderer;
 import com.agent.core.command.InMemoryCommandRegistry;
 import com.agent.core.command.MarkdownCommandLoader;
 import com.agent.core.command.SystemCommandHandlers;
 import com.agent.core.command.WorkflowCommandHandler;
+import com.agent.core.engine.AgentRunService;
 import com.agent.web.audit.ConversationAuditSink;
+import com.agent.web.command.AgentRunCommandCheckpointService;
 import com.agent.web.command.ConversationWorkflowCommandBridge;
 import com.agent.web.command.LocalCommandContextService;
 import com.agent.web.command.WorkspaceCommandRuntimeProvider;
@@ -60,19 +61,23 @@ public class CommandRegistryConfiguration {
     WorkspaceCommandRuntimeProvider workspaceCommandRuntimeProvider(
             CommandProperties properties,
             ConversationWorkflowCommandBridge workflowBridge,
+            AgentRunService agentRunService,
+            ConversationAuditSink auditSink,
             com.agent.web.conversation.ConversationService conversationService,
             WorkspaceAccessService workspaceAccessService,
             ActorResolver actorResolver,
             Clock harnessClock) {
         return workspace -> createRuntime(
                 properties, workflowBridge, conversationService,
-                workspaceAccessService, actorResolver, harnessClock, workspace);
+                agentRunService, auditSink, workspaceAccessService, actorResolver, harnessClock, workspace);
     }
 
     private WorkspaceCommandRuntimeProvider.Runtime createRuntime(
             CommandProperties properties,
             ConversationWorkflowCommandBridge workflowBridge,
             com.agent.web.conversation.ConversationService conversationService,
+            AgentRunService agentRunService,
+            ConversationAuditSink auditSink,
             WorkspaceAccessService workspaceAccessService,
             ActorResolver actorResolver,
             Clock clock,
@@ -82,9 +87,7 @@ public class CommandRegistryConfiguration {
         List<CommandDefinition> definitions = new ArrayList<>(SystemCommandHandlers.definitions(
                 registry,
                 contextService,
-                (context, checkpoint) -> CommandResult.failure(
-                        CommandResult.Status.FAILED,
-                        "Checkpoint 回滚需要运行时版本引用: " + checkpoint)));
+                new AgentRunCommandCheckpointService(agentRunService, auditSink)));
         definitions.addAll(builtInWorkflows(workflowBridge));
         Path globalDirectory = properties.globalDirectory().isBlank()
                 ? null : Path.of(properties.globalDirectory());

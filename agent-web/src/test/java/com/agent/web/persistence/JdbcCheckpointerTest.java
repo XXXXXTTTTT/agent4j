@@ -166,6 +166,29 @@ class JdbcCheckpointerTest {
     }
 
     @Test
+    void restoresLatestPointerWithoutDeletingHistory() {
+        UUID runId = UUID.fromString("d7a5df8e-1d34-4f15-b26e-e1c86e03a7a5");
+        RunCheckpoint created = checkpointer.create(
+                runId, "simple", AgentState.empty(), "step");
+        RunCheckpoint completed = checkpointer.append(new CheckpointAppend(
+                runId,
+                created.version(),
+                RunStatus.COMPLETED,
+                created.state().withVariable("step", "done"),
+                null,
+                null,
+                null,
+                null,
+                null));
+
+        RunCheckpoint restored = checkpointer.restore(runId, created.version());
+
+        assertThat(restored).isEqualTo(created);
+        assertThat(checkpointer.loadLatest(runId)).contains(created);
+        assertThat(checkpointer.loadHistory(runId)).containsExactly(created, completed);
+    }
+
+    @Test
     void permitsOnlyOneConcurrentAppendForTheSameVersion() throws Exception {
         UUID runId = UUID.fromString("a26453e2-01e8-4f27-970b-d6f59e39af8e");
         RunCheckpoint created = checkpointer.create(

@@ -136,6 +136,27 @@ public final class AgentRunService implements AutoCloseable {
         return List.copyOf(history);
     }
 
+    /** 将 Run 恢复到精确历史 Checkpoint，并在恢复状态仍可运行时重新调度。 */
+    public RunCheckpoint rewind(UUID runId, long version) {
+        ensureOpen();
+        Objects.requireNonNull(runId, "runId 不能为空");
+        if (version < 0) {
+            throw new IllegalArgumentException("version 不能小于 0");
+        }
+        RunCheckpoint current = get(runId);
+        if (version > current.version()) {
+            throw new CheckpointConflictException(runId, version);
+        }
+        if (current.status() == RunStatus.RUNNING) {
+            cancelActiveExecutions(runId);
+        }
+        RunCheckpoint restored = checkpointer.restore(runId, version);
+        if (restored.status() == RunStatus.RUNNING) {
+            dispatch(restored, true);
+        }
+        return restored;
+    }
+
     /**
      * 取消仍在运行的 Run，并以完整取消堆栈写入权威失败快照。
      *

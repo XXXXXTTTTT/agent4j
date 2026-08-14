@@ -205,6 +205,60 @@ public final class JdbcCheckpointer implements Checkpointer {
                 .list());
     }
 
+    /** 将 Run 的权威指针移动到精确历史版本，历史行本身保持不变。 */
+    @Override
+    public RunCheckpoint restore(UUID runId, long version) {
+        Objects.requireNonNull(runId, "runId 不能为空");
+        if (version < 0) {
+            throw new IllegalArgumentException("version 不能小于 0");
+        }
+        Instant restoredAt = databaseInstant();
+        return requireTransactionResult(transactionTemplate.execute(status -> {
+            Long latestVersion = jdbcClient.sql("""
+                    select latest_version
+                    from agent_runs
+                    where run_id = :runId
+                    for update
+                    """)
+                    .param("runId", runId)
+                    .query(Long.class)
+                    .optional()
+                    .orElseThrow(() -> new RunNotFoundException(runId));
+            if (version > latestVersion) {
+                throw new CheckpointConflictException(runId, version);
+            }
+            RunCheckpoint target = jdbcClient.sql("""
+                    select %s
+                    from agent_checkpoints checkpoint
+                    where checkpoint.run_id = :runId
+                      and checkpoint.version = :version
+                    """.formatted(CHECKPOINT_COLUMNS))
+                    .param("runId", runId)
+                    .param("version", version)
+                    .query(checkpointRowMapper)
+                    .optional()
+                    .orElseThrow(() -> new RunNotFoundException(runId));
+            int updated = jdbcClient.sql("""
+                    update agent_runs
+                    set latest_version = :version,
+                        status = :status,
+                        updated_at = :updatedAt
+                    where run_id = :runId
+                      and latest_version = :expectedLatestVersion
+                    """)
+                    .param("version", version)
+                    .param("status", target.status().name())
+                    .param("updatedAt", Timestamp.from(restoredAt))
+                    .param("runId", runId)
+                    .param("expectedLatestVersion", latestVersion)
+                    .update();
+            if (updated != 1) {
+                throw new CheckpointConflictException(runId, latestVersion);
+            }
+            return target;
+        }));
+    }
+
     private void insertCheckpoint(RunCheckpoint checkpoint) {
         String stateJson = writeJson(checkpoint.state());
         String interruptJson = checkpoint.interruptRequest() == null

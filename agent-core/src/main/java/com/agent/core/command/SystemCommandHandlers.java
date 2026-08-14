@@ -19,7 +19,8 @@ public final class SystemCommandHandlers {
         Objects.requireNonNull(contextService, "contextService 不能为空");
         Objects.requireNonNull(checkpointService, "checkpointService 不能为空");
         List<CommandDefinition> definitions = new ArrayList<>();
-        definitions.add(definition("help", "帮助", "列出当前已注册命令", List.of(),
+        definitions.add(definition("help", "帮助", "列出当前已注册命令",
+                List.of(), List.of(new CommandParameter("query", "命令查询", false)),
                 CommandPermission.VIEWER,
                 (invocation, context) -> {
                     String query = invocation.arguments().isEmpty()
@@ -40,7 +41,7 @@ public final class SystemCommandHandlers {
                         context, invocation.arguments().isEmpty() ? "" : invocation.arguments().getFirst())));
         definitions.add(definition("clear", "清空", "创建同工作区的新会话", List.of(),
                 CommandPermission.OPERATOR, (invocation, context) -> contextService.clear(context)));
-        definitions.add(definition("cost", "费用", "显示当前会话模型调用统计", List.of(),
+        definitions.add(definition("cost", "费用", "显示当前会话模型调用统计", List.of("usage"), List.of(),
                 CommandPermission.VIEWER, (invocation, context) -> contextService.cost(context)));
         definitions.add(definition("permissions", "权限", "读取或更新命令权限", List.of(
                         new CommandParameter("action", "权限操作", false)),
@@ -58,11 +59,22 @@ public final class SystemCommandHandlers {
             String name,
             String displayName,
             String description,
+            List<String> aliases,
             List<CommandParameter> parameters,
             CommandPermission permission,
             CommandHandler handler) {
         return new CommandDefinition(
-                name, displayName, description, List.of(), parameters,
+                name, displayName, description, aliases, parameters,
                 CommandChannel.SYSTEM_DIRECTIVE, CommandSource.BUILT_IN, permission, handler);
+    }
+
+    private static CommandDefinition definition(
+            String name,
+            String displayName,
+            String description,
+            List<CommandParameter> parameters,
+            CommandPermission permission,
+            CommandHandler handler) {
+        return definition(name, displayName, description, List.of(), parameters, permission, handler);
     }
 }
