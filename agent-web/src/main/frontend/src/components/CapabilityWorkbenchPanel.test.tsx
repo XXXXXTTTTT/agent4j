@@ -21,6 +21,21 @@ describe('CapabilityWorkbenchPanel', () => {
     expect(confirmMcp).toHaveBeenCalledWith(expect.objectContaining({ previewId: 'p1', scope: 'WORKSPACE' }))
   })
 
+  it('keeps installation controls outside the independently scrollable catalog and uses icon-only previews', () => {
+    render(<CapabilityWorkbenchPanel workspaceId="ws-1" mcpCatalog={catalog} skillResults={[]} onPreviewMcp={vi.fn()} onConfirmMcp={vi.fn()} onPreviewSkill={vi.fn()} onConfirmSkill={vi.fn()} />)
+
+    const controls = screen.getByTestId('capability-control-bar')
+    const catalogList = screen.getByTestId('capability-catalog-list')
+    const preview = screen.getByRole('button', { name: '预览 everything' })
+
+    expect(controls).toContainElement(screen.getByLabelText('MCP 安装范围'))
+    expect(controls).toContainElement(screen.getByLabelText('Skill 安装范围'))
+    expect(controls).toContainElement(screen.getByLabelText('搜索 GitHub Skills'))
+    expect(catalogList).toContainElement(preview)
+    expect(preview).toHaveClass('capability-preview-button')
+    expect(preview).not.toHaveTextContent('预览')
+  })
+
   it('submits snapshot-declared MCP environment values and clears the password input', async () => {
     const user = userEvent.setup()
     const startMcp = vi.fn(async () => undefined)
