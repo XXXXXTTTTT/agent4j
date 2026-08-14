@@ -25,6 +25,7 @@ import {
   deleteModelEndpoint,
   deleteModelGroup,
 } from '../api/conversationApi'
+import { dispatchSlashCommand, listSlashCommands } from '../api/commandApi'
 import type {
   Actor,
   Conversation,
@@ -33,6 +34,7 @@ import type {
   WorkspaceDirectoryListing,
   ModelConfigurationSnapshot,
 } from '../api/contracts'
+import type { SlashCommandCatalog, SlashCommandResult } from '../api/commandApi'
 import type { CreateWorkspaceCommand, ImportDesktopWorkspaceCommand, ImportWorkspaceCommand, OrchestrationMode, RoleModelGroups, UpdateModelEndpointCommand, UpdateModelGroupCommand, UpdateModelProviderCommand } from '../api/conversationApi'
 
 export interface ConversationWorkspaceApi {
@@ -59,6 +61,8 @@ export interface ConversationWorkspaceApi {
   deleteModelProvider?(id: string): Promise<ModelConfigurationSnapshot>
   deleteModelEndpoint?(id: string): Promise<ModelConfigurationSnapshot>
   deleteModelGroup?(id: string): Promise<ModelConfigurationSnapshot>
+  listSlashCommands?(workspaceId: string): Promise<SlashCommandCatalog>
+  dispatchSlashCommand?(workspaceId: string, command: { input: string; conversationId: string; modelGroupId?: string }): Promise<SlashCommandResult>
 }
 
 const DEFAULT_API: ConversationWorkspaceApi = {
@@ -85,6 +89,8 @@ const DEFAULT_API: ConversationWorkspaceApi = {
   deleteModelProvider: (id) => deleteModelProvider(id),
   deleteModelEndpoint: (id) => deleteModelEndpoint(id),
   deleteModelGroup: (id) => deleteModelGroup(id),
+  listSlashCommands: (workspaceId) => listSlashCommands(workspaceId),
+  dispatchSlashCommand: (workspaceId, command) => dispatchSlashCommand(workspaceId, command),
 }
 
 export interface UseConversationWorkspaceOptions {
@@ -127,6 +133,8 @@ export interface UseConversationWorkspaceResult {
   deleteModelProvider(id: string): Promise<ModelConfigurationSnapshot>
   deleteModelEndpoint(id: string): Promise<ModelConfigurationSnapshot>
   deleteModelGroup(id: string): Promise<ModelConfigurationSnapshot>
+  listSlashCommands?(): Promise<SlashCommandCatalog>
+  dispatchSlashCommand?(input: string, modelGroupId?: string): Promise<SlashCommandResult>
 }
 
 function asError(value: unknown): Error {
@@ -351,6 +359,33 @@ export function useConversationWorkspace(
     }
   }, [activeConversationId])
 
+  const listSlashCommandsEntry = useCallback(async (): Promise<SlashCommandCatalog> => {
+    if (activeWorkspaceId === null) throw new Error('当前没有工作区')
+    const command = apiRef.current.listSlashCommands
+    if (command === undefined) throw new Error('Slash Command 接口未配置')
+    return command(activeWorkspaceId)
+  }, [activeWorkspaceId])
+
+  const dispatchSlashCommandEntry = useCallback(async (input: string, modelGroupId?: string): Promise<SlashCommandResult> => {
+    if (activeWorkspaceId === null || activeConversationId === null) throw new Error('当前没有工作区或会话')
+    const command = apiRef.current.dispatchSlashCommand
+    if (command === undefined) throw new Error('Slash Command 接口未配置')
+    setSubmitting(true)
+    setError(null)
+    try {
+      return await command(activeWorkspaceId, {
+        input,
+        conversationId: activeConversationId,
+        ...(modelGroupId?.trim() ? { modelGroupId: modelGroupId.trim() } : {}),
+      })
+    } catch (failure) {
+      setError(asError(failure))
+      throw failure
+    } finally {
+      setSubmitting(false)
+    }
+  }, [activeConversationId, activeWorkspaceId])
+
   const deleteActiveConversation = useCallback(async (): Promise<void> => {
     if (activeConversationId === null) throw new Error('当前没有会话')
     if (apiRef.current.deleteConversation === undefined) throw new Error('删除会话接口未配置')
@@ -458,6 +493,8 @@ export function useConversationWorkspace(
     importWorkspace: importWorkspaceEntry,
     importDesktopWorkspace: importDesktopWorkspaceEntry,
     submit, archive, deleteConversation: deleteActiveConversation, reload, reloadModelConfiguration,
+    listSlashCommands: listSlashCommandsEntry,
+    dispatchSlashCommand: dispatchSlashCommandEntry,
     createModelProvider: (command) => runModelConfigurationCommand(apiRef.current.createModelProvider === undefined ? undefined : () => apiRef.current.createModelProvider!(command), '模型 Provider 接口未配置'),
     createModelGroup: (command) => runModelConfigurationCommand(apiRef.current.createModelGroup === undefined ? undefined : () => apiRef.current.createModelGroup!(command), '模型组接口未配置'),
     createModelEndpoint: (command) => runModelConfigurationCommand(apiRef.current.createModelEndpoint === undefined ? undefined : () => apiRef.current.createModelEndpoint!(command), '模型端点接口未配置'),

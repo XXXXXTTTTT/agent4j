@@ -11,6 +11,7 @@ import type { UseConversationWorkspaceResult } from '../hooks/useConversationWor
 import type { UseRunWorkbenchResult } from '../hooks/useRunWorkbench'
 import { OrchestrationModeSelector } from './OrchestrationModeSelector'
 import type { AgentRole, OrchestrationMode, RoleModelGroups } from '../api/conversationApi'
+import type { SlashCommandDefinition } from '../api/commandApi'
 
 interface ConversationComposerProps {
   conversation: UseConversationWorkspaceResult
@@ -26,10 +27,14 @@ export function ConversationComposer({ conversation, runController }: Conversati
   const modelGroups = conversation.modelConfiguration?.groups ?? []
   const [inputError, setInputError] = useState<string | null>(null)
   const [commands, setCommands] = useState<GovernedCliCommand[]>([])
+  const [slashCommands, setSlashCommands] = useState<SlashCommandDefinition[]>([])
   const [commandsLoadedForWorkspace, setCommandsLoadedForWorkspace] = useState<string | null>(null)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [selectedCommand, setSelectedCommand] = useState<GovernedCliCommand | null>(null)
+  const [selectedSlashCommand, setSelectedSlashCommand] = useState<SlashCommandDefinition | null>(null)
   const [argumentsInput, setArgumentsInput] = useState('')
+  const [slashArgumentsInput, setSlashArgumentsInput] = useState('')
+  const [commandFeedback, setCommandFeedback] = useState<string | null>(null)
   const [timeoutSeconds, setTimeoutSeconds] = useState('30')
 
   useEffect(() => {
@@ -37,13 +42,21 @@ export function ConversationComposer({ conversation, runController }: Conversati
     setModelGroupId(modelGroups[0].groupId)
   }, [modelGroupId, modelGroups, orchestrationMode])
 
-  const slashMode = content.startsWith('/') && selectedCommand === null
+  const slashMode = content.startsWith('/') && selectedCommand === null && selectedSlashCommand === null
   const commandQuery = slashMode ? content.slice(1).trim().toLocaleLowerCase() : ''
   const visibleCommands = commands.filter((command) =>
     command.riskLevel !== 'DESTRUCTIVE'
       && command.name.toLocaleLowerCase().includes(commandQuery),
   )
-  const missingPrimaryModelGroup = selectedCommand === null
+  const visibleSlashCommands = slashCommands.filter((command) =>
+    command.name.toLocaleLowerCase().includes(commandQuery)
+      || command.description.toLocaleLowerCase().includes(commandQuery),
+  )
+  const menuItems: Array<{ kind: 'slash'; command: SlashCommandDefinition } | { kind: 'cli'; command: GovernedCliCommand }> = [
+    ...visibleSlashCommands.map((command) => ({ kind: 'slash' as const, command })),
+    ...visibleCommands.map((command) => ({ kind: 'cli' as const, command })),
+  ]
+  const missingPrimaryModelGroup = selectedCommand === null && selectedSlashCommand === null
     && orchestrationMode !== 'SERIAL_DEVELOPMENT'
     && modelGroupId.trim().length === 0
 
@@ -56,35 +69,58 @@ export function ConversationComposer({ conversation, runController }: Conversati
     setSelectedIndex(0)
   }
 
+  async function loadSlashCommands(): Promise<void> {
+    if (conversation.listSlashCommands === undefined) return
+    const loaded = await conversation.listSlashCommands()
+    setSlashCommands(loaded.commands)
+    setSelectedIndex(0)
+  }
+
   function selectCommand(command: GovernedCliCommand): void {
     setSelectedCommand(command)
     setContent('')
     setSelectedIndex(0)
     setInputError(null)
+    setCommandFeedback(null)
+  }
+
+  function selectSlashCommand(command: SlashCommandDefinition): void {
+    setSelectedSlashCommand(command)
+    setContent('')
+    setSelectedIndex(0)
+    setSlashArgumentsInput('')
+    setInputError(null)
+    setCommandFeedback(null)
   }
 
   function onMessageChange(value: string): void {
     setContent(value)
     setInputError(null)
+    setCommandFeedback(null)
     if (!value.startsWith('/')) setSelectedCommand(null)
     if (value.startsWith('/')) {
       void loadCommands().catch((failure) =>
+        setInputError(failure instanceof Error ? failure.message : String(failure)),
+      )
+      void loadSlashCommands().catch((failure) =>
         setInputError(failure instanceof Error ? failure.message : String(failure)),
       )
     }
   }
 
   function onMessageKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
-    if (!slashMode || visibleCommands.length === 0) return
+    if (!slashMode || menuItems.length === 0) return
     if (event.key === 'ArrowDown') {
       event.preventDefault()
-      setSelectedIndex((index) => (index + 1) % visibleCommands.length)
+      setSelectedIndex((index) => (index + 1) % menuItems.length)
     } else if (event.key === 'ArrowUp') {
       event.preventDefault()
-      setSelectedIndex((index) => (index - 1 + visibleCommands.length) % visibleCommands.length)
+      setSelectedIndex((index) => (index - 1 + menuItems.length) % menuItems.length)
     } else if (event.key === 'Enter') {
       event.preventDefault()
-      selectCommand(visibleCommands[selectedIndex] ?? visibleCommands[0])
+      const selected = menuItems[selectedIndex] ?? menuItems[0]
+      if (selected.kind === 'slash') selectSlashCommand(selected.command)
+      else selectCommand(selected.command)
     } else if (event.key === 'Escape') {
       event.preventDefault()
       setContent('')
@@ -116,12 +152,38 @@ export function ConversationComposer({ conversation, runController }: Conversati
     await runController.followRun(created.runId)
   }
 
+  function slashArguments(): string[] {
+    return slashArgumentsInput.split(/\r?\n/).map((argument) => argument.trim()).filter((argument) => argument.length > 0)
+  }
+
+  function slashInput(): string {
+    if (selectedSlashCommand === null) throw new Error('当前没有选中的 Slash Command')
+    const argumentsText = slashArguments().map((argument) => /\s/.test(argument)
+      ? `"${argument.replaceAll('"', '\\"')}"`
+      : argument).join(' ')
+    return `/${selectedSlashCommand.name}${argumentsText.length === 0 ? '' : ` ${argumentsText}`}`
+  }
+
+  async function submitSlashCommand(): Promise<void> {
+    if (conversation.dispatchSlashCommand === undefined) throw new Error('Slash Command 接口未配置')
+    const result = await conversation.dispatchSlashCommand(slashInput(), modelGroupId || undefined)
+    const runId = typeof result.data.runId === 'string' ? result.data.runId : null
+    setSelectedSlashCommand(null)
+    setSlashArgumentsInput('')
+    setCommandFeedback(result.message)
+    if (runId !== null) await runController.followRun(runId)
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
     setInputError(null)
     try {
       if (selectedCommand !== null) {
         await submitCli()
+        return
+      }
+      if (selectedSlashCommand !== null) {
+        await submitSlashCommand()
         return
       }
       const selectedOrchestration = orchestrationMode === 'SERIAL_DEVELOPMENT' && Object.keys(roleModelGroups).length === 0
@@ -144,11 +206,17 @@ export function ConversationComposer({ conversation, runController }: Conversati
         <textarea id="conversation-message" value={content} onChange={(event) => onMessageChange(event.target.value)} onKeyDown={onMessageKeyDown} rows={3} placeholder={conversation.activeConversation === null ? '输入 / 选择受治理命令，或先新建会话' : '输入消息，继续这个项目的对话；输入 / 选择受治理命令'} disabled={conversation.activeWorkspace === null || conversation.submitting} />
         {slashMode ? (
           <div className="cli-command-menu" role="listbox" aria-label="受治理命令">
-            {visibleCommands.length === 0 ? <p>未找到受治理命令</p> : visibleCommands.map((command, index) => (
-              <button key={command.name} type="button" role="option" aria-selected={index === selectedIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCommand(command)}>
+            {menuItems.length === 0 ? <p>未找到可用命令</p> : menuItems.map((item, index) => item.kind === 'slash' ? (
+              <button key={`slash-${item.command.name}`} type="button" role="option" aria-selected={index === selectedIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => selectSlashCommand(item.command)}>
                 <Terminal aria-hidden="true" size={15} />
-                <span><strong>{command.name}</strong><code>{[command.executable, ...command.fixedArguments].join(' ')}</code></span>
-                <em>{approvalText(command.riskLevel)}</em>
+                <span><strong>/{item.command.name}</strong><code>{item.command.description}</code></span>
+                <em>{item.command.channel === 'SYSTEM_DIRECTIVE' ? '本地执行' : '进入 Agent 工作流'}</em>
+              </button>
+            ) : (
+              <button key={`cli-${item.command.name}`} type="button" role="option" aria-selected={index === selectedIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCommand(item.command)}>
+                <Terminal aria-hidden="true" size={15} />
+                <span><strong>{item.command.name}</strong><code>{[item.command.executable, ...item.command.fixedArguments].join(' ')}</code></span>
+                <em>{approvalText(item.command.riskLevel)}</em>
               </button>
             ))}
           </div>
@@ -163,8 +231,21 @@ export function ConversationComposer({ conversation, runController }: Conversati
             <input id="cli-timeout" aria-label="超时秒数" type="number" min="1" max="600" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} disabled={conversation.submitting} />
           </div>
         )}
+        {selectedSlashCommand === null ? null : (
+          <div className="cli-command-preview" aria-label="Slash Command 执行预览">
+            <div><Terminal aria-hidden="true" size={15} /><strong>/{selectedSlashCommand.name}</strong><code>{selectedSlashCommand.description}</code></div>
+            <p className="cli-risk">{selectedSlashCommand.channel === 'SYSTEM_DIRECTIVE' ? '本地执行，不调用模型' : '进入 Agent 工作流，使用当前模型组'}</p>
+            {selectedSlashCommand.parameters.length === 0 ? null : (
+              <>
+                <label className="field-label" htmlFor="slash-command-arguments">命令参数</label>
+                <textarea id="slash-command-arguments" aria-label="Slash Command 参数" value={slashArgumentsInput} onChange={(event) => setSlashArgumentsInput(event.target.value)} rows={3} placeholder={selectedSlashCommand.parameters.map((parameter) => `${parameter.name}${parameter.required ? '（必填）' : ''}`).join('，')} disabled={conversation.submitting} />
+              </>
+            )}
+          </div>
+        )}
         {inputError === null ? null : <p className="inline-error" role="alert">{inputError}</p>}
-        {selectedCommand === null ? (
+        {commandFeedback === null ? null : <p className="inline-success" role="status">{commandFeedback}</p>}
+        {selectedCommand === null && selectedSlashCommand === null ? (
           <OrchestrationModeSelector
             mode={orchestrationMode}
             roleModelGroups={roleModelGroups}
@@ -199,7 +280,7 @@ export function ConversationComposer({ conversation, runController }: Conversati
               {modelGroups.map((group) => <option key={group.groupId} value={group.groupId}>{group.displayName}</option>)}
             </select>
           </label>
-          <button className="primary-command" type="submit" aria-label={selectedCommand === null ? '发送消息' : '执行命令'} title={selectedCommand === null ? '发送消息' : '执行命令'} disabled={conversation.activeWorkspace === null || conversation.submitting || missingPrimaryModelGroup || (selectedCommand === null && (conversation.activeConversation === null || content.trim().length === 0))}>
+          <button className="primary-command" type="submit" aria-label={selectedCommand === null && selectedSlashCommand === null ? '发送消息' : selectedSlashCommand === null ? '执行命令' : '执行 Slash Command'} title={selectedCommand === null && selectedSlashCommand === null ? '发送消息' : '执行命令'} disabled={conversation.activeWorkspace === null || conversation.submitting || missingPrimaryModelGroup || (selectedCommand === null && selectedSlashCommand === null && (conversation.activeConversation === null || content.trim().length === 0))}>
             <Send aria-hidden="true" size={17} />
           </button>
         </div>

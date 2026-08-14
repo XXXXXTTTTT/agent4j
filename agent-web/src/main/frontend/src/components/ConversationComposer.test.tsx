@@ -90,6 +90,32 @@ describe('ConversationComposer', () => {
     vi.unstubAllGlobals()
   })
 
+  it('输入斜杠后优先展示实时 Slash Command，并走受治理分发接口', async () => {
+    const user = userEvent.setup()
+    const state = conversation()
+    const listSlashCommands = vi.fn(async () => ({
+      revision: 3,
+      commands: [{
+        name: 'plan', displayName: '计划', description: '制定计划', aliases: [],
+        parameters: [{ name: 'request', description: '请求', required: true }],
+        channel: 'WORKFLOW_SKILL' as const, source: 'BUILT_IN' as const, permission: 'OPERATOR' as const,
+      }],
+    }))
+    const dispatchSlashCommand = vi.fn(async () => ({
+      status: 'FORWARDED' as const, commandName: 'plan', message: '已提交', data: {},
+    }))
+    render(<ConversationComposer conversation={{ ...state, listSlashCommands, dispatchSlashCommand }} runController={runController()} />)
+
+    await user.type(screen.getByRole('textbox', { name: '发送消息' }), '/')
+    await screen.findByRole('option', { name: /\/plan/ })
+    await user.keyboard('{Enter}')
+    await user.type(screen.getByRole('textbox', { name: 'Slash Command 参数' }), '修复登录')
+    await user.click(screen.getByRole('button', { name: '执行 Slash Command' }))
+
+    await waitFor(() => expect(dispatchSlashCommand).toHaveBeenCalledWith('/plan 修复登录', undefined))
+    expect(screen.getByRole('status')).toHaveTextContent('已提交')
+  })
+
   it('普通消息仍提交持久化会话', async () => {
     const user = userEvent.setup()
     const workspace = conversation()
