@@ -1,7 +1,7 @@
 import { Check, MonitorCog, RotateCcw, X } from 'lucide-react'
 import { useEffect } from 'react'
 
-import { type ColorMode, type ThemePreset, type UiDensity, type UiFont, type UiRadius } from '../appearance/appearancePreferences'
+import { type ColorMode, type ContentWidth, type ThemePreset, type UiDensity, type UiFont, type UiRadius } from '../appearance/appearancePreferences'
 import { useAppearance } from '../appearance/AppearanceProvider'
 
 interface Props { onClose(): void }
@@ -18,6 +18,7 @@ const MODES: Array<{ value: ColorMode; label: string }> = [{ value: 'SYSTEM', la
 const FONTS: Array<{ value: UiFont; label: string }> = [{ value: 'SANS', label: '无衬线' }, { value: 'SERIF', label: '衬线' }, { value: 'MONO', label: '等宽' }]
 const DENSITIES: Array<{ value: UiDensity; label: string }> = [{ value: 'COMPACT', label: '紧凑' }, { value: 'STANDARD', label: '标准' }, { value: 'COMFORTABLE', label: '舒展' }]
 const RADII: Array<{ value: UiRadius; label: string }> = [{ value: 'SHARP', label: '直角' }, { value: 'SOFT', label: '柔和' }, { value: 'ROUND', label: '圆润' }]
+const CONTENT_WIDTHS: Array<{ value: ContentWidth; label: string }> = [{ value: 'WIDE', label: '宽屏' }, { value: 'FOCUS', label: '聚焦' }]
 
 function OptionGroup<T extends string>({ label, options, value, onChange }: { label: string; options: Array<{ value: T; label: string }>; value: T; onChange(value: T): void }) {
   return <section className="appearance-option-group"><h3>{label}</h3><div className="appearance-option-list" role="radiogroup" aria-label={label}>{options.map((option) => <button key={option.value} type="button" role="radio" aria-checked={option.value === value} onClick={() => onChange(option.value)}>{option.label}</button>)}</div></section>
@@ -39,6 +40,7 @@ export function AppearanceSettingsDialog({ onClose }: Props) {
         <OptionGroup label="颜色模式" options={MODES} value={preferences.colorMode} onChange={(colorMode) => updatePreferences({ colorMode })} />
         <OptionGroup label="界面字体" options={FONTS} value={preferences.font} onChange={(font) => updatePreferences({ font })} />
         <OptionGroup label="界面密度" options={DENSITIES} value={preferences.density} onChange={(density) => updatePreferences({ density })} />
+        <OptionGroup label="内容宽度" options={CONTENT_WIDTHS} value={preferences.contentWidth} onChange={(contentWidth) => updatePreferences({ contentWidth })} />
         <OptionGroup label="圆角" options={RADII} value={preferences.radius} onChange={(radius) => updatePreferences({ radius })} />
       </div>
       <footer className="appearance-drawer-footer"><button type="button" className="secondary-command" onClick={resetPreferences}><RotateCcw aria-hidden="true" size={15} />恢复默认外观</button></footer>

@@ -5,9 +5,9 @@ import { DEFAULT_APPEARANCE, normalizeAppearancePreferences } from './appearance
 describe('appearancePreferences', () => {
   it('restores a complete valid appearance selection', () => {
     expect(normalizeAppearancePreferences({
-      colorMode: 'LIGHT', themePreset: 'HARBOR', font: 'SERIF', density: 'COMFORTABLE', radius: 'ROUND', accentColor: '#d97757',
+      colorMode: 'LIGHT', themePreset: 'HARBOR', font: 'SERIF', density: 'COMFORTABLE', radius: 'ROUND', contentWidth: 'FOCUS', accentColor: '#d97757',
     })).toEqual({
-      colorMode: 'LIGHT', themePreset: 'HARBOR', font: 'SERIF', density: 'COMFORTABLE', radius: 'ROUND', accentColor: '#d97757',
+      colorMode: 'LIGHT', themePreset: 'HARBOR', font: 'SERIF', density: 'COMFORTABLE', radius: 'ROUND', contentWidth: 'FOCUS', accentColor: '#d97757',
     })
   })
 
@@ -18,7 +18,7 @@ describe('appearancePreferences', () => {
 
   it('keeps valid preferences from the previous schema when accentColor is absent', () => {
     expect(normalizeAppearancePreferences({ colorMode: 'DARK', themePreset: 'PINE', font: 'MONO', density: 'COMPACT', radius: 'SHARP' })).toEqual({
-      colorMode: 'DARK', themePreset: 'PINE', font: 'MONO', density: 'COMPACT', radius: 'SHARP', accentColor: null,
+      colorMode: 'DARK', themePreset: 'PINE', font: 'MONO', density: 'COMPACT', radius: 'SHARP', contentWidth: 'WIDE', accentColor: null,
     })
   })
 })
