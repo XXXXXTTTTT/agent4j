@@ -14,6 +14,8 @@ import com.agent.core.skill.SkillCatalogSnapshotCodec;
 import com.agent.core.mcp.McpCatalogProvider;
 import com.agent.core.mcp.McpCatalogSnapshot;
 import com.agent.core.mcp.McpCatalogSnapshotCodec;
+import com.agent.core.orchestration.AgentRole;
+import com.agent.core.orchestration.OrchestrationMode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.agent.web.identity.Actor;
 import com.agent.web.identity.ActorResolver;
@@ -28,6 +30,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -98,7 +101,13 @@ class ConversationServiceTest {
                 repository, access, contextProvider, () -> resolved, starter,
                 Clock.fixed(NOW, ZoneOffset.UTC));
 
-        ConversationTurnRecord result = service.submitTurn(CONVERSATION_ID, "当前问题", "");
+        ConversationTurnRecord result = service.submitTurn(
+                CONVERSATION_ID,
+                "当前问题",
+                "",
+                "group-primary",
+                OrchestrationMode.PARALLEL_RESEARCH,
+                Map.of(AgentRole.RESEARCHER, "group-research"));
 
         assertThat(result).isEqualTo(repository.running);
         assertThat(starter.state.messages())
@@ -110,7 +119,12 @@ class ConversationServiceTest {
                 .containsEntry("planner.userId", "resolved-user")
                 .containsEntry("coder.workspacePath", Path.of("D:/agent4j").toString())
                 .containsEntry("conversation.id", CONVERSATION_ID.toString())
-                .containsEntry("conversation.turnId", repository.pending.turnId().toString());
+                .containsEntry("conversation.turnId", repository.pending.turnId().toString())
+                .containsEntry(ConversationService.ORCHESTRATION_MODE_KEY, "PARALLEL_RESEARCH")
+                .containsEntry(ConversationService.ORCHESTRATION_MODEL_GROUP_KEY_PREFIX + "COORDINATOR", "group-primary")
+                .containsEntry(ConversationService.ORCHESTRATION_MODEL_GROUP_KEY_PREFIX + "RESEARCHER", "group-research")
+                .containsEntry(ConversationService.ORCHESTRATION_MODEL_GROUP_KEY_PREFIX + "IMPLEMENTER", "group-primary")
+                .containsEntry(ConversationService.ORCHESTRATION_MODEL_GROUP_KEY_PREFIX + "VERIFIER", "group-primary");
         assertThat(starter.state.variables()).doesNotContainKey("request.userId");
     }
 

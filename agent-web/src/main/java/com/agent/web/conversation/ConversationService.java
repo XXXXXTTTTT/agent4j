@@ -17,6 +17,10 @@ import com.agent.core.skill.SkillCatalogProvider;
 import com.agent.core.skill.SkillCatalogSnapshotCodec;
 import com.agent.core.mcp.McpCatalogProvider;
 import com.agent.core.mcp.McpCatalogSnapshotCodec;
+import com.agent.core.orchestration.AgentRole;
+import com.agent.core.orchestration.OrchestrationMode;
+import com.agent.core.orchestration.OrchestrationRequest;
+import com.agent.core.orchestration.OrchestrationRequestValidator;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -37,6 +41,11 @@ public final class ConversationService {
     private static final int CONTEXT_MAX_TURNS = 20;
     private static final int CONTEXT_MAX_CHARACTERS = 32_000;
     private static final String GRAPH_ID = "code-agent";
+    /** 编排模式在 AgentState 中的稳定键。 */
+    public static final String ORCHESTRATION_MODE_KEY = "orchestration.mode";
+    /** 角色模型组在 AgentState 中的稳定键前缀，后接 AgentRole.name()。 */
+    public static final String ORCHESTRATION_MODEL_GROUP_KEY_PREFIX =
+            "orchestration.modelGroup.";
 
     private final ConversationRepository repository;
     private final WorkspaceAccessService workspaceAccess;
@@ -219,8 +228,30 @@ public final class ConversationService {
             String content,
             String reviewerUrl,
             String modelGroupId) {
+        return submitTurn(conversationId, content, reviewerUrl, modelGroupId, null, Map.of());
+    }
+
+    /** 提交一轮任务并绑定经校验的多 Agent 编排合同。 */
+    public ConversationTurnRecord submitTurn(
+            UUID conversationId,
+            String content,
+            String reviewerUrl,
+            String modelGroupId,
+            OrchestrationMode orchestrationMode,
+            Map<AgentRole, String> roleModelGroups) {
         Actor actor = actorResolver.current();
         requireText(content, "content");
+        boolean hasOrchestrationSettings = orchestrationMode != null
+                || (roleModelGroups != null && !roleModelGroups.isEmpty());
+        Map<AgentRole, String> resolvedRoleModelGroups = Map.of();
+        if (hasOrchestrationSettings) {
+            if (orchestrationMode == null) {
+                throw new IllegalArgumentException("编排模式不能为空");
+            }
+            OrchestrationMode exactMode = orchestrationMode;
+            resolvedRoleModelGroups = OrchestrationRequestValidator.validate(
+                    new OrchestrationRequest(exactMode, roleModelGroups), modelGroupId);
+        }
         String exactReviewerUrl = ReviewerUrlValidator.validateOptional(reviewerUrl);
         ConversationRecord conversation = repository.findConversation(conversationId, actor.userId())
                 .orElseThrow(() -> new ConversationNotFoundException(conversationId));
@@ -254,6 +285,14 @@ public final class ConversationService {
                     List.of());
             if (modelGroupId != null && !modelGroupId.isBlank()) {
                 state = state.withVariable("model.groupId", modelGroupId.trim());
+            }
+            if (hasOrchestrationSettings) {
+                state = state.withVariable(ORCHESTRATION_MODE_KEY, orchestrationMode.name());
+                for (AgentRole role : AgentRole.values()) {
+                    state = state.withVariable(
+                            ORCHESTRATION_MODEL_GROUP_KEY_PREFIX + role.name(),
+                            resolvedRoleModelGroups.get(role));
+                }
             }
             if (skillCatalogProvider != null) {
                 state = state.withVariable(

@@ -48,9 +48,11 @@ public final class ConversationController {
             @PathVariable UUID conversationId,
             @Valid @RequestBody SubmitConversationTurnRequest request) {
         ConversationTurnRecord turn = request.modelGroupId() == null
+                && request.orchestrationMode() == null
+                && request.roleModelGroups().isEmpty()
                 ? service().submitTurn(conversationId, request.content(), request.reviewerUrl())
                 : service().submitTurn(conversationId, request.content(), request.reviewerUrl(),
-                        request.modelGroupId());
+                        request.modelGroupId(), request.orchestrationMode(), request.roleModelGroups());
         return ResponseEntity.accepted().body(ConversationTurnView.from(
                 turn));
     }

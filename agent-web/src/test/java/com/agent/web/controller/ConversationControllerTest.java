@@ -10,6 +10,8 @@ import com.agent.web.identity.ActorResolver;
 import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspacePermission;
 import com.agent.web.workspace.WorkspaceRecord;
+import com.agent.core.orchestration.AgentRole;
+import com.agent.core.orchestration.OrchestrationMode;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
@@ -21,11 +23,14 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 
 @WebFluxTest(
         controllers = {ConversationController.class, WorkspaceController.class, IdentityController.class},
@@ -102,6 +107,88 @@ class ConversationControllerTest {
         webTestClient.post().uri("/api/conversations/{id}/turns", CONVERSATION_ID)
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("{" + "\"content\":\"继续\",\"userId\":\"other\"}")
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    @Test
+    void submitsOrchestrationSettingsWithExactContract() {
+        ConversationTurnRecord turn = new ConversationTurnRecord(
+                TURN_ID, CONVERSATION_ID, 2, "并行研究", null, UUID.randomUUID(),
+                ConversationTurnStatus.RUNNING, null, NOW, null);
+        when(conversationService.submitTurn(
+                CONVERSATION_ID,
+                "并行研究",
+                "",
+                "primary-group",
+                OrchestrationMode.PARALLEL_RESEARCH,
+                Map.of(AgentRole.RESEARCHER, "research-group")))
+                .thenReturn(turn);
+
+        webTestClient.post().uri("/api/conversations/{id}/turns", CONVERSATION_ID)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"content":"并行研究","reviewerUrl":"","modelGroupId":"primary-group",
+                         "orchestrationMode":"PARALLEL_RESEARCH",
+                         "roleModelGroups":{"RESEARCHER":"research-group"}}
+                        """)
+                .exchange()
+                .expectStatus().isAccepted()
+                .expectBody()
+                .jsonPath("$.turnId").isEqualTo(TURN_ID.toString());
+
+        verify(conversationService).submitTurn(
+                CONVERSATION_ID,
+                "并行研究",
+                "",
+                "primary-group",
+                OrchestrationMode.PARALLEL_RESEARCH,
+                Map.of(AgentRole.RESEARCHER, "research-group"));
+    }
+
+    @Test
+    void rejectsUnknownOrchestrationModeAsBadRequest() {
+        webTestClient.post().uri("/api/conversations/{id}/turns", CONVERSATION_ID)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"content":"继续","modelGroupId":"primary-group",
+                         "orchestrationMode":"UNKNOWN"}
+                        """)
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    @Test
+    void mapsInvalidOrchestrationContractToBadRequest() {
+        when(conversationService.submitTurn(
+                eq(CONVERSATION_ID), eq("继续"), eq(""), eq("primary-group"),
+                eq(OrchestrationMode.REVIEW_LOOP), any()))
+                .thenThrow(new IllegalArgumentException("VERIFIER模型组不能为空"));
+
+        webTestClient.post().uri("/api/conversations/{id}/turns", CONVERSATION_ID)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"content":"继续","reviewerUrl":"","modelGroupId":"primary-group",
+                         "orchestrationMode":"REVIEW_LOOP",
+                         "roleModelGroups":{"VERIFIER":" "}}
+                        """)
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    @Test
+    void rejectsRoleOverridesWithoutOrchestrationMode() {
+        when(conversationService.submitTurn(
+                eq(CONVERSATION_ID), eq("继续"), eq(""), eq("primary-group"),
+                isNull(), any()))
+                .thenThrow(new IllegalArgumentException("编排模式不能为空"));
+
+        webTestClient.post().uri("/api/conversations/{id}/turns", CONVERSATION_ID)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"content":"继续","reviewerUrl":"","modelGroupId":"primary-group",
+                         "roleModelGroups":{"VERIFIER":"verify-group"}}
+                        """)
                 .exchange()
                 .expectStatus().isBadRequest();
     }
