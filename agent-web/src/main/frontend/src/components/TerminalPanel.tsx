@@ -17,7 +17,7 @@ interface TerminalPanelProps {
 
 /** 保存 ANSI 原文，并负责 xterm、FitAddon 与 ResizeObserver 的成对释放。 */
 export function TerminalPanel({ active, terminalRef }: TerminalPanelProps) {
-  const { resolvedColorMode } = useAppearance()
+  const { preferences, resolvedColorMode } = useAppearance()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<import('@xterm/xterm').Terminal | null>(null)
   const bufferRef = useRef('')
@@ -51,7 +51,7 @@ export function TerminalPanel({ active, terminalRef }: TerminalPanelProps) {
           fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, monospace',
           fontSize: 13,
           lineHeight: 1.25,
-          theme: getTerminalTheme(resolvedColorMode),
+          theme: getTerminalTheme(resolvedColorMode, preferences.themePreset),
         })
         const fitAddon = new FitAddon()
         terminal.loadAddon(fitAddon)
@@ -72,7 +72,7 @@ export function TerminalPanel({ active, terminalRef }: TerminalPanelProps) {
       xtermRef.current?.dispose()
       xtermRef.current = null
     }
-  }, [resolvedColorMode])
+  }, [preferences.themePreset, resolvedColorMode])
 
   useEffect(() => {
     if (active) window.dispatchEvent(new Event('resize'))
