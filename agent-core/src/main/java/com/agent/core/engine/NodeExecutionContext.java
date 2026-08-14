@@ -72,6 +72,16 @@ public record NodeExecutionContext(UUID runId, String nodeName) {
         return publisher == null ? ignored -> { } : publisher;
     }
 
+    /**
+     * 捕获当前节点的进度时钟，供异步工具回调在线程切换后刷新同一 Run。
+     *
+     * @return 当前上下文的进度时钟；上下文外返回空操作
+     */
+    public static Runnable progressClock() {
+        Runnable clock = PROGRESS_CLOCK.get();
+        return clock == null ? () -> { } : clock;
+    }
+
     /** 累计当前节点产生的模型 token，并交给预算检查器。 */
     public static void consumeTokens(long tokens) {
         if (tokens < 0) {

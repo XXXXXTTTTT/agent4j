@@ -8,6 +8,8 @@ import com.agent.core.cli.CliRiskLevel;
 import com.agent.core.cli.WorkspaceTerminalTargetResolver;
 import com.agent.core.engine.AgentState;
 import com.agent.core.engine.ExecutionBudget;
+import com.agent.core.engine.ExecutionBudgetExceededException;
+import com.agent.core.engine.ExecutionStopReason;
 import com.agent.core.engine.GraphExecutionRequest;
 import com.agent.core.engine.GraphExecutionResult;
 import com.agent.core.engine.GraphExecutionListener;
@@ -142,6 +144,90 @@ class OpsNodeTest {
             assertThat(event.occurredAt()).isNotNull();
         });
         assertThat(result.variables()).containsEntry(OpsNode.EXIT_CODE_KEY, "0");
+    }
+
+    @Test
+    void terminalOutputRefreshesGraphIdleClockAcrossExecutorThread() {
+        TerminalCommandExecutor executor = (request, logConsumer) ->
+                CompletableFuture.supplyAsync(() -> {
+                    try {
+                        Thread.sleep(Duration.ofMillis(60));
+                        logConsumer.accept(new TerminalLog(Stream.STDOUT, "dependency ready"));
+                        Thread.sleep(Duration.ofMillis(80));
+                        return new CommandResult(0, "dependency ready", "", false);
+                    } catch (InterruptedException exception) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(exception);
+                    }
+                });
+        OpsNode node = new OpsNode(executor, target, Duration.ofSeconds(2));
+        ExecutionBudget budget = new ExecutionBudget(
+                Duration.ofSeconds(2), Duration.ofMillis(100), 100, 2, 2);
+
+        try (StateGraph graph = new StateGraph(budget, InterruptPolicy.never())) {
+            graph.addNode("ops", node)
+                    .addEdge("ops", StateGraph.END)
+                    .setEntryPoint("ops");
+
+            GraphExecutionResult result = graph.execute(new GraphExecutionRequest(
+                    RUN_ID,
+                    AgentState.empty().withVariable(OpsNode.COMMAND_KEY, "mvn test"),
+                    "ops",
+                    false),
+                    new GraphExecutionListener() {
+                        @Override
+                        public void onNodeStarted(String nodeName, AgentState state) {
+                        }
+
+                        @Override
+                        public void onNodeCompleted(
+                                String nodeName,
+                                String nextNode,
+                                AgentState state) {
+                        }
+                    });
+
+            assertThat(result).isInstanceOf(GraphExecutionResult.Completed.class);
+        }
+    }
+
+    @Test
+    void terminalWithoutOutputStillHonorsGraphIdleTimeout() {
+        CompletableFuture<CommandResult> pending = new CompletableFuture<>();
+        TerminalCommandExecutor executor = (request, logConsumer) -> pending;
+        OpsNode node = new OpsNode(executor, target, Duration.ofSeconds(2));
+        ExecutionBudget budget = new ExecutionBudget(
+                Duration.ofSeconds(2), Duration.ofMillis(80), 100, 2, 2);
+
+        try (StateGraph graph = new StateGraph(budget, InterruptPolicy.never())) {
+            graph.addNode("ops", node)
+                    .addEdge("ops", StateGraph.END)
+                    .setEntryPoint("ops");
+
+            assertThatThrownBy(() -> graph.execute(new GraphExecutionRequest(
+                    RUN_ID,
+                    AgentState.empty().withVariable(OpsNode.COMMAND_KEY, "mvn test"),
+                    "ops",
+                    false),
+                    new GraphExecutionListener() {
+                        @Override
+                        public void onNodeStarted(String nodeName, AgentState state) {
+                        }
+
+                        @Override
+                        public void onNodeCompleted(
+                                String nodeName,
+                                String nextNode,
+                                AgentState state) {
+                        }
+                    }))
+                    .isInstanceOfSatisfying(
+                            ExecutionBudgetExceededException.class,
+                            exception -> assertThat(exception.reason())
+                                    .isEqualTo(ExecutionStopReason.IDLE_TIMEOUT));
+        } finally {
+            pending.cancel(false);
+        }
     }
 
     @Test

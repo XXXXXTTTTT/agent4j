@@ -179,8 +179,9 @@ public final class OpsNode implements Node {
         Objects.requireNonNull(context, "context 不能为空");
         AtomicLong sequence = new AtomicLong();
         AtomicReference<Throwable> logFailure = new AtomicReference<>();
+        Runnable progressClock = NodeExecutionContext.progressClock();
         Consumer<TerminalLog> logConsumer = log -> publishLog(
-                context, log, sequence.getAndIncrement(), logFailure);
+                context, log, sequence.getAndIncrement(), logFailure, progressClock);
         boolean harness = NodeExecutionContext.current()
                 .filter(context::equals)
                 .isPresent();
@@ -360,8 +361,11 @@ public final class OpsNode implements Node {
             NodeExecutionContext context,
             TerminalLog log,
             long sequence,
-            AtomicReference<Throwable> logFailure) {
+            AtomicReference<Throwable> logFailure,
+            Runnable progressClock) {
         Objects.requireNonNull(log, "log 不能为空");
+        Objects.requireNonNull(progressClock, "progressClock 不能为空");
+        progressClock.run();
         RunLogStream stream = switch (log.stream()) {
             case STDOUT -> RunLogStream.STDOUT;
             case STDERR -> RunLogStream.STDERR;
