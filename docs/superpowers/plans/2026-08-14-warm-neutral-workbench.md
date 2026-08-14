@@ -10,6 +10,15 @@
 
 ---
 
+### Task 0: 规格审查门禁
+
+**Files:**
+- Review: `docs/superpowers/specs/2026-08-14-warm-neutral-workbench-design.md`
+- Review: `docs/superpowers/plans/2026-08-14-warm-neutral-workbench.md`
+
+- [ ] Sol 子代理检查视觉决策是否与 Cursor 官网证据一致、是否避免复制品牌资产、是否覆盖现有 Agent 能力和视口验收。
+- [ ] 只有规格审查无阻断项后才进入 Task 1。
+
 ### Task 1: 建立单一暖中性主题和响应式布局
 
 **Files:**
