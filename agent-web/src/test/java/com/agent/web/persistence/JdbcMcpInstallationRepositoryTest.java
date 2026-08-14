@@ -31,6 +31,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class JdbcMcpInstallationRepositoryTest {
 
@@ -69,6 +70,7 @@ class JdbcMcpInstallationRepositoryTest {
         Flyway.configure().dataSource(dataSource).load().migrate();
         jdbc = JdbcClient.create(dataSource);
         jdbc.sql("truncate table agent_mcp_installations, agent_mcp_installation_snapshots, "
+                + "agent_capability_management_audit, "
                 + "agent_workspace_members, agent_workspaces, agent_users cascade").update();
         jdbc.sql("insert into agent_users (user_id, display_name, enabled, created_at, updated_at) "
                 + "values (:userId, :displayName, true, :now, :now)")
@@ -125,6 +127,47 @@ class JdbcMcpInstallationRepositoryTest {
                 .satisfies(details -> {
                     assertThat(details.installation()).isEqualTo(installation);
                     assertThat(details.environmentVariableNames()).containsExactly("MCP_TOKEN");
+                });
+    }
+
+    @Test
+    void rollsBackSnapshotInstallationAndAuditWhenAuditInsertFails() {
+        McpSourceSnapshot snapshot = snapshot();
+        McpInstallationRecord installation = installation(snapshot, McpInstallationStatus.STOPPED, 0);
+        com.agent.web.capability.CapabilityManagementAuditEvent invalidAudit =
+                new com.agent.web.capability.CapabilityManagementAuditEvent(
+                        "MCP_INSTALLATION_CONFIRMED", "missing-mcp-test-user", WORKSPACE_ID,
+                        installation.installationId(), null, null, snapshot.commitSha(), "SUCCESS", NOW);
+
+        assertThatThrownBy(() -> repository.confirmInstallation(
+                new com.agent.web.mcp.installation.McpInstallationCommand(snapshot, installation, invalidAudit)))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+        assertThat(count("agent_mcp_installation_snapshots")).isZero();
+        assertThat(count("agent_mcp_installations")).isZero();
+        assertThat(count("agent_capability_management_audit")).isZero();
+    }
+
+    @Test
+    void permitsOnlyOneStatusTransitionForTheSameExpectedVersion() {
+        McpSourceSnapshot snapshot = snapshot();
+        McpInstallationRecord installation = installation(snapshot, McpInstallationStatus.STOPPED, 0);
+        repository.confirmInstallation(new com.agent.web.mcp.installation.McpInstallationCommand(snapshot, installation,
+                audit(installation, snapshot, "MCP_INSTALLATION_CONFIRMED", "STOPPED", "STOPPED")));
+
+        McpInstallationRecord first = repository.beginStart(installation.installationId(), "mcp-test-user", WORKSPACE_ID,
+                WORKSPACE_ID, 0, audit(installation, snapshot, "MCP_INSTALLATION_STARTING", "STOPPED", "INSTALLING"));
+
+        assertThat(first.status()).isEqualTo(McpInstallationStatus.INSTALLING);
+        assertThat(first.version()).isEqualTo(1);
+        assertThatThrownBy(() -> repository.beginStart(installation.installationId(), "mcp-test-user", WORKSPACE_ID,
+                WORKSPACE_ID, 0, audit(installation, snapshot, "MCP_INSTALLATION_STARTING", "STOPPED", "INSTALLING")))
+                .isInstanceOf(com.agent.web.mcp.installation.McpInstallationConflictException.class);
+        assertThat(repository.findInstallations("mcp-test-user", WORKSPACE_ID))
+                .singleElement()
+                .satisfies(saved -> {
+                    assertThat(saved.status()).isEqualTo(McpInstallationStatus.INSTALLING);
+                    assertThat(saved.version()).isEqualTo(1);
                 });
     }
 
@@ -260,5 +303,9 @@ class JdbcMcpInstallationRepositoryTest {
         dataSource.setUsername(POSTGRES.getUsername());
         dataSource.setPassword(POSTGRES.getPassword());
         return dataSource;
+    }
+
+    private int count(String table) {
+        return jdbc.sql("select count(*) from " + table).query(Integer.class).single();
     }
 }

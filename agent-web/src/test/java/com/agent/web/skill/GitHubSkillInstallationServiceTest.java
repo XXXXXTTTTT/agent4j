@@ -61,6 +61,33 @@ class GitHubSkillInstallationServiceTest {
                 .isInstanceOf(GitHubSkillInstallationService.InvalidConfirmationException.class);
     }
 
+    @Test
+    void keepsPreviewAvailableWhenAtomicConfirmationFails() throws Exception {
+        Path root = Files.createTempDirectory("agent4j-skill-retry");
+        FakeRepository repository = new FakeRepository(
+                new WorkspaceRecord(WORKSPACE, "user", "work", root, "repo",
+                        WorkspacePermission.OWNER, NOW, NOW));
+        repository.failNextConfirmation = true;
+        GitHubSkillCatalogClient client = new GitHubSkillCatalogClient(
+                (uri, timeout, maxBytes) -> response(uri), new com.fasterxml.jackson.databind.ObjectMapper(),
+                java.net.URI.create("https://api.github.test/"), Duration.ofSeconds(2), 100_000);
+        GitHubSkillInstallationService service = new GitHubSkillInstallationService(
+                client, emptyTools(), () -> new Actor("user", "User"),
+                new WorkspaceAccessService(repository, root, Clock.fixed(NOW, ZoneOffset.UTC)), repository,
+                CapabilityManagementAuditSink.noop(), Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofMinutes(5),
+                UUID::randomUUID);
+        SkillInstallationPreview preview = service.preview(WORKSPACE, "octo/skills", null, null);
+
+        assertThatThrownBy(() -> service.confirm(WORKSPACE, preview.previewId(), preview.confirmationToken(), null, null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("测试确认失败");
+
+        assertThat(service.confirm(WORKSPACE, preview.previewId(), preview.confirmationToken(), null, null))
+                .isNotNull();
+        assertThatThrownBy(() -> service.confirm(WORKSPACE, preview.previewId(), preview.confirmationToken(), null, null))
+                .isInstanceOf(GitHubSkillInstallationService.InvalidConfirmationException.class);
+    }
+
     private static GitHubSkillCatalogClient.HttpResponse response(java.net.URI uri) {
         String path = uri.getPath() + (uri.getQuery() == null ? "" : "?" + uri.getQuery());
         return switch (path) {
@@ -91,8 +118,15 @@ class GitHubSkillInstallationServiceTest {
 
     private static final class FakeRepository implements SkillInstallationRepository, com.agent.web.workspace.WorkspaceRepository {
         private final WorkspaceRecord workspace;
+        private boolean failNextConfirmation;
         private FakeRepository(WorkspaceRecord workspace) { this.workspace = workspace; }
-        public SkillInstallationRecord confirmSkill(SkillSnapshotRecord snapshot, SkillInstallationRecord installation, com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) { return installation; }
+        public SkillInstallationRecord confirmSkill(SkillSnapshotRecord snapshot, SkillInstallationRecord installation, com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) {
+            if (failNextConfirmation) {
+                failNextConfirmation = false;
+                throw new IllegalStateException("测试确认失败");
+            }
+            return installation;
+        }
         public List<SkillInstallationRecord> findInstallations(String actorUserId, UUID workspaceId) { return List.of(); }
         public SkillInstallationRecord removeInstallation(UUID skillInstallationId, String actorUserId, UUID workspaceId, long expectedVersion, com.agent.web.capability.CapabilityManagementAuditEvent auditEvent) { throw new IllegalStateException(); }
         public SkillInstallationRecord transition(UUID skillInstallationId, long expectedVersion, SkillInstallationStatus from, SkillInstallationStatus to) { throw new UnsupportedOperationException(); }

@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class JdbcSkillInstallationRepositoryTest {
 
@@ -124,6 +125,48 @@ class JdbcSkillInstallationRepositoryTest {
         assertThat(repository.installationsUpdatedAt("skill-test-user", WORKSPACE_ID)).isEqualTo(Instant.EPOCH);
     }
 
+    @Test
+    void rollsBackSnapshotInstallationAndAuditWhenAuditInsertFails() {
+        SkillSnapshotRecord snapshot = snapshot("rollback");
+        SkillInstallationRecord installation = new SkillInstallationRecord(
+                UUID.randomUUID(), snapshot.skillSnapshotId(), InstallationScope.WORKSPACE, WORKSPACE_ID,
+                "skill-test-user", SkillInstallationStatus.APPROVED, "a".repeat(64), NOW, NOW, NOW, 0);
+        CapabilityManagementAuditEvent invalidAudit = new CapabilityManagementAuditEvent(
+                "SKILL_INSTALLATION_CONFIRMED", "missing-skill-test-user", WORKSPACE_ID, null,
+                installation.skillInstallationId(), null, snapshot.commitSha(), "SUCCESS", NOW);
+
+        assertThatThrownBy(() -> repository.confirmSkill(snapshot, installation, invalidAudit))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+        assertThat(count("agent_skill_snapshots")).isZero();
+        assertThat(count("agent_skill_installations")).isZero();
+        assertThat(count("agent_capability_management_audit")).isZero();
+    }
+
+    @Test
+    void permitsOnlyOneRemovalForTheSameExpectedVersion() {
+        SkillInstallationRecord installation = saveInstallation(
+                "skill-test-user", InstallationScope.WORKSPACE, WORKSPACE_ID, NOW, "remove-once");
+        CapabilityManagementAuditEvent audit = new CapabilityManagementAuditEvent(
+                "SKILL_INSTALLATION_REMOVED", "skill-test-user", WORKSPACE_ID, null,
+                installation.skillInstallationId(), null, "", "SUCCESS", NOW);
+
+        SkillInstallationRecord removed = repository.removeInstallation(
+                installation.skillInstallationId(), "skill-test-user", WORKSPACE_ID, 0, audit);
+
+        assertThat(removed.status()).isEqualTo(SkillInstallationStatus.REMOVED);
+        assertThat(removed.version()).isEqualTo(1);
+        assertThatThrownBy(() -> repository.removeInstallation(
+                installation.skillInstallationId(), "skill-test-user", WORKSPACE_ID, 0, audit))
+                .isInstanceOf(com.agent.web.skill.SkillInstallationConflictException.class);
+        assertThat(repository.findInstallations("skill-test-user", WORKSPACE_ID))
+                .singleElement()
+                .satisfies(saved -> {
+                    assertThat(saved.status()).isEqualTo(SkillInstallationStatus.REMOVED);
+                    assertThat(saved.version()).isEqualTo(1);
+                });
+    }
+
     private SkillInstallationRecord saveInstallation(
             String actorUserId, InstallationScope scope, UUID workspaceId, Instant updatedAt, String suffix) {
         return saveInstallation(actorUserId, scope, workspaceId, SkillInstallationStatus.APPROVED, updatedAt, suffix);
@@ -145,17 +188,25 @@ class JdbcSkillInstallationRepositoryTest {
     private SkillInstallationRecord saveInstallation(
             String actorUserId, InstallationScope scope, UUID workspaceId, SkillInstallationStatus status,
             Instant updatedAt, String suffix, UUID skillInstallationId) {
-        SkillSnapshotRecord snapshot = new SkillSnapshotRecord(
-                UUID.randomUUID(), URI.create("https://github.com/agent4j/" + suffix), "agent4j/" + suffix,
-                "0123456789012345678901234567890123456789", "blob-" + suffix, "SKILL.md", "MIT",
-                String.format("%064d", Math.abs(suffix.hashCode())), "Skill " + suffix,
-                List.of("code.patch"), "---\nname: " + suffix + "\n---\n", updatedAt);
+        SkillSnapshotRecord snapshot = snapshot(suffix, updatedAt);
         SkillInstallationRecord installation = new SkillInstallationRecord(
                 skillInstallationId, snapshot.skillSnapshotId(), scope, workspaceId, actorUserId, status,
                 "a".repeat(64), updatedAt, updatedAt, updatedAt, 0);
         return repository.confirmSkill(snapshot, installation, new CapabilityManagementAuditEvent(
                 "SKILL_INSTALLATION_CONFIRMED", actorUserId, workspaceId, installation.skillInstallationId(), null,
                 null, snapshot.commitSha(), "SUCCESS", updatedAt));
+    }
+
+    private SkillSnapshotRecord snapshot(String suffix) {
+        return snapshot(suffix, NOW);
+    }
+
+    private SkillSnapshotRecord snapshot(String suffix, Instant updatedAt) {
+        return new SkillSnapshotRecord(
+                UUID.randomUUID(), URI.create("https://github.com/agent4j/" + suffix), "agent4j/" + suffix,
+                "0123456789012345678901234567890123456789", "blob-" + suffix, "SKILL.md", "MIT",
+                String.format("%064d", Math.abs(suffix.hashCode())), "Skill " + suffix,
+                List.of("code.patch"), "---\nname: " + suffix + "\n---\n", updatedAt);
     }
 
     private void saveUser(String userId, String displayName) {
@@ -186,5 +237,9 @@ class JdbcSkillInstallationRepositoryTest {
         dataSource.setUsername(POSTGRES.getUsername());
         dataSource.setPassword(POSTGRES.getPassword());
         return dataSource;
+    }
+
+    private int count(String table) {
+        return jdbc.sql("select count(*) from " + table).query(Integer.class).single();
     }
 }

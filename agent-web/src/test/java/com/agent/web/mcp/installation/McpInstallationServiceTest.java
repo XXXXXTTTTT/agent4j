@@ -116,6 +116,27 @@ class McpInstallationServiceTest {
     }
 
     @Test
+    void keepsPreviewAvailableWhenAtomicConfirmationFails() throws Exception {
+        FakeRepository repository = new FakeRepository();
+        repository.failNextConfirmation = true;
+        McpInstallationService service = service(repository, new CapturingAuditSink(), ACTOR, WORKSPACE_ID, OTHER_WORKSPACE_ID);
+        McpInstallationPreview preview = service.preview(WORKSPACE_ID, server(), InstallationScope.WORKSPACE, WORKSPACE_ID);
+
+        assertThatThrownBy(() -> service.confirm(
+                WORKSPACE_ID, preview.previewId(), preview.confirmationToken(), InstallationScope.WORKSPACE, WORKSPACE_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("测试确认失败");
+
+        McpInstallationRecord installation = service.confirm(
+                WORKSPACE_ID, preview.previewId(), preview.confirmationToken(), InstallationScope.WORKSPACE, WORKSPACE_ID);
+
+        assertThat(installation.installationId()).isNotNull();
+        assertThatThrownBy(() -> service.confirm(
+                WORKSPACE_ID, preview.previewId(), preview.confirmationToken(), InstallationScope.WORKSPACE, WORKSPACE_ID))
+                .isInstanceOf(McpInstallationService.InvalidConfirmationException.class);
+    }
+
+    @Test
     void requiresExplicitGlobalScopeAndKeepsGlobalInstallationOutsideWorkspaceRows() throws Exception {
         FakeRepository repository = new FakeRepository();
         McpInstallationService service = service(repository, new CapturingAuditSink(), ACTOR, WORKSPACE_ID, OTHER_WORKSPACE_ID);
@@ -255,8 +276,18 @@ class McpInstallationServiceTest {
         private final List<McpSourceSnapshot> savedSnapshots = new ArrayList<>();
         private final List<McpInstallationRecord> savedInstallations = new ArrayList<>();
         private final List<CapabilityManagementAuditEvent> auditEvents = new ArrayList<>();
+        private boolean failNextConfirmation;
 
-        @Override public McpInstallationRecord confirmInstallation(McpInstallationCommand command) { savedSnapshots.add(command.snapshot()); savedInstallations.add(command.installation()); auditEvents.add(command.auditEvent()); return command.installation(); }
+        @Override public McpInstallationRecord confirmInstallation(McpInstallationCommand command) {
+            if (failNextConfirmation) {
+                failNextConfirmation = false;
+                throw new IllegalStateException("测试确认失败");
+            }
+            savedSnapshots.add(command.snapshot());
+            savedInstallations.add(command.installation());
+            auditEvents.add(command.auditEvent());
+            return command.installation();
+        }
         @Override public List<McpInstallationRecord> findInstallations(String actorUserId, UUID workspaceId) { return List.copyOf(savedInstallations); }
         @Override public McpInstallationRecord removeInstallation(UUID installationId, String actorUserId, UUID workspaceId, long expectedVersion, CapabilityManagementAuditEvent auditEvent) { return savedInstallations.stream().filter(value -> value.installationId().equals(installationId) && value.version() == expectedVersion).findFirst().orElseThrow(); }
         @Override public McpInstallationRecord transition(UUID installationId, long expectedVersion, McpInstallationStatus from, McpInstallationStatus to, String runtimeError, String containerId) { throw new UnsupportedOperationException(); }
