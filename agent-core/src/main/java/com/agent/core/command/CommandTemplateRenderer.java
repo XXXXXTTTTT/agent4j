@@ -22,6 +22,7 @@ public final class CommandTemplateRenderer {
         Objects.requireNonNull(parameters, "parameters 不能为空");
         Objects.requireNonNull(invocation, "invocation 不能为空");
         Objects.requireNonNull(context, "context 不能为空");
+        validateTemplate(template, parameters);
         if (invocation.arguments().size() < parameters.stream()
                 .filter(CommandParameter::required).count()
                 || invocation.arguments().size() > parameters.size()) {
@@ -46,5 +47,20 @@ public final class CommandTemplateRenderer {
         }
         matcher.appendTail(output);
         return output.toString();
+    }
+
+    /** 在命令加载阶段验证模板变量白名单。 */
+    public void validateTemplate(String template, List<CommandParameter> parameters) {
+        Objects.requireNonNull(template, "template 不能为空");
+        Objects.requireNonNull(parameters, "parameters 不能为空");
+        java.util.Set<String> allowed = new java.util.HashSet<>(List.of(
+                "actorId", "workspaceId", "conversationId"));
+        parameters.forEach(parameter -> allowed.add(parameter.name()));
+        Matcher matcher = VARIABLE.matcher(template);
+        while (matcher.find()) {
+            if (!allowed.contains(matcher.group(1))) {
+                throw new IllegalArgumentException("模板变量未获准: " + matcher.group(1));
+            }
+        }
     }
 }
