@@ -12,4 +12,8 @@ describe('getTerminalTheme', () => {
     expect(getTerminalTheme('DARK', 'PINE')).toMatchObject({ cursor: '#4fb38d', blue: '#4fb38d' })
     expect(getTerminalTheme('LIGHT', 'SIGNAL')).toMatchObject({ cursor: '#ef715d', blue: '#ef715d' })
   })
+
+  it('gives an explicit custom accent precedence over the preset accent', () => {
+    expect(getTerminalTheme('DARK', 'PINE', '#d97757')).toMatchObject({ cursor: '#d97757', blue: '#d97757' })
+  })
 })

@@ -20,8 +20,8 @@ export interface TerminalTheme {
   brightWhite: string
 }
 
-export function getTerminalTheme(colorMode: 'LIGHT' | 'DARK', preset: ThemePreset): TerminalTheme {
-  const accent = { GRAPHITE: colorMode === 'LIGHT' ? '#2468d8' : '#8ab4ff', PAPER: '#b85e3f', PINE: '#4fb38d', SIGNAL: '#ef715d', HARBOR: '#4b94dc' }[preset]
+export function getTerminalTheme(colorMode: 'LIGHT' | 'DARK', preset: ThemePreset, customAccent: string | null = null): TerminalTheme {
+  const accent = customAccent ?? { GRAPHITE: colorMode === 'LIGHT' ? '#2468d8' : '#8ab4ff', PAPER: '#b85e3f', PINE: '#4fb38d', SIGNAL: '#ef715d', HARBOR: '#4b94dc' }[preset]
   if (colorMode === 'LIGHT') return { background: '#f8fafc', foreground: '#17212e', cursor: accent, black: '#f1f5f9', brightBlack: '#64748b', red: '#bd3343', brightRed: '#bd3343', green: '#167449', brightGreen: '#167449', yellow: '#9a5d09', brightYellow: '#9a5d09', blue: accent, brightBlue: accent, magenta: '#8b4faf', brightMagenta: '#8b4faf', cyan: '#167d92', brightCyan: '#167d92', white: '#435267', brightWhite: '#17212e' }
   return { background: '#11120f', foreground: '#f1f0e9', cursor: accent, black: '#171814', brightBlack: '#4a4d43', red: '#ef8991', brightRed: '#ef8991', green: '#71c58c', brightGreen: '#71c58c', yellow: '#e3b86b', brightYellow: '#e3b86b', blue: accent, brightBlue: accent, magenta: '#c6a0dc', brightMagenta: '#c6a0dc', cyan: '#8fbfc1', brightCyan: '#8fbfc1', white: '#bebdb4', brightWhite: '#f1f0e9' }
 }

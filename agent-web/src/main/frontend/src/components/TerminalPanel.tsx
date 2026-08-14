@@ -51,7 +51,7 @@ export function TerminalPanel({ active, terminalRef }: TerminalPanelProps) {
           fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, monospace',
           fontSize: 13,
           lineHeight: 1.25,
-          theme: getTerminalTheme(resolvedColorMode, preferences.themePreset),
+          theme: getTerminalTheme(resolvedColorMode, preferences.themePreset, preferences.accentColor),
         })
         const fitAddon = new FitAddon()
         terminal.loadAddon(fitAddon)
@@ -72,7 +72,7 @@ export function TerminalPanel({ active, terminalRef }: TerminalPanelProps) {
       xtermRef.current?.dispose()
       xtermRef.current = null
     }
-  }, [preferences.themePreset, resolvedColorMode])
+  }, [preferences.accentColor, preferences.themePreset, resolvedColorMode])
 
   useEffect(() => {
     if (active) window.dispatchEvent(new Event('resize'))
