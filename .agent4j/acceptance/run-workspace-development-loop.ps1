@@ -38,6 +38,7 @@ $readiness.Content | Set-Content -LiteralPath (Join-Path $evidence "readiness.js
 $workspace = Invoke-Json POST "/api/workspaces/projects" @{ displayName = "Workspace EDD"; directoryName = $directoryName; repositoryId = $directoryName }
 $workspace | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $evidence "workspace.json")
 $workspaceId = $workspace.workspaceId
+Start-Sleep -Seconds 2
 
 $files = @{
     "pom.xml" = @'
@@ -46,7 +47,7 @@ $files = @{
     <groupId>demo</groupId><artifactId>workspace-edd</artifactId><version>1.0.0</version>
     <properties><maven.compiler.release>21</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
     <dependencies><dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>5.10.2</version><scope>test</scope></dependency></dependencies>
-    <build><plugins><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version></plugin><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.2.5</version></plugin></plugins></build>
+    <build><plugins><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-toolchains-plugin</artifactId><version>3.2.0</version><executions><execution><phase>validate</phase><goals><goal>select-jdk-toolchain</goal></goals><configuration><version>21</version></configuration></execution></executions></plugin><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version></plugin><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.2.5</version></plugin></plugins></build>
 </project>
 '@
     "src/main/java/demo/NumberLabel.java" = @'
