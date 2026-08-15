@@ -61,6 +61,19 @@ class WorkspaceFileServiceTest {
                 .isInstanceOf(WorkspaceFileService.FileConflictException.class);
     }
 
+    @Test
+    void createsMissingParentDirectoriesWhenWritingNewSourceFile() throws Exception {
+        Path project = Files.createDirectory(temp.resolve("project"));
+        WorkspaceFileService service = service(new FakeRepository(project), temp);
+
+        WorkspaceFileContent result = service.write(
+                WORKSPACE_ID, "local", "src/main/java/demo/Main.java", "package demo;", "");
+
+        assertThat(result.path()).isEqualTo("src/main/java/demo/Main.java");
+        assertThat(Files.readString(project.resolve("src/main/java/demo/Main.java")))
+                .isEqualTo("package demo;");
+    }
+
     private WorkspaceFileService service(FakeRepository repository, Path root) {
         WorkspaceAccessService access = new WorkspaceAccessService(
                 repository, root, Clock.fixed(NOW, ZoneOffset.UTC));

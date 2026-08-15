@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.util.Objects;
 
 /** 在配置根目录下创建并注册新的空项目。 */
@@ -17,17 +18,19 @@ public final class WorkspaceProjectService {
     private final WorkspaceAccessService workspaceAccess;
     private final Path configuredRoot;
     private final WorkspaceFileAuditSink auditSink;
+    private final Clock clock;
 
     public WorkspaceProjectService(WorkspaceAccessService workspaceAccess, Path configuredRoot,
-            java.time.Clock ignoredClock) {
-        this(workspaceAccess, configuredRoot, ignoredClock, WorkspaceFileAuditSink.noop());
+            Clock clock) {
+        this(workspaceAccess, configuredRoot, clock, WorkspaceFileAuditSink.noop());
     }
 
     public WorkspaceProjectService(WorkspaceAccessService workspaceAccess, Path configuredRoot,
-            java.time.Clock ignoredClock, WorkspaceFileAuditSink auditSink) {
+            Clock clock, WorkspaceFileAuditSink auditSink) {
         this.workspaceAccess = Objects.requireNonNull(workspaceAccess, "workspaceAccess 不能为空");
         this.configuredRoot = realDirectory(configuredRoot);
         this.auditSink = Objects.requireNonNull(auditSink, "auditSink 不能为空");
+        this.clock = Objects.requireNonNull(clock, "clock 不能为空");
     }
 
     /** 创建单层目录项目，不覆盖已有目录。 */
@@ -52,7 +55,7 @@ public final class WorkspaceProjectService {
             WorkspaceRecord workspace = workspaceAccess.create(actor, java.util.UUID.randomUUID(), displayName,
                     project.toString(), repositoryId);
             auditSink.record(new WorkspaceFileAuditEvent(WorkspaceFileAuditEventType.PROJECT_CREATED,
-                    java.time.Instant.now(), actor.userId(), workspace.workspaceId(), directoryName, 0, null, "SUCCESS"));
+                    clock.instant(), actor.userId(), workspace.workspaceId(), directoryName, 0, null, "SUCCESS"));
             return workspace;
         } catch (RuntimeException exception) {
             try {

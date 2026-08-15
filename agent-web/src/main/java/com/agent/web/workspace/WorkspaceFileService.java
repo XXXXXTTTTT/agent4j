@@ -204,6 +204,18 @@ public final class WorkspaceFileService {
             throw new IllegalArgumentException("父目录必须位于工作区内");
         }
         try {
+            Path existingParent = parent;
+            while (existingParent != null && !Files.exists(existingParent, LinkOption.NOFOLLOW_LINKS)) {
+                existingParent = existingParent.getParent();
+            }
+            if (existingParent == null) {
+                throw new IllegalArgumentException("父目录必须位于工作区内");
+            }
+            Path realExistingParent = existingParent.toRealPath();
+            if (!realExistingParent.startsWith(workspace.workspacePath())) {
+                throw new IllegalArgumentException("父目录必须位于工作区内");
+            }
+            Files.createDirectories(parent);
             Path realParent = parent.toRealPath();
             if (!realParent.startsWith(workspace.workspacePath()) || !Files.isDirectory(realParent)) {
                 throw new IllegalArgumentException("父目录必须位于工作区内");
