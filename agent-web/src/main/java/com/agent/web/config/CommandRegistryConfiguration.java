@@ -2,20 +2,16 @@ package com.agent.web.config;
 
 import com.agent.core.command.CommandAuthorizationDecision;
 import com.agent.core.command.CommandAuthorizationPolicy;
-import com.agent.core.command.CommandChannel;
 import com.agent.core.command.CommandDefinition;
 import com.agent.core.command.CommandDispatcher;
-import com.agent.core.command.CommandPermission;
 import com.agent.core.command.CommandRegistry;
-import com.agent.core.command.CommandSource;
-import com.agent.core.command.CommandTemplateRenderer;
 import com.agent.core.command.InMemoryCommandRegistry;
 import com.agent.core.command.MarkdownCommandLoader;
 import com.agent.core.command.SystemCommandHandlers;
-import com.agent.core.command.WorkflowCommandHandler;
 import com.agent.core.engine.AgentRunService;
 import com.agent.web.audit.ConversationAuditSink;
 import com.agent.web.command.AgentRunCommandCheckpointService;
+import com.agent.web.command.BuiltInWorkflowCommands;
 import com.agent.web.command.ConversationWorkflowCommandBridge;
 import com.agent.web.command.LocalCommandContextService;
 import com.agent.web.command.WorkspaceCommandRuntimeProvider;
@@ -108,17 +104,7 @@ public class CommandRegistryConfiguration {
     }
 
     private List<CommandDefinition> builtInWorkflows(ConversationWorkflowCommandBridge bridge) {
-        CommandTemplateRenderer renderer = new CommandTemplateRenderer();
-        var request = new com.agent.core.command.CommandParameter("request", "工作请求", true);
-        return List.of(
-                new CommandDefinition(
-                        "plan", "计划", "为请求制定实施计划", List.of(), List.of(request),
-                        CommandChannel.WORKFLOW_SKILL, CommandSource.BUILT_IN, CommandPermission.OPERATOR,
-                        new WorkflowCommandHandler("请制定实施计划：${request}", List.of(request), renderer, bridge)),
-                new CommandDefinition(
-                        "review", "审查", "审查当前工作区变更", List.of("code-review"), List.of(request),
-                        CommandChannel.WORKFLOW_SKILL, CommandSource.BUILT_IN, CommandPermission.OPERATOR,
-                        new WorkflowCommandHandler("请审查当前工作区并处理请求：${request}", List.of(request), renderer, bridge)));
+        return BuiltInWorkflowCommands.definitions(bridge);
     }
 
     private CommandAuthorizationDecision authorize(

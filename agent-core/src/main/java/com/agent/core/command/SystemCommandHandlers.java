@@ -34,12 +34,24 @@ public final class SystemCommandHandlers {
                 }));
         definitions.add(definition("context", "上下文", "显示当前上下文统计", List.of(),
                 CommandPermission.VIEWER, (invocation, context) -> contextService.context(context)));
+        definitions.add(definition("status", "状态", "显示当前会话执行边界", List.of(),
+                CommandPermission.VIEWER, (invocation, context) -> new CommandResult(
+                        CommandResult.Status.COMPLETED, null, "会话状态", java.util.Map.of(
+                                "actorId", context.actorId(),
+                                "workspaceId", context.workspaceId(),
+                                "conversationId", context.conversationId()))));
+        definitions.add(definition("memory", "记忆", "生成当前会话的本地上下文摘要", List.of(),
+                CommandPermission.VIEWER, (invocation, context) -> contextService.compact(context, "memory")));
         definitions.add(definition("compact", "压缩", "使用本地策略压缩会话上下文",
                 List.of(new CommandParameter("focus", "压缩重点", false)),
                 CommandPermission.OPERATOR,
                 (invocation, context) -> contextService.compact(
                         context, invocation.arguments().isEmpty() ? "" : invocation.arguments().getFirst())));
         definitions.add(definition("clear", "清空", "创建同工作区的新会话", List.of(),
+                CommandPermission.OPERATOR, (invocation, context) -> contextService.clear(context)));
+        definitions.add(definition("new", "新会话", "创建同工作区的新会话", List.of(),
+                CommandPermission.OPERATOR, (invocation, context) -> contextService.clear(context)));
+        definitions.add(definition("reset", "重置", "创建同工作区的新会话", List.of(),
                 CommandPermission.OPERATOR, (invocation, context) -> contextService.clear(context)));
         definitions.add(definition("cost", "费用", "显示当前会话模型调用统计", List.of("usage"), List.of(),
                 CommandPermission.VIEWER, (invocation, context) -> contextService.cost(context)));

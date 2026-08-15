@@ -30,16 +30,41 @@ class SystemCommandHandlersTest {
 
         for (String command : List.of(
                 "/help", "/context", "/compact focus", "/clear", "/cost",
-                "/permissions", "/rewind cp-1")) {
+                "/permissions", "/rewind cp-1", "/new", "/reset", "/status",
+                "/memory")) {
             assertThat(dispatcher.dispatch(command, context()).status())
                     .isEqualTo(CommandResult.Status.COMPLETED);
         }
 
         assertThat(contextService.calls()).containsExactlyInAnyOrder(
-                "context", "compact", "clear", "cost", "permissions");
+                "context", "compact", "compact", "clear", "clear", "clear",
+                "cost", "permissions");
         assertThat(rewindCalls).containsExactly("cp-1");
         assertThat(registry.find("usage")).isPresent()
                 .get().extracting(CommandDefinition::name).isEqualTo("cost");
+    }
+
+    @Test
+    void statusReturnsTheExactExecutionContextAndMemoryBuildsAStableSummary() {
+        InMemoryCommandRegistry registry = new InMemoryCommandRegistry();
+        RecordingContextService contextService = new RecordingContextService();
+        registry.replace(SystemCommandHandlers.definitions(
+                registry, contextService, (context, checkpoint) -> CommandResult.success("已回滚")));
+        CommandDispatcher dispatcher = new CommandDispatcher(
+                registry,
+                (definition, context) -> CommandAuthorizationDecision.allow(),
+                event -> { });
+        CommandContext context = context();
+
+        CommandResult status = dispatcher.dispatch("/status", context);
+        CommandResult memory = dispatcher.dispatch("/memory", context);
+
+        assertThat(status.message()).isEqualTo("会话状态");
+        assertThat(status.data()).containsEntry("actorId", "actor-1")
+                .containsEntry("workspaceId", "workspace-1")
+                .containsEntry("conversationId", "conversation-1");
+        assertThat(memory.status()).isEqualTo(CommandResult.Status.COMPLETED);
+        assertThat(contextService.calls()).contains("compact");
     }
 
     @Test
