@@ -37,6 +37,7 @@ class WorkspaceProjectServiceTest {
 
         assertThat(workspace.workspacePath()).isEqualTo(temp.resolve("demo").toRealPath());
         assertThat(Files.isDirectory(workspace.workspacePath())).isTrue();
+        assertThat(Files.isDirectory(workspace.workspacePath().resolve(".git"))).isTrue();
         assertThat(repository.created).isEqualTo(workspace);
     }
 

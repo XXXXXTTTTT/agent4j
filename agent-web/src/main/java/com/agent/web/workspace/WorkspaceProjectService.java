@@ -4,6 +4,8 @@ import com.agent.web.identity.Actor;
 import com.agent.web.audit.WorkspaceFileAuditEvent;
 import com.agent.web.audit.WorkspaceFileAuditEventType;
 import com.agent.web.audit.WorkspaceFileAuditSink;
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.errors.GitAPIException;
 
 import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
@@ -46,10 +48,13 @@ public final class WorkspaceProjectService {
         }
         try {
             Files.createDirectory(project);
+            try (Git ignored = Git.init().setDirectory(project.toFile()).call()) {
+                // 空项目必须先成为 Git 工作树，CoderNode 才能建立 AST 快照和 Diff。
+            }
         } catch (FileAlreadyExistsException exception) {
             throw new IllegalArgumentException("项目目录已存在", exception);
-        } catch (IOException exception) {
-            throw new IllegalArgumentException("项目目录创建失败", exception);
+        } catch (GitAPIException | IOException exception) {
+            throw new IllegalArgumentException("项目 Git 初始化失败", exception);
         }
         try {
             WorkspaceRecord workspace = workspaceAccess.create(actor, java.util.UUID.randomUUID(), displayName,
