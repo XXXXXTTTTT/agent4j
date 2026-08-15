@@ -6,6 +6,8 @@ import com.agent.core.command.CommandDefinition;
 import com.agent.core.command.CommandPermission;
 import com.agent.core.command.CommandResult;
 import com.agent.core.command.CommandSource;
+import com.agent.core.multiagent.AgentDescriptor;
+import com.agent.core.orchestration.OrchestrationMode;
 import com.agent.web.mcp.installation.McpInstallationDetails;
 import com.agent.web.mcp.installation.McpInstallationRecord;
 import com.agent.web.mcp.installation.McpInstallationService;
@@ -13,6 +15,7 @@ import com.agent.web.model.ModelConfigurationService;
 import com.agent.web.model.ModelConfigurationSnapshot;
 import com.agent.web.model.ModelEndpointRecord;
 import com.agent.web.model.ModelGroupRecord;
+import com.agent.web.orchestration.ProductionMultiAgentOrchestrator;
 import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.skill.SkillInstallationRecord;
 
@@ -42,7 +45,9 @@ public final class CapabilityCommandHandlers {
                 definition("skills", "Skills", "显示当前工作区的 Skill 安装状态",
                         context -> skillResult(context, skillInstallations)),
                 definition("models", "Models", "显示当前用户的模型组和端点状态",
-                        context -> modelResult(modelConfigurations)));
+                        context -> modelResult(modelConfigurations)),
+                definition("agents", "Agents", "显示已注册的多 Agent 编排能力",
+                        context -> agentsResult()));
     }
 
     private static CommandDefinition definition(
@@ -139,6 +144,26 @@ public final class CapabilityCommandHandlers {
         view.put("priority", endpoint.priority());
         view.put("weight", endpoint.weight());
         view.put("enabled", endpoint.enabled());
+        return Map.copyOf(view);
+    }
+
+    private static CommandResult agentsResult() {
+        List<Map<String, Object>> agents = ProductionMultiAgentOrchestrator.catalog().list().stream()
+                .map(CapabilityCommandHandlers::agentView)
+                .toList();
+        return new CommandResult(CommandResult.Status.COMPLETED, null, "多 Agent 编排能力", Map.of(
+                "agentCount", agents.size(),
+                "modes", java.util.Arrays.stream(OrchestrationMode.values()).map(Enum::name).toList(),
+                "agents", agents));
+    }
+
+    private static Map<String, Object> agentView(AgentDescriptor descriptor) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("agentId", descriptor.agentId());
+        view.put("graphId", descriptor.graphId());
+        view.put("readableStateKeys", descriptor.readableStateKeys().stream().sorted().toList());
+        view.put("ownedStateKeys", descriptor.ownedStateKeys().stream().sorted().toList());
+        view.put("handoffTargets", descriptor.handoffTargets().stream().sorted().toList());
         return Map.copyOf(view);
     }
 }

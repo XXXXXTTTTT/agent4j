@@ -123,6 +123,36 @@ class CapabilityCommandHandlersTest {
         verify(modelConfigurations).snapshot();
     }
 
+    @Test
+    void listsSupportedMultiAgentModesAndProductionAgentCatalog() {
+        McpInstallationService mcpInstallations = mock(McpInstallationService.class);
+        GitHubSkillInstallationService skillInstallations = mock(GitHubSkillInstallationService.class);
+        ModelConfigurationService modelConfigurations = mock(ModelConfigurationService.class);
+        InMemoryCommandRegistry registry = new InMemoryCommandRegistry();
+        registry.replace(CapabilityCommandHandlers.definitions(
+                mcpInstallations, skillInstallations, modelConfigurations));
+        CommandDispatcher dispatcher = new CommandDispatcher(
+                registry, (definition, context) -> CommandAuthorizationDecision.allow(), event -> { });
+
+        CommandResult result = dispatcher.dispatch("/agents", new CommandContext(
+                "actor-1", WORKSPACE_ID.toString(), "conversation-1"));
+
+        assertThat(result.status()).isEqualTo(CommandResult.Status.COMPLETED);
+        assertThat(result.message()).isEqualTo("多 Agent 编排能力");
+        assertThat(result.data()).containsEntry("agentCount", 4)
+                .containsEntry("modes", List.of(
+                        "SERIAL_DEVELOPMENT", "PARALLEL_RESEARCH", "REVIEW_LOOP"));
+        List<Map<String, Object>> agents = castList(result.data().get("agents"));
+        assertThat(agents).anySatisfy(agent -> assertThat(agent)
+                .containsEntry("agentId", "coordinator")
+                .containsEntry("graphId", "multiagent-coordinator")
+                .containsEntry("handoffTargets", List.of(
+                        "researcher-code", "researcher-tests", "verifier")));
+        assertThat(agents).anySatisfy(agent -> assertThat(agent)
+                .containsEntry("agentId", "verifier")
+                .containsEntry("graphId", "multiagent-verifier"));
+    }
+
     @SuppressWarnings("unchecked")
     private static List<Map<String, Object>> castList(Object value) {
         return (List<Map<String, Object>>) value;
