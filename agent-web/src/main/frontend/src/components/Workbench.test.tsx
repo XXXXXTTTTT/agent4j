@@ -195,6 +195,7 @@ describe('Workbench', () => {
     render(<Workbench controller={runs} conversation={conversations} onTerminalReady={() => undefined} />)
 
     expect(screen.getByLabelText('会话与工作区')).toBeVisible()
+    await user.click(screen.getByRole('combobox', { name: '工作区' }))
     expect(screen.getByRole('option', { name: 'Agent4J' })).toBeVisible()
     expect(screen.getByText('你是什么模型')).toBeVisible()
     const input = screen.getByRole('textbox', { name: '发送消息' })

@@ -8,6 +8,7 @@ import type { UseConversationWorkspaceResult } from '../hooks/useConversationWor
 import { WorkspaceDialog } from './WorkspaceDialog'
 import { ModelSettingsDialog } from './ModelSettingsDialog'
 import { AppearanceSettingsDialog } from './AppearanceSettingsDialog'
+import { ThemedSelect } from './ThemedSelect'
 
 interface ConversationSidebarProps {
   controller: UseConversationWorkspaceResult
@@ -33,18 +34,15 @@ export function ConversationSidebar({ controller, connectionState, activeContext
       <div className="sidebar-workspace-row">
         <div className="sidebar-select-wrap">
           <FolderGit2 aria-hidden="true" size={15} />
-        <select
-          id="workspace-select"
-          aria-label="工作区"
-          value={controller.activeWorkspace?.workspaceId ?? ''}
-          onChange={(event) => void controller.selectWorkspace(event.target.value).catch(() => undefined)}
-          disabled={controller.loading || controller.workspaces.length === 0}
-        >
-          {controller.workspaces.length === 0 ? <option value="">没有可用工作区</option> : null}
-          {controller.workspaces.map((workspace) => (
-            <option key={workspace.workspaceId} value={workspace.workspaceId}>{workspace.displayName}</option>
-          ))}
-        </select>
+          <ThemedSelect
+            id="workspace-select"
+            label="工作区"
+            value={controller.activeWorkspace?.workspaceId ?? ''}
+            options={controller.workspaces.map((workspace) => ({ value: workspace.workspaceId, label: workspace.displayName }))}
+            emptyLabel="没有可用工作区"
+            disabled={controller.loading}
+            onChange={(workspaceId) => void controller.selectWorkspace(workspaceId).catch(() => undefined)}
+          />
         </div>
         <button type="button" className="sidebar-icon-button sidebar-workspace-add" aria-label="新建工作区" title="新建工作区" onClick={() => setDialogOpen(true)} disabled={controller.loading}>
           <FolderPlus aria-hidden="true" size={15} />

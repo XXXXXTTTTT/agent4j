@@ -49,4 +49,53 @@ describe('ConversationSidebar', () => {
 
     expect(importWorkspace).toHaveBeenCalledTimes(1)
   })
+
+  it('工作区选择器支持纯键盘切换并保持选中项可见', async () => {
+    const user = userEvent.setup()
+    const selectWorkspace = vi.fn(async () => undefined)
+    const scrolledLabels: string[] = []
+    const scrollIntoView = vi.fn(function (this: HTMLElement) { scrolledLabels.push(this.textContent ?? '') })
+    const originalDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
+    HTMLElement.prototype.scrollIntoView = scrollIntoView
+    const secondWorkspace: Workspace = {
+      workspaceId: 'ws-2', ownerUserId: 'user-1', displayName: '示例项目', workspacePath: 'D:/projects/example', repositoryId: 'example', permission: 'OWNER', createdAt: '2026-08-07T02:00:00Z', updatedAt: '2026-08-07T02:00:00Z',
+    }
+
+    try {
+      const sidebarController = controller({
+        selectWorkspace,
+        workspaces: [controller().workspaces[0], secondWorkspace],
+      })
+      render(<AppearanceProvider><ConversationSidebar controller={sidebarController} connectionState={{ trace: null, terminal: null }} /></AppearanceProvider>)
+
+      const workspacePicker = screen.getByRole('combobox', { name: '工作区' })
+      expect(workspacePicker).toHaveAttribute('aria-expanded', 'false')
+
+      await user.click(workspacePicker)
+      expect(screen.getByRole('listbox', { name: '工作区' })).toBeVisible()
+      expect(screen.getByRole('option', { name: 'Agent4J' })).toHaveAttribute('aria-selected', 'true')
+
+      await user.keyboard('{ArrowDown}')
+      expect(screen.getByRole('option', { name: '示例项目' })).toHaveAttribute('data-active', 'true')
+      expect(screen.getByRole('option', { name: '示例项目' })).toHaveAttribute('aria-selected', 'false')
+      expect(scrolledLabels.at(-1)).toContain('示例项目')
+
+      await user.keyboard('{Enter}')
+      expect(selectWorkspace).toHaveBeenCalledWith('ws-2')
+      expect(screen.queryByRole('listbox', { name: '工作区' })).not.toBeInTheDocument()
+
+      await user.click(workspacePicker)
+      await user.keyboard('{Escape}')
+      expect(screen.queryByRole('listbox', { name: '工作区' })).not.toBeInTheDocument()
+      expect(workspacePicker).toHaveFocus()
+
+      await user.click(workspacePicker)
+      await user.keyboard('{Tab}')
+      expect(screen.queryByRole('listbox', { name: '工作区' })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '新建工作区' })).toHaveFocus()
+    } finally {
+      if (originalDescriptor === undefined) delete HTMLElement.prototype.scrollIntoView
+      else Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalDescriptor)
+    }
+  })
 })

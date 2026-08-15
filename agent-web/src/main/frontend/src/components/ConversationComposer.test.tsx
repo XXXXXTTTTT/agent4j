@@ -122,6 +122,153 @@ describe('ConversationComposer', () => {
     expect(screen.getByRole('status')).toHaveTextContent('已提交')
   })
 
+  it('上下键选择 Slash Command 时会同步选中项并自动滚动', async () => {
+    const user = userEvent.setup()
+    const state = conversation()
+    const listSlashCommands = vi.fn(async () => ({
+      revision: 3,
+      commands: ['plan', 'review', 'debug'].map((name) => ({
+        name, displayName: name, description: `${name} 请求`, aliases: [], parameters: [],
+        channel: 'WORKFLOW_SKILL' as const, source: 'BUILT_IN' as const, permission: 'OPERATOR' as const,
+      })),
+    }))
+    const scrolledLabels: string[] = []
+    const originalDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
+    const scrollIntoView = vi.fn(function (this: HTMLElement) { scrolledLabels.push(this.textContent ?? '') })
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true })
+
+    try {
+      render(<ConversationComposer conversation={{ ...state, listSlashCommands }} runController={runController()} />)
+
+      const input = screen.getByRole('textbox', { name: '发送消息' })
+      await user.type(input, '/')
+      await screen.findByRole('option', { name: /\/plan/ })
+      expect(input).toHaveAttribute('aria-controls', 'composer-command-menu')
+      expect(input).toHaveAttribute('aria-activedescendant', 'composer-command-option-0')
+      await user.keyboard('{ArrowDown}')
+      expect(screen.getByRole('option', { name: /\/review/ })).toHaveAttribute('aria-selected', 'true')
+      expect(input).toHaveAttribute('aria-activedescendant', 'composer-command-option-1')
+      expect(scrolledLabels.at(-1)).toContain('/review')
+      await user.keyboard('{Enter}')
+      expect(input).toHaveValue('/review ')
+    } finally {
+      if (originalDescriptor === undefined) delete HTMLElement.prototype.scrollIntoView
+      else Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalDescriptor)
+    }
+  })
+
+  it('普通消息按 Enter 提交，Shift+Enter 才插入换行', async () => {
+    const user = userEvent.setup()
+    const state = conversation()
+    render(<ConversationComposer conversation={state} runController={runController()} />)
+
+    const input = screen.getByRole('textbox', { name: '发送消息' })
+    await user.type(input, '第一行')
+    await user.keyboard('{Shift>}{Enter}{/Shift}')
+    await user.type(input, '第二行')
+    expect(input).toHaveValue('第一行\n第二行')
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(state.submit).toHaveBeenCalledWith('第一行\n第二行'))
+  })
+
+  it('Slash 菜单打开时 Shift+Enter 插入换行而不是选择命令', async () => {
+    const user = userEvent.setup()
+    const state = conversation()
+    const listSlashCommands = vi.fn(async () => ({
+      revision: 3,
+      commands: [{
+        name: 'plan', displayName: '计划', description: '制定计划', aliases: [], parameters: [],
+        channel: 'WORKFLOW_SKILL' as const, source: 'BUILT_IN' as const, permission: 'OPERATOR' as const,
+      }],
+    }))
+    render(<ConversationComposer conversation={{ ...state, listSlashCommands }} runController={runController()} />)
+
+    const input = screen.getByRole('textbox', { name: '发送消息' })
+    await user.type(input, '/')
+    await screen.findByRole('option', { name: /\/plan/ })
+    await user.keyboard('{Shift>}{Enter}{/Shift}')
+
+    expect(input).toHaveValue('/\n')
+    expect(screen.queryByRole('listbox', { name: '命令补全' })).not.toBeInTheDocument()
+  })
+
+  it('发送按钮禁用时 Enter 不会绕过提交约束', async () => {
+    const user = userEvent.setup()
+    const state = conversation()
+    const inactiveState = { ...state, activeConversation: null, conversations: [] }
+    render(<ConversationComposer conversation={inactiveState} runController={runController()} />)
+
+    const input = screen.getByRole('textbox', { name: '发送消息' })
+    await user.type(input, '不能提交')
+    expect(screen.getByRole('button', { name: '发送消息' })).toBeDisabled()
+    await user.keyboard('{Enter}')
+
+    expect(state.submit).not.toHaveBeenCalled()
+    expect(input).toHaveValue('不能提交')
+  })
+
+  it('clear 返回新会话后刷新并切换当前会话', async () => {
+    const user = userEvent.setup()
+    const state = conversation()
+    const listSlashCommands = vi.fn(async () => ({
+      revision: 3,
+      commands: [{
+        name: 'clear', displayName: '清空', description: '创建新会话', aliases: [], parameters: [],
+        channel: 'SYSTEM_DIRECTIVE' as const, source: 'BUILT_IN' as const, permission: 'OPERATOR' as const,
+      }],
+    }))
+    const dispatchSlashCommand = vi.fn(async () => ({
+      status: 'COMPLETED' as const, commandName: 'clear', message: '已创建新会话',
+      data: { conversationId: 'conv-2' },
+    }))
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify([]), { status: 200 }),
+    ))
+    render(<ConversationComposer conversation={{ ...state, listSlashCommands, dispatchSlashCommand }} runController={runController()} />)
+
+    const input = screen.getByRole('textbox', { name: '发送消息' })
+    await user.type(input, '/')
+    await screen.findByRole('option', { name: /\/clear/ })
+    await user.keyboard('{Enter}')
+    await user.keyboard('{Enter}')
+
+    await waitFor(() => expect(dispatchSlashCommand).toHaveBeenCalledWith('/clear ', undefined))
+    await waitFor(() => expect(state.reload).toHaveBeenCalled())
+    expect(state.selectConversation).toHaveBeenCalledWith('conv-2')
+    vi.unstubAllGlobals()
+  })
+
+  it('本地命令的数组和对象结果完整展示', async () => {
+    const user = userEvent.setup()
+    const state = conversation()
+    const listSlashCommands = vi.fn(async () => ({
+      revision: 3,
+      commands: [{
+        name: 'permissions', displayName: '权限', description: '读取命令权限', aliases: [], parameters: [],
+        channel: 'SYSTEM_DIRECTIVE' as const, source: 'BUILT_IN' as const, permission: 'VIEWER' as const,
+      }],
+    }))
+    const dispatchSlashCommand = vi.fn(async () => ({
+      status: 'COMPLETED' as const, commandName: 'permissions', message: '工作区命令权限',
+      data: { arguments: ['read', 'write'], policy: { permission: 'OPERATOR' } },
+    }))
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify([]), { status: 200 }),
+    ))
+    render(<ConversationComposer conversation={{ ...state, listSlashCommands, dispatchSlashCommand }} runController={runController()} />)
+
+    const input = screen.getByRole('textbox', { name: '发送消息' })
+    await user.type(input, '/')
+    await screen.findByRole('option', { name: /\/permissions/ })
+    await user.keyboard('{Enter}{Enter}')
+
+    const details = await screen.findByTestId('command-result-data')
+    expect(details).toHaveTextContent('read')
+    expect(details).toHaveTextContent('write')
+    expect(details).toHaveTextContent('OPERATOR')
+    vi.unstubAllGlobals()
+  })
+
   it('普通消息仍提交持久化会话', async () => {
     const user = userEvent.setup()
     const workspace = conversation()
