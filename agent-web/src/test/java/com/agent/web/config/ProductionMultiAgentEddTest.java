@@ -137,7 +137,9 @@ class ProductionMultiAgentEddTest {
                     && lifecycle.contains("STARTED")
                     && lifecycle.contains("COMPLETED")
                     && modelCallCount.get() >= 2
-                    && summaries.stream().allMatch(value -> value != null && !value.isBlank());
+                    && summaries.stream().allMatch(value -> value != null
+                            && value.contains("return a + b")
+                            && value.contains("new Calculator().add(1, 2)"));
             report.put("passed", passed);
             assertThat(passed).isTrue();
         } finally {

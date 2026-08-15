@@ -76,8 +76,11 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Comparator;
 import java.util.Map;
 import java.util.Objects;
 import java.util.List;
@@ -437,22 +440,52 @@ public class ProductionGraphConfiguration {
 
     /** 代码研究子图只写入研究证据键，不持有工作区写权限。 */
     @Bean("multiagent-research-code")
+    GraphFactory multiAgentResearchCodeGraph(
+            ModelRouter modelRouter,
+            ProductionAgentProperties properties) {
+        return researchGraph(modelRouter, properties.snapshotMaxFiles(),
+                properties.snapshotMaxBytes(), "代码结构");
+    }
+
     GraphFactory multiAgentResearchCodeGraph(ModelRouter modelRouter) {
+        return researchGraph(modelRouter, 50, 1_000_000, "代码结构");
+    }
+
+    private GraphFactory researchGraph(
+            ModelRouter modelRouter,
+            int maxFiles,
+            long maxBytes,
+            String label) {
         return () -> new StateGraph(2)
                 .addNode("research-code", state -> state.withVariable(
                         "research.codeEvidence",
-                        researchEvidence(modelRouter, state, "代码结构")))
+                        researchEvidence(modelRouter, state, label, maxFiles, maxBytes)))
                 .setEntryPoint("research-code")
                 .addEdge("research-code", StateGraph.END);
     }
 
     /** 测试研究子图只写入研究证据键，不持有工作区写权限。 */
     @Bean("multiagent-research-tests")
+    GraphFactory multiAgentResearchTestsGraph(
+            ModelRouter modelRouter,
+            ProductionAgentProperties properties) {
+        return researchTestGraph(modelRouter, properties.snapshotMaxFiles(),
+                properties.snapshotMaxBytes(), "测试与验证");
+    }
+
     GraphFactory multiAgentResearchTestsGraph(ModelRouter modelRouter) {
+        return researchTestGraph(modelRouter, 50, 1_000_000, "测试与验证");
+    }
+
+    private GraphFactory researchTestGraph(
+            ModelRouter modelRouter,
+            int maxFiles,
+            long maxBytes,
+            String label) {
         return () -> new StateGraph(2)
                 .addNode("research-tests", state -> state.withVariable(
                         "research.testEvidence",
-                        researchEvidence(modelRouter, state, "测试与验证")))
+                        researchEvidence(modelRouter, state, label, maxFiles, maxBytes)))
                 .setEntryPoint("research-tests")
                 .addEdge("research-tests", StateGraph.END);
     }
@@ -775,25 +808,86 @@ public class ProductionGraphConfiguration {
 
     private String workspaceEvidence(
             com.agent.core.engine.AgentState state,
-            String label) {
+            String label,
+            int maxFiles,
+            long maxBytes) {
+        if (maxFiles < 1 || maxBytes < 1) {
+            throw new IllegalArgumentException("研究证据预算必须大于 0");
+        }
         String workspace = state.variables().get(CoderNode.WORKSPACE_PATH_KEY);
         if (workspace == null || workspace.isBlank()) {
             throw new IllegalStateException("研究子图缺少状态变量: " + CoderNode.WORKSPACE_PATH_KEY);
         }
-        try (var paths = java.nio.file.Files.walk(java.nio.file.Path.of(workspace), 2)) {
-            long files = paths.filter(java.nio.file.Files::isRegularFile).count();
-            return label + "证据: 文件数=" + files
-                    + ", 计划=" + state.variables().get(PlannerNode.PLAN_KEY);
+        Path root = Path.of(workspace).toAbsolutePath().normalize();
+        Set<String> excludedDirectories = Set.of(
+                ".git", "target", "node_modules", ".gradle", "build", "dist");
+        try (var paths = Files.walk(root)) {
+            List<Path> candidates = paths
+                    .filter(Files::isRegularFile)
+                    .filter(path -> isResearchFile(root, path, excludedDirectories))
+                    .sorted(Comparator.comparing(path -> root.relativize(path).toString()))
+                    .toList();
+            StringBuilder evidence = new StringBuilder()
+                    .append(label).append("证据: 文件数=").append(candidates.size())
+                    .append(", 计划=").append(state.variables().get(PlannerNode.PLAN_KEY))
+                    .append("\n工作区文件内容（有界只读视图）：\n");
+            long totalBytes = 0;
+            int capturedFiles = 0;
+            for (Path path : candidates) {
+                if (capturedFiles >= maxFiles) {
+                    break;
+                }
+                byte[] content = Files.readAllBytes(path);
+                if (totalBytes + content.length > maxBytes || !isUtf8Text(content)) {
+                    continue;
+                }
+                evidence.append("--- ")
+                        .append(root.relativize(path).toString().replace('\\', '/'))
+                        .append(" ---\n")
+                        .append(new String(content, StandardCharsets.UTF_8))
+                        .append('\n');
+                totalBytes += content.length;
+                capturedFiles++;
+            }
+            return evidence.toString();
         } catch (java.io.IOException exception) {
             throw new IllegalStateException("研究子图读取工作区失败", exception);
         }
     }
 
+    private boolean isResearchFile(Path root, Path path, Set<String> excludedDirectories) {
+        String fileName = path.getFileName().toString();
+        if (".env".equals(fileName) || fileName.endsWith(".pem") || fileName.endsWith(".key")) {
+            return false;
+        }
+        for (Path element : root.relativize(path)) {
+            if (excludedDirectories.contains(element.toString())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isUtf8Text(byte[] content) {
+        if (content.length == 0) {
+            return true;
+        }
+        for (byte value : content) {
+            if (value == 0) {
+                return false;
+            }
+        }
+        String decoded = new String(content, StandardCharsets.UTF_8);
+        return decoded.getBytes(StandardCharsets.UTF_8).length == content.length;
+    }
+
     private String researchEvidence(
             ModelRouter modelRouter,
             com.agent.core.engine.AgentState state,
-            String label) {
-        String evidence = workspaceEvidence(state, label);
+            String label,
+            int maxFiles,
+            long maxBytes) {
+        String evidence = workspaceEvidence(state, label, maxFiles, maxBytes);
         String modelGroup = state.variables().get(
                 ProductionMultiAgentOrchestrator.MODEL_GROUP_KEY_PREFIX
                         + com.agent.core.orchestration.AgentRole.RESEARCHER.name());
