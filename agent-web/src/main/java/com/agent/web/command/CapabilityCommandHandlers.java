@@ -60,7 +60,10 @@ public final class CapabilityCommandHandlers {
                 definition("workspace", "Workspace", "显示当前工作区的名称、路径与权限",
                         context -> workspaceResult(context, workspaceAccess)),
                 definition("runs", "Runs", "显示当前会话的最新 Run 状态",
-                        context -> runsResult(context, conversations)));
+                        context -> runsResult(context, conversations)),
+                definition("doctor", "Doctor", "检查当前工作区的本地 Agent 能力",
+                        context -> doctorResult(context, mcpInstallations, skillInstallations,
+                                modelConfigurations, workspaceAccess, conversations)));
     }
 
     private static CommandDefinition definition(
@@ -214,5 +217,29 @@ public final class CapabilityCommandHandlers {
             view.put("runId", turn.runId().toString());
         }
         return Map.copyOf(view);
+    }
+
+    private static CommandResult doctorResult(
+            CommandContext context,
+            McpInstallationService mcpInstallations,
+            GitHubSkillInstallationService skillInstallations,
+            ModelConfigurationService modelConfigurations,
+            WorkspaceAccessService workspaceAccess,
+            ConversationService conversations) {
+        UUID workspaceId = UUID.fromString(context.workspaceId());
+        UUID conversationId = UUID.fromString(context.conversationId());
+        workspaceAccess.requireWorkspace(workspaceId, context.actorId(), WorkspacePermission.VIEWER);
+        var modelSnapshot = modelConfigurations.snapshot();
+        int mcpCount = mcpInstallations.listDetails(workspaceId).size();
+        int skillCount = skillInstallations.list(workspaceId).size();
+        int turnCount = conversations.listTurns(conversationId).size();
+        return new CommandResult(CommandResult.Status.COMPLETED, null, "环境诊断", Map.of(
+                "status", "READY",
+                "workspaceAccessible", true,
+                "modelGroupCount", modelSnapshot.groups().size(),
+                "modelEndpointCount", modelSnapshot.endpoints().size(),
+                "mcpInstallationCount", mcpCount,
+                "skillInstallationCount", skillCount,
+                "conversationTurnCount", turnCount));
     }
 }

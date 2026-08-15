@@ -226,6 +226,47 @@ class CapabilityCommandHandlersTest {
         verify(conversations).listTurns(conversationId);
     }
 
+    @Test
+    void diagnosesLocalWorkspaceCapabilitiesWithoutCallingTheModel() {
+        McpInstallationService mcpInstallations = mock(McpInstallationService.class);
+        GitHubSkillInstallationService skillInstallations = mock(GitHubSkillInstallationService.class);
+        ModelConfigurationService modelConfigurations = mock(ModelConfigurationService.class);
+        WorkspaceAccessService workspaceAccess = mock(WorkspaceAccessService.class);
+        ConversationService conversations = mock(ConversationService.class);
+        when(workspaceAccess.requireWorkspace(WORKSPACE_ID, "actor-1", WorkspacePermission.VIEWER))
+                .thenReturn(new WorkspaceRecord(WORKSPACE_ID, "actor-1", "产品工作区",
+                        Path.of("D:/projects/agent4j"), "agent4j", WorkspacePermission.OWNER,
+                        NOW, NOW));
+        when(modelConfigurations.snapshot()).thenReturn(new ModelConfigurationSnapshot(
+                List.of(), List.of(), List.of()));
+        when(mcpInstallations.listDetails(WORKSPACE_ID)).thenReturn(List.of());
+        when(skillInstallations.list(WORKSPACE_ID)).thenReturn(List.of());
+        UUID conversationId = UUID.fromString("4a0372d2-5e47-49a7-af30-ca7bdf2af8af");
+        when(conversations.listTurns(conversationId)).thenReturn(List.of());
+        InMemoryCommandRegistry registry = new InMemoryCommandRegistry();
+        registry.replace(CapabilityCommandHandlers.definitions(mcpInstallations, skillInstallations,
+                modelConfigurations, workspaceAccess, conversations));
+        CommandDispatcher dispatcher = new CommandDispatcher(
+                registry, (definition, context) -> CommandAuthorizationDecision.allow(), event -> { });
+
+        CommandResult result = dispatcher.dispatch("/doctor", new CommandContext(
+                "actor-1", WORKSPACE_ID.toString(), conversationId.toString()));
+
+        assertThat(result.status()).isEqualTo(CommandResult.Status.COMPLETED);
+        assertThat(result.message()).isEqualTo("环境诊断");
+        assertThat(result.data()).containsEntry("status", "READY")
+                .containsEntry("workspaceAccessible", true)
+                .containsEntry("modelGroupCount", 0)
+                .containsEntry("modelEndpointCount", 0)
+                .containsEntry("mcpInstallationCount", 0)
+                .containsEntry("skillInstallationCount", 0)
+                .containsEntry("conversationTurnCount", 0);
+        verify(modelConfigurations).snapshot();
+        verify(mcpInstallations).listDetails(WORKSPACE_ID);
+        verify(skillInstallations).list(WORKSPACE_ID);
+        verify(conversations).listTurns(conversationId);
+    }
+
     @SuppressWarnings("unchecked")
     private static List<Map<String, Object>> castList(Object value) {
         return (List<Map<String, Object>>) value;
