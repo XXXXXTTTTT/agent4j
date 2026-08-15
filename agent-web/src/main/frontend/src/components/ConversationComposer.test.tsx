@@ -59,7 +59,7 @@ function runView() {
 }
 
 describe('ConversationComposer', () => {
-  it('输入斜杠后选择当前工作区命令，展示风险并提交结构化 Run', async () => {
+  it('选择受治理 CLI 后保持同一输入框并提交结构化 Run', async () => {
     const user = userEvent.setup()
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify([{
@@ -74,12 +74,15 @@ describe('ConversationComposer', () => {
     const runs = runController()
     render(<ConversationComposer conversation={conversation()} runController={runs} />)
 
-    await user.type(screen.getByRole('textbox', { name: '发送消息' }), '/')
+    const input = screen.getByRole('textbox', { name: '发送消息' })
+    await user.type(input, '/')
     await screen.findByRole('option', { name: /test\.maven/ })
     expect(screen.queryByRole('option', { name: /destroy\.workspace/ })).not.toBeInTheDocument()
     await user.keyboard('{Enter}')
-    expect(screen.getByText('执行前需要审批')).toBeVisible()
-    await user.type(screen.getByRole('textbox', { name: '命令参数' }), '-q{enter}-DskipTests')
+    expect(input).toHaveValue('/cli test.maven ')
+    expect(screen.queryByRole('textbox', { name: '命令参数' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Slash Command 参数' })).not.toBeInTheDocument()
+    await user.type(input, '-q -DskipTests')
     await user.click(screen.getByRole('button', { name: '执行命令' }))
 
     await waitFor(() => expect(runs.followRun).toHaveBeenCalledWith('cli-run'))
@@ -90,7 +93,7 @@ describe('ConversationComposer', () => {
     vi.unstubAllGlobals()
   })
 
-  it('输入斜杠后优先展示实时 Slash Command，并走受治理分发接口', async () => {
+  it('选择 Slash Command 后在同一输入框继续输入提示词并分发原始文本', async () => {
     const user = userEvent.setup()
     const state = conversation()
     const listSlashCommands = vi.fn(async () => ({
@@ -106,11 +109,14 @@ describe('ConversationComposer', () => {
     }))
     render(<ConversationComposer conversation={{ ...state, listSlashCommands, dispatchSlashCommand }} runController={runController()} />)
 
-    await user.type(screen.getByRole('textbox', { name: '发送消息' }), '/')
+    const input = screen.getByRole('textbox', { name: '发送消息' })
+    await user.type(input, '/')
     await screen.findByRole('option', { name: /\/plan/ })
     await user.keyboard('{Enter}')
-    await user.type(screen.getByRole('textbox', { name: 'Slash Command 参数' }), '修复登录')
-    await user.click(screen.getByRole('button', { name: '执行 Slash Command' }))
+    expect(input).toHaveValue('/plan ')
+    expect(screen.queryByRole('textbox', { name: 'Slash Command 参数' })).not.toBeInTheDocument()
+    await user.type(input, '修复登录')
+    await user.click(screen.getByRole('button', { name: '执行命令' }))
 
     await waitFor(() => expect(dispatchSlashCommand).toHaveBeenCalledWith('/plan 修复登录', undefined))
     expect(screen.getByRole('status')).toHaveTextContent('已提交')
