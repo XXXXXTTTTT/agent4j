@@ -3,11 +3,13 @@ package com.agent.core.command;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /** 使用冻结快照实现来源覆盖和别名解析的进程内注册表。 */
@@ -81,6 +83,7 @@ public final class InMemoryCommandRegistry implements CommandRegistry {
     private Map<String, CommandDefinition> selectDefinitions(List<CommandDefinition> input) {
         Map<String, CommandDefinition> selected = new HashMap<>();
         Map<CommandSource, Map<String, CommandDefinition>> bySource = new HashMap<>();
+        Set<String> systemReservedNames = systemReservedNames(input);
         for (CommandDefinition definition : input) {
             Objects.requireNonNull(definition, "definitions 不能包含 null");
             Map<String, CommandDefinition> sourceDefinitions = bySource.computeIfAbsent(
@@ -88,12 +91,52 @@ public final class InMemoryCommandRegistry implements CommandRegistry {
             if (sourceDefinitions.putIfAbsent(definition.name(), definition) != null) {
                 throw new IllegalArgumentException("同一来源存在重复命令: " + definition.name());
             }
-            CommandDefinition previous = selected.get(definition.name());
-            if (previous == null || definition.source().priority() > previous.source().priority()) {
-                selected.put(definition.name(), definition);
+            if (!isBuiltInSystemDirective(definition)
+                    && systemReservedNames.contains(definition.name())) {
+                continue;
+            }
+            CommandDefinition effective = withoutSystemReservedAliases(definition, systemReservedNames);
+            CommandDefinition previous = selected.get(effective.name());
+            if (previous == null || effective.source().priority() > previous.source().priority()) {
+                selected.put(effective.name(), effective);
             }
         }
         return selected;
+    }
+
+    private Set<String> systemReservedNames(List<CommandDefinition> input) {
+        Set<String> names = new HashSet<>();
+        for (CommandDefinition definition : input) {
+            Objects.requireNonNull(definition, "definitions 不能包含 null");
+            if (isBuiltInSystemDirective(definition)) {
+                names.add(definition.name());
+                names.addAll(definition.aliases());
+            }
+        }
+        return Set.copyOf(names);
+    }
+
+    private boolean isBuiltInSystemDirective(CommandDefinition definition) {
+        return definition.source() == CommandSource.BUILT_IN
+                && definition.channel() == CommandChannel.SYSTEM_DIRECTIVE;
+    }
+
+    private CommandDefinition withoutSystemReservedAliases(
+            CommandDefinition definition,
+            Set<String> systemReservedNames) {
+        if (isBuiltInSystemDirective(definition)) {
+            return definition;
+        }
+        List<String> aliases = definition.aliases().stream()
+                .filter(alias -> !systemReservedNames.contains(alias))
+                .toList();
+        if (aliases.size() == definition.aliases().size()) {
+            return definition;
+        }
+        return new CommandDefinition(
+                definition.name(), definition.displayName(), definition.description(), aliases,
+                definition.parameters(), definition.channel(), definition.source(), definition.permission(),
+                definition.handler());
     }
 
     private Map<String, CommandDefinition> resolveNames(Map<String, CommandDefinition> selected) {

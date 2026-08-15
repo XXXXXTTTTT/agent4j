@@ -41,7 +41,7 @@ class BuiltInWorkflowCommandsTest {
         assertThat(byName).containsKeys(
                 "plan", "review", "debug", "fix", "test", "explain", "refactor",
                 "security-review", "research", "document", "implement", "verify",
-                "inspect", "architecture", "release");
+                "inspect", "architecture", "release", "tasks");
         assertThat(byName.values()).allMatch(command ->
                 command.channel() == CommandChannel.WORKFLOW_SKILL);
 
