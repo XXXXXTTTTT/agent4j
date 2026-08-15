@@ -12,11 +12,14 @@ import com.agent.core.engine.AgentRunService;
 import com.agent.web.audit.ConversationAuditSink;
 import com.agent.web.command.AgentRunCommandCheckpointService;
 import com.agent.web.command.BuiltInWorkflowCommands;
+import com.agent.web.command.CapabilityCommandHandlers;
 import com.agent.web.command.ConversationWorkflowCommandBridge;
 import com.agent.web.command.LocalCommandContextService;
 import com.agent.web.command.WorkspaceCommandRuntimeProvider;
 import com.agent.web.identity.Actor;
 import com.agent.web.identity.ActorResolver;
+import com.agent.web.mcp.installation.McpInstallationService;
+import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspacePermission;
 import com.agent.web.workspace.WorkspaceRecord;
@@ -60,18 +63,23 @@ public class CommandRegistryConfiguration {
             AgentRunService agentRunService,
             ConversationAuditSink auditSink,
             com.agent.web.conversation.ConversationService conversationService,
+            McpInstallationService mcpInstallations,
+            GitHubSkillInstallationService skillInstallations,
             WorkspaceAccessService workspaceAccessService,
             ActorResolver actorResolver,
             Clock harnessClock) {
         return workspace -> createRuntime(
                 properties, workflowBridge, conversationService,
-                agentRunService, auditSink, workspaceAccessService, actorResolver, harnessClock, workspace);
+                mcpInstallations, skillInstallations, agentRunService, auditSink,
+                workspaceAccessService, actorResolver, harnessClock, workspace);
     }
 
     private WorkspaceCommandRuntimeProvider.Runtime createRuntime(
             CommandProperties properties,
             ConversationWorkflowCommandBridge workflowBridge,
             com.agent.web.conversation.ConversationService conversationService,
+            McpInstallationService mcpInstallations,
+            GitHubSkillInstallationService skillInstallations,
             AgentRunService agentRunService,
             ConversationAuditSink auditSink,
             WorkspaceAccessService workspaceAccessService,
@@ -84,6 +92,7 @@ public class CommandRegistryConfiguration {
                 registry,
                 contextService,
                 new AgentRunCommandCheckpointService(agentRunService, auditSink)));
+        definitions.addAll(CapabilityCommandHandlers.definitions(mcpInstallations, skillInstallations));
         definitions.addAll(builtInWorkflows(workflowBridge));
         Path globalDirectory = properties.globalDirectory().isBlank()
                 ? null : Path.of(properties.globalDirectory());
