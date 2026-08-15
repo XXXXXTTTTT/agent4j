@@ -9,6 +9,10 @@ import com.agent.core.command.CommandSource;
 import com.agent.web.mcp.installation.McpInstallationDetails;
 import com.agent.web.mcp.installation.McpInstallationRecord;
 import com.agent.web.mcp.installation.McpInstallationService;
+import com.agent.web.model.ModelConfigurationService;
+import com.agent.web.model.ModelConfigurationSnapshot;
+import com.agent.web.model.ModelEndpointRecord;
+import com.agent.web.model.ModelGroupRecord;
 import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.skill.SkillInstallationRecord;
 
@@ -24,17 +28,21 @@ public final class CapabilityCommandHandlers {
     private CapabilityCommandHandlers() {
     }
 
-    /** 创建 MCP 与 Skill 安装状态查询命令。 */
+    /** 创建 MCP、Skill 与模型配置状态查询命令。 */
     public static List<CommandDefinition> definitions(
             McpInstallationService mcpInstallations,
-            GitHubSkillInstallationService skillInstallations) {
+            GitHubSkillInstallationService skillInstallations,
+            ModelConfigurationService modelConfigurations) {
         Objects.requireNonNull(mcpInstallations, "mcpInstallations 不能为空");
         Objects.requireNonNull(skillInstallations, "skillInstallations 不能为空");
+        Objects.requireNonNull(modelConfigurations, "modelConfigurations 不能为空");
         return List.of(
                 definition("mcp", "MCP", "显示当前工作区的 MCP 安装状态",
                         context -> mcpResult(context, mcpInstallations)),
                 definition("skills", "Skills", "显示当前工作区的 Skill 安装状态",
-                        context -> skillResult(context, skillInstallations)));
+                        context -> skillResult(context, skillInstallations)),
+                definition("models", "Models", "显示当前用户的模型组和端点状态",
+                        context -> modelResult(modelConfigurations)));
     }
 
     private static CommandDefinition definition(
@@ -96,6 +104,41 @@ public final class CapabilityCommandHandlers {
         view.put("scope", installation.scope().name());
         view.put("status", installation.status().name());
         view.put("version", installation.version());
+        return Map.copyOf(view);
+    }
+
+    private static CommandResult modelResult(ModelConfigurationService service) {
+        ModelConfigurationSnapshot snapshot = service.snapshot();
+        List<Map<String, Object>> groups = snapshot.groups().stream()
+                .map(CapabilityCommandHandlers::modelGroupView)
+                .toList();
+        List<Map<String, Object>> endpoints = snapshot.endpoints().stream()
+                .map(CapabilityCommandHandlers::modelEndpointView)
+                .toList();
+        return new CommandResult(CommandResult.Status.COMPLETED, null, "模型配置状态", Map.of(
+                "groupCount", groups.size(),
+                "endpointCount", endpoints.size(),
+                "groups", groups,
+                "endpoints", endpoints));
+    }
+
+    private static Map<String, Object> modelGroupView(ModelGroupRecord group) {
+        return Map.of(
+                "groupId", group.groupId().toString(),
+                "displayName", group.displayName(),
+                "taskType", group.taskType().name(),
+                "endpointIds", group.endpointIds().stream().map(UUID::toString).toList());
+    }
+
+    private static Map<String, Object> modelEndpointView(ModelEndpointRecord endpoint) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("endpointId", endpoint.endpointId().toString());
+        view.put("displayName", endpoint.displayName());
+        view.put("modelId", endpoint.modelId());
+        view.put("capabilities", endpoint.capabilities().stream().map(Enum::name).sorted().toList());
+        view.put("priority", endpoint.priority());
+        view.put("weight", endpoint.weight());
+        view.put("enabled", endpoint.enabled());
         return Map.copyOf(view);
     }
 }

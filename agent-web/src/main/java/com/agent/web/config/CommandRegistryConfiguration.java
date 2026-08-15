@@ -19,6 +19,7 @@ import com.agent.web.command.WorkspaceCommandRuntimeProvider;
 import com.agent.web.identity.Actor;
 import com.agent.web.identity.ActorResolver;
 import com.agent.web.mcp.installation.McpInstallationService;
+import com.agent.web.model.ModelConfigurationService;
 import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspacePermission;
@@ -65,12 +66,13 @@ public class CommandRegistryConfiguration {
             com.agent.web.conversation.ConversationService conversationService,
             McpInstallationService mcpInstallations,
             GitHubSkillInstallationService skillInstallations,
+            ModelConfigurationService modelConfigurations,
             WorkspaceAccessService workspaceAccessService,
             ActorResolver actorResolver,
             Clock harnessClock) {
         return workspace -> createRuntime(
                 properties, workflowBridge, conversationService,
-                mcpInstallations, skillInstallations, agentRunService, auditSink,
+                mcpInstallations, skillInstallations, modelConfigurations, agentRunService, auditSink,
                 workspaceAccessService, actorResolver, harnessClock, workspace);
     }
 
@@ -80,6 +82,7 @@ public class CommandRegistryConfiguration {
             com.agent.web.conversation.ConversationService conversationService,
             McpInstallationService mcpInstallations,
             GitHubSkillInstallationService skillInstallations,
+            ModelConfigurationService modelConfigurations,
             AgentRunService agentRunService,
             ConversationAuditSink auditSink,
             WorkspaceAccessService workspaceAccessService,
@@ -92,7 +95,8 @@ public class CommandRegistryConfiguration {
                 registry,
                 contextService,
                 new AgentRunCommandCheckpointService(agentRunService, auditSink)));
-        definitions.addAll(CapabilityCommandHandlers.definitions(mcpInstallations, skillInstallations));
+        definitions.addAll(CapabilityCommandHandlers.definitions(
+                mcpInstallations, skillInstallations, modelConfigurations));
         definitions.addAll(builtInWorkflows(workflowBridge));
         Path globalDirectory = properties.globalDirectory().isBlank()
                 ? null : Path.of(properties.globalDirectory());
