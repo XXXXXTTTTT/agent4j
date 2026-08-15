@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Objects;
 
 /** 将 Markdown 正文渲染后提交到既有工作流桥接端口。 */
-public final class WorkflowCommandHandler implements CommandHandler {
+public final class WorkflowCommandHandler implements WorkflowPromptCommandHandler {
 
     private final String template;
     private final List<CommandParameter> parameters;
@@ -28,7 +28,16 @@ public final class WorkflowCommandHandler implements CommandHandler {
 
     @Override
     public CommandResult handle(CommandInvocation invocation, CommandContext context) {
-        String rendered = renderer.render(template, parameters, invocation, context);
-        return bridge.submit(invocation, context, rendered);
+        return bridge.submit(invocation, context, renderPrompt(invocation, context));
+    }
+
+    @Override
+    public String renderPrompt(CommandInvocation invocation, CommandContext context) {
+        return renderer.render(template, parameters, invocation, context);
+    }
+
+    @Override
+    public WorkflowCommandBridge workflowBridge() {
+        return bridge;
     }
 }

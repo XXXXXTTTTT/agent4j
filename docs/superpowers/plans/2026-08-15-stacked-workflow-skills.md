@@ -18,14 +18,14 @@
 - Modify: `agent-core/src/main/java/com/agent/core/command/CommandDispatcher.java`
 - Test: `agent-core/src/test/java/com/agent/core/command/CommandDispatcherTest.java`
 
-- [ ] 写失败测试：`/plan /review "修复登录"` 调用一次 bridge，两个模板按顺序拼接，两个调用都接收相同尾部参数。
-- [ ] 运行 `mvn -pl agent-core -Dtest=CommandDispatcherTest test`，确认当前 Dispatcher 因参数数量非法而失败。
-- [ ] 新增渲染接口，保持普通单命令 Handler 契约不变；在 Dispatcher 中预校验链内每个定义的参数与权限，再合并模板并单次提交。
-- [ ] 运行核心测试确认通过。
+- [x] 写失败测试：`/plan /review "修复登录"` 调用一次 bridge，两个模板按顺序拼接，两个调用都接收相同尾部参数。
+- [x] 运行 `mvn -pl agent-core -Dtest=CommandDispatcherTest test`，确认当前 Dispatcher 因参数数量非法而失败。
+- [x] 新增渲染接口，保持普通单命令 Handler 契约不变；在 Dispatcher 中预校验链内每个定义的参数与权限，再合并模板并单次提交。
+- [x] 运行核心测试确认通过。
 
 ### Task 2: 回归与交付
 
-- [ ] 运行 `mvn -pl agent-core -Dtest=SlashCommandParserTest,CommandDispatcherTest,WorkflowCommandHandlerTest test`。
-- [ ] 运行 `mvn -pl agent-web -am -Dtest=ConversationWorkflowCommandBridgeTest,CommandControllerTest -Dsurefire.failIfNoSpecifiedTests=false -Dfrontend.skip=true test`。
-- [ ] 运行 `git diff --check`，只提交本任务文件。
+- [x] 运行 `mvn -pl agent-core -Dtest=SlashCommandParserTest,CommandDispatcherTest,WorkflowCommandHandlerTest test`。
+- [x] 运行 `mvn -pl agent-web -am -Dtest=ConversationWorkflowCommandBridgeTest,CommandControllerTest -Dsurefire.failIfNoSpecifiedTests=false -Dfrontend.skip=true test`。
+- [x] 运行 `git diff --check`，只提交本任务文件。
 - [ ] 提交 `feat(command): compose stacked workflow skills`。
