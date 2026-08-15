@@ -160,6 +160,21 @@ export interface WorkspaceDirectoryListing {
   entries: WorkspaceDirectoryEntry[]
 }
 
+export type WorkspaceFileKind = 'DIRECTORY' | 'FILE'
+export interface WorkspaceFileEntry {
+  name: string
+  path: string
+  kind: WorkspaceFileKind
+  size: number
+  lastModified: string
+}
+export interface WorkspaceFileContent {
+  path: string
+  content: string
+  sha256: string
+  lastModified: string
+}
+
 export type CliRiskLevel = 'READ_ONLY' | 'MUTATING' | 'DESTRUCTIVE'
 
 /** 当前工作区中允许执行的受治理 CLI 命令。 */

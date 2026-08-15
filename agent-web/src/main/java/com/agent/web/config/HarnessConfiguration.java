@@ -25,6 +25,8 @@ import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspaceBootstrap;
 import com.agent.web.workspace.WorkspaceDirectoryBrowser;
 import com.agent.web.workspace.WorkspaceImportService;
+import com.agent.web.workspace.WorkspaceProjectService;
+import com.agent.web.workspace.WorkspaceFileService;
 import com.agent.web.mcp.catalog.OfficialMcpCatalogClient;
 import com.agent.web.mcp.installation.McpInstallationRepository;
 import com.agent.web.mcp.installation.InstalledMcpCatalogProvider;
@@ -330,6 +332,28 @@ public class HarnessConfiguration {
             Clock harnessClock) {
         return new WorkspaceImportService(
                 workspaceAccessService, productionProperties.workspace(), importProperties, harnessClock);
+    }
+
+    /** 创建受配置根目录保护的空项目服务。 */
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    WorkspaceProjectService workspaceProjectService(
+            WorkspaceAccessService workspaceAccessService,
+            ProductionAgentProperties productionProperties,
+            Clock harnessClock) {
+        return new WorkspaceProjectService(
+                workspaceAccessService, productionProperties.workspace(), harnessClock);
+    }
+
+    /** 创建工作区文件树和文本读写服务。 */
+    @Bean
+    @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
+    WorkspaceFileService workspaceFileService(
+            WorkspaceAccessService workspaceAccessService,
+            Environment environment) {
+        long maxBytes = environment.getProperty(
+                "agent.workspace-files.max-file-bytes", Long.class, 10 * 1024 * 1024L);
+        return new WorkspaceFileService(workspaceAccessService, maxBytes);
     }
 
     /** 绑定当前会话的 Run 启动服务。 */
