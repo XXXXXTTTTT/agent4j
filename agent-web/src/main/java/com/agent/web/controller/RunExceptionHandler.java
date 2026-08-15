@@ -9,6 +9,7 @@ import com.agent.web.persistence.JdbcModelConfigurationRepository;
 import com.agent.web.conversation.ConversationService;
 import com.agent.web.workspace.WorkspaceAccessService;
 import com.agent.web.workspace.WorkspaceImportService;
+import com.agent.web.workspace.WorkspaceFileService;
 import com.agent.web.mcp.installation.McpInstallationService;
 import com.agent.web.mcp.installation.McpInstallationConflictException;
 import com.agent.web.mcp.runtime.McpMaterialNotPreparedException;
@@ -143,6 +144,25 @@ public final class RunExceptionHandler {
             RuntimeException exception,
             ServerWebExchange exchange) {
         return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);
+    }
+
+    /** 映射文件乐观并发冲突。 */
+    @ExceptionHandler(WorkspaceFileService.FileConflictException.class)
+    public ResponseEntity<ProblemDetail> workspaceFileConflict(
+            WorkspaceFileService.FileConflictException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.CONFLICT, exception.getMessage(), exchange);
+    }
+
+    /** 映射文件大小与文本格式限制。 */
+    @ExceptionHandler({
+            WorkspaceFileService.FileTooLargeException.class,
+            WorkspaceFileService.BinaryFileException.class
+    })
+    public ResponseEntity<ProblemDetail> workspaceFileContentInvalid(
+            RuntimeException exception,
+            ServerWebExchange exchange) {
+        return problem(HttpStatus.UNPROCESSABLE_ENTITY, exception.getMessage(), exchange);
     }
 
     /** 映射模型 Provider 被引用等配置冲突。 */

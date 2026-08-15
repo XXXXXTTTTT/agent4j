@@ -143,8 +143,8 @@ describe('Workbench', () => {
 
     await user.click(projectTab)
     expect(projectTab).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByLabelText('会话与工作区')).toBeVisible()
-    expect(screen.getByLabelText('会话与工作区')).toHaveAttribute('data-active-context', 'project')
+    expect(screen.getByLabelText('项目资源')).toBeVisible()
+    expect(screen.getByRole('tree', { name: '项目文件' })).toBeVisible()
     expect(screen.getByTestId('workspace-main')).toBeVisible()
 
     await user.click(evidenceTab)
@@ -161,11 +161,11 @@ describe('Workbench', () => {
     expect(screen.getByTestId('workspace-main')).toBeVisible()
   })
 
-  it('在项目侧栏显示未建立运行通道与本地身份占位', async () => {
+  it('在对话侧栏显示未建立运行通道与本地身份占位', async () => {
     const user = userEvent.setup()
     render(<Workbench controller={controller()} conversation={conversationController()} onTerminalReady={() => undefined} />)
 
-    await user.click(screen.getByRole('button', { name: '项目' }))
+    await user.click(screen.getByRole('button', { name: '对话' }))
     expect(screen.getByText('运行通道未连接')).toBeVisible()
     expect(screen.getByText('等待下一次任务运行')).toBeVisible()
     expect(screen.getByText('本地身份')).toBeVisible()

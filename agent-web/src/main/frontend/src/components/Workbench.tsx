@@ -11,6 +11,7 @@ import { TerminalPanel, type TerminalPanelHandle } from './TerminalPanel'
 import { TraceTimeline } from './TraceTimeline'
 import type { UseConversationWorkspaceResult } from '../hooks/useConversationWorkspace'
 import { CapabilityWorkbenchRuntime } from './CapabilityWorkbenchRuntime'
+import { WorkspaceExplorerPanel } from './WorkspaceExplorerPanel'
 
 const CodeDiffPanel = lazy(() => import('./CodeDiffPanel').then((module) => ({
   default: module.CodeDiffPanel,
@@ -155,7 +156,9 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
         )}
         {conversation === undefined ? null : (
           <div id="activity-project-panel" className="workbench-project-column" data-active-context={activeActivity}>
-            <ConversationSidebar controller={conversation} connectionState={belongsToConversation ? controller.connectionState : { trace: null, terminal: null }} activeContext={activeActivity} />
+            {activeActivity === 'project' && conversation.activeWorkspace !== null
+              ? <WorkspaceExplorerPanel workspaceId={conversation.activeWorkspace.workspaceId} />
+              : <ConversationSidebar controller={conversation} connectionState={belongsToConversation ? controller.connectionState : { trace: null, terminal: null }} activeContext={activeActivity} />}
           </div>
         )}
         <main id="activity-conversation-panel" className="conversation-column" data-testid="workspace-main" data-active-context={activeActivity}>
