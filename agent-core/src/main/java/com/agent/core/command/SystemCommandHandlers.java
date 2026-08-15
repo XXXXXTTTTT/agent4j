@@ -1,7 +1,9 @@
 package com.agent.core.command;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /** 内置系统控制命令定义工厂；Dispatcher 不依赖具体命令名称。 */
@@ -25,12 +27,19 @@ public final class SystemCommandHandlers {
                 (invocation, context) -> {
                     String query = invocation.arguments().isEmpty()
                             ? "" : invocation.arguments().getFirst();
-                    String message = registry.search(query).stream()
+                    List<CommandDefinition> matches = registry.search(query).stream()
+                            .sorted(java.util.Comparator.comparing(CommandDefinition::name))
+                            .toList();
+                    String message = matches.stream()
                             .map(CommandDefinition::name)
-                            .sorted()
                             .reduce((left, right) -> left + "\n" + right)
                             .orElse("暂无可用命令");
-                    return CommandResult.success(message);
+                    return new CommandResult(CommandResult.Status.COMPLETED, null, message, Map.of(
+                            "query", query,
+                            "count", matches.size(),
+                            "commands", matches.stream()
+                                    .map(SystemCommandHandlers::commandView)
+                                    .toList()));
                 }));
         definitions.add(definition("context", "上下文", "显示当前上下文统计", List.of(),
                 CommandPermission.VIEWER, (invocation, context) -> contextService.context(context)));
@@ -65,6 +74,24 @@ public final class SystemCommandHandlers {
                 (invocation, context) -> checkpointService.rewind(
                         context, invocation.arguments().getFirst())));
         return List.copyOf(definitions);
+    }
+
+    private static Map<String, Object> commandView(CommandDefinition definition) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("name", definition.name());
+        view.put("displayName", definition.displayName());
+        view.put("description", definition.description());
+        view.put("aliases", definition.aliases());
+        view.put("parameters", definition.parameters().stream()
+                .map(parameter -> Map.of(
+                        "name", parameter.name(),
+                        "description", parameter.description(),
+                        "required", parameter.required()))
+                .toList());
+        view.put("channel", definition.channel().name());
+        view.put("source", definition.source().name());
+        view.put("permission", definition.permission().name());
+        return Map.copyOf(view);
     }
 
     private static CommandDefinition definition(

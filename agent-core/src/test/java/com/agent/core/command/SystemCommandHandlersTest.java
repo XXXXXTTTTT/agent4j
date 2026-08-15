@@ -2,6 +2,7 @@ package com.agent.core.command;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -90,6 +91,36 @@ class SystemCommandHandlersTest {
                 .handler().handle(new CommandInvocation("custom", List.of(), "/custom"), context());
 
         assertThat(result.message()).isEqualTo("custom");
+    }
+
+    @Test
+    void helpReturnsStructuredCommandMetadataForDiscovery() {
+        InMemoryCommandRegistry registry = new InMemoryCommandRegistry();
+        RecordingContextService contextService = new RecordingContextService();
+        List<CommandDefinition> definitions = new ArrayList<>(SystemCommandHandlers.definitions(
+                registry, contextService, (context, checkpoint) -> CommandResult.success("已回滚")));
+        definitions.add(new CommandDefinition(
+                "review", "审查", "审查变更", List.of("code-review"),
+                List.of(new CommandParameter("request", "工作请求", true)),
+                CommandChannel.WORKFLOW_SKILL, CommandSource.BUILT_IN, CommandPermission.OPERATOR,
+                (invocation, context) -> CommandResult.forwarded("已提交")));
+        registry.replace(definitions);
+
+        CommandResult result = registry.find("help").orElseThrow().handler()
+                .handle(new CommandInvocation("help", List.of(), "/help"), context());
+
+        assertThat(result.data()).containsKey("commands");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> commands = (List<Map<String, Object>>) result.data().get("commands");
+        assertThat(commands).anySatisfy(command -> assertThat(command)
+                .containsEntry("name", "review")
+                .containsEntry("description", "审查变更")
+                .containsEntry("channel", "WORKFLOW_SKILL")
+                .containsEntry("permission", "OPERATOR")
+                .containsEntry("aliases", List.of("code-review")));
+        assertThat(commands).anySatisfy(command -> assertThat(command)
+                .containsEntry("name", "help")
+                .containsEntry("channel", "SYSTEM_DIRECTIVE"));
     }
 
     private CommandContext context() {
