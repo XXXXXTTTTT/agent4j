@@ -722,6 +722,7 @@ public class ProductionGraphConfiguration {
                                 PlannerNode.KNOWLEDGE_ROUTE, StateGraph.END,
                                 GUI_ROUTE, "gui",
                                 TOOL_ROUTE, TOOL_ROUTE,
+                                "orchestration-research", "orchestration-research",
                                 CODER_ROUTE, "coder",
                                 PlannerNode.FAILED_ROUTE, StateGraph.END))
                 .addEdge(TOOL_ROUTE, StateGraph.END)

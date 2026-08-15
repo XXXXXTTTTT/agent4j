@@ -2,6 +2,7 @@ package com.agent.web.config;
 
 import com.agent.core.engine.GraphFactory;
 import com.agent.core.engine.AgentState;
+import com.agent.core.engine.GraphRegistry;
 import com.agent.core.engine.StateGraph;
 import com.agent.core.llm.ModelRouter;
 import com.agent.core.memory.MemoryContextProvider;
@@ -28,16 +29,19 @@ import com.agent.sandbox.pty.CommandResult;
 import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -102,6 +106,51 @@ class ProductionGraphConfigurationTest {
                 "/workspace",
                 new DockerTarget.ContainerWorkspaceSource(
                         "agent4j-web-local", "/agent-workspace")));
+    }
+
+    @Test
+    void registersParallelResearchAsPlannerConditionalTarget() throws Exception {
+        try (var orchestrator = new com.agent.web.orchestration.ProductionMultiAgentOrchestrator(
+                new com.agent.core.multiagent.AgentHandoffExecutor(
+                        com.agent.web.orchestration.ProductionMultiAgentOrchestrator.catalog(),
+                        new GraphRegistry(Map.of("unused", () -> {
+                            StateGraph graph = new StateGraph(1);
+                            graph.addNode("unused", state -> state)
+                                    .setEntryPoint("unused")
+                                    .addEdge("unused", StateGraph.END);
+                            return graph;
+                        })),
+                        event -> { }))) {
+            ProductionAgentProperties properties = properties("PTY", "", "");
+            ObjectProvider<com.agent.web.orchestration.ProductionMultiAgentOrchestrator>
+                    orchestratorProvider = mock(ObjectProvider.class);
+            when(orchestratorProvider.getIfAvailable()).thenReturn(orchestrator);
+
+            GraphFactory factory = new ProductionGraphConfiguration().codeAgentGraph(
+                    properties,
+                    new KnowledgeProperties(true, 4_000),
+                    mock(ModelRouter.class),
+                    request -> new com.agent.core.memory.MemoryContext("", 0),
+                    com.agent.core.knowledge.KnowledgeContextProvider.empty(),
+                    mock(SandboxTerminalService.class),
+                    mock(BrowserAutomation.class),
+                    new AstService(),
+                    new WorkspaceSnapshotService(50, 32_000),
+                    RunLogPublisher.noop(),
+                    new com.fasterxml.jackson.databind.ObjectMapper(),
+                    HarnessHookChain.noop(),
+                    com.agent.core.security.SecurityViolationSink.noop(),
+                    new com.agent.core.tool.DefaultToolRegistry(),
+                    new ProductionGraphConfiguration().productionCliCommandCatalog(),
+                    new ProductionGraphConfiguration().workspaceTargetResolver(properties),
+                    mock(com.agent.core.gui.BrowserSessionRegistry.class),
+                    orchestratorProvider);
+
+            try (StateGraph graph = factory.create()) {
+                assertThat(graph.inspectTopology().outgoingTargets().get("planner"))
+                        .contains("orchestration-research");
+            }
+        }
     }
 
     @Test
