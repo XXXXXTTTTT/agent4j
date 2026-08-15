@@ -16,6 +16,13 @@ if ((Get-EnvValue "AGENT_LLM_ENABLED") -ne "true") { throw "AGENT_LLM_ENABLED �
 foreach ($name in @("AGENT_LLM_BASE_URL", "AGENT_LLM_API_KEY", "AGENT_LLM_CODE_MODEL", "AGENT_LLM_VISION_MODEL", "AGENT_LLM_QUICK_CLASSIFICATION_MODEL", "AGENT_LLM_FALLBACK_MODEL")) {
     if ([string]::IsNullOrWhiteSpace((Get-EnvValue $name))) { throw "$name 不能为空" }
 }
+$toolchainsFile = Join-Path $env:USERPROFILE ".m2\toolchains.xml"
+if (-not (Test-Path -LiteralPath $toolchainsFile)) { throw "Java 21 Maven Toolchain 配置不存在: $toolchainsFile" }
+$toolchains = [xml](Get-Content -Raw -LiteralPath $toolchainsFile)
+$jdkHome = $toolchains.toolchains.toolchain.configuration.jdkHome | Select-Object -First 1
+if ([string]::IsNullOrWhiteSpace($jdkHome) -or -not (Test-Path -LiteralPath (Join-Path $jdkHome "bin\java.exe"))) { throw "toolchains.xml 未提供可用 Java 21 JDK" }
+$env:JAVA_HOME = $jdkHome
+$env:Path = "$(Join-Path $jdkHome 'bin');$env:Path"
 
 $evidence = Join-Path $PSScriptRoot "evidence\workspace-development-loop"
 New-Item -ItemType Directory -Force -Path $evidence | Out-Null
@@ -47,7 +54,7 @@ $files = @{
     <groupId>demo</groupId><artifactId>workspace-edd</artifactId><version>1.0.0</version>
     <properties><maven.compiler.release>21</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
     <dependencies><dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>5.10.2</version><scope>test</scope></dependency></dependencies>
-    <build><plugins><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-toolchains-plugin</artifactId><version>3.2.0</version><executions><execution><phase>validate</phase><goals><goal>select-jdk-toolchain</goal></goals><configuration><version>21</version></configuration></execution></executions></plugin><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version></plugin><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.2.5</version></plugin></plugins></build>
+    <build><plugins><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version></plugin><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.2.5</version></plugin></plugins></build>
 </project>
 '@
     "src/main/java/demo/NumberLabel.java" = @'
@@ -108,12 +115,17 @@ if (-not $run.state.variables.'coder.updatedFiles'.Contains("src/main/java/demo/
 $saved = Invoke-Json GET "/api/workspaces/$workspaceId/files/content?path=src/main/java/demo/NumberLabel.java" $null
 $saved | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $evidence "saved-source.json")
 if (-not $saved.content.Contains("sqrt=")) { throw "保存源码缺少 sqrt 实现" }
-curl.exe --silent --show-error --max-time 20 "http://localhost:8080/api/runs/$($final.runId)/events" | Set-Content -LiteralPath (Join-Path $evidence "trace-sse.txt")
-curl.exe --silent --show-error --max-time 20 "http://localhost:8080/api/runs/$($final.runId)/logs" | Set-Content -LiteralPath (Join-Path $evidence "terminal-sse.txt")
-$trace = Get-Content -Raw (Join-Path $evidence "trace-sse.txt")
+$traceSse = Join-Path $evidence "trace-sse.txt"
+curl.exe --silent --show-error --max-time 20 "http://localhost:8080/api/runs/$($final.runId)/events" | Set-Content -LiteralPath $traceSse
+$traceCurlExit = $LASTEXITCODE
+$terminalSse = Join-Path $evidence "terminal-sse.txt"
+curl.exe --silent --show-error --max-time 20 "http://localhost:8080/api/runs/$($final.runId)/logs" | Set-Content -LiteralPath $terminalSse
+$terminalCurlExit = $LASTEXITCODE
+$trace = Get-Content -Raw $traceSse
 foreach ($node in @("planner", "coder", "ops", "reviewer")) { if (-not $trace.Contains($node)) { throw "Trace 缺少节点: $node" } }
-$terminal = Get-Content -Raw (Join-Path $evidence "terminal-sse.txt")
+ $terminal = Get-Content -Raw $terminalSse
 if (-not $terminal.Contains("BUILD SUCCESS")) { throw "终端缺少 BUILD SUCCESS" }
+if (-not $terminal.Contains("Failures: 0")) { throw "终端缺少测试通过结果" }
 
 Push-Location $hostProject
 try {
