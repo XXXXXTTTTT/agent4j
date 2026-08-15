@@ -94,6 +94,7 @@ export function ConversationSidebar({ controller, connectionState, activeContext
       {dialogOpen ? (
         <WorkspaceDialog
           createWorkspace={controller.createWorkspace}
+          createProject={controller.createProject}
           browseWorkspaceDirectories={controller.browseWorkspaceDirectories}
           importWorkspace={controller.importWorkspace}
           importDesktopWorkspace={controller.importDesktopWorkspace}

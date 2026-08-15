@@ -60,8 +60,24 @@ class WorkspaceProjectServiceTest {
                 .hasMessageContaining("已存在");
     }
 
+    @Test
+    void recursivelyRemovesProjectWhenWorkspaceRegistrationFails() throws Exception {
+        FakeRepository repository = new FakeRepository();
+        repository.createFailure = new IllegalStateException("数据库注册失败");
+        WorkspaceAccessService access = new WorkspaceAccessService(
+                repository, temp, Clock.fixed(NOW, ZoneOffset.UTC));
+        WorkspaceProjectService service = new WorkspaceProjectService(
+                access, temp, Clock.fixed(NOW, ZoneOffset.UTC));
+
+        assertThatThrownBy(() -> service.create(
+                new Actor("local", "Local"), "Demo", "failed", "repo"))
+                .isSameAs(repository.createFailure);
+        assertThat(Files.exists(temp.resolve("failed"))).isFalse();
+    }
+
     private static final class FakeRepository implements WorkspaceRepository {
         private WorkspaceRecord created;
+        private RuntimeException createFailure;
 
         @Override
         public Optional<WorkspaceRecord> findWorkspace(UUID workspaceId, String userId) {
@@ -76,6 +92,9 @@ class WorkspaceProjectServiceTest {
         @Override
         public WorkspaceRecord createWorkspace(UUID workspaceId, Actor owner, String displayName,
                 Path workspacePath, String repositoryId, Instant now) {
+            if (createFailure != null) {
+                throw createFailure;
+            }
             created = new WorkspaceRecord(workspaceId, owner.userId(), displayName,
                     workspacePath, repositoryId, WorkspacePermission.OWNER, now, now);
             return created;

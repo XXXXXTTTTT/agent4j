@@ -13,6 +13,11 @@ public interface WorkspaceRepository {
 
     Optional<WorkspaceRecord> findWorkspace(UUID workspaceId, String userId);
 
+    /** 按真实工作区路径查询已注册记录，用于阻止跨用户共享同一物理目录。 */
+    default Optional<WorkspaceRecord> findWorkspaceByPath(Path workspacePath) {
+        return Optional.empty();
+    }
+
     List<WorkspaceRecord> findWorkspaces(String userId);
 
     WorkspaceRecord createWorkspace(

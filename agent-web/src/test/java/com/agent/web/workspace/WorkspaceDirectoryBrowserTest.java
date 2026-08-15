@@ -18,6 +18,7 @@ class WorkspaceDirectoryBrowserTest {
     void listsOnlyRealDirectoriesInsideConfiguredRoot() throws Exception {
         Path root = Files.createDirectory(temp.resolve("root"));
         Files.createDirectory(root.resolve("project"));
+        Files.createDirectory(root.resolve(".agent4j"));
         Files.writeString(root.resolve("README.md"), "readme");
         WorkspaceDirectoryBrowser browser = new WorkspaceDirectoryBrowser(root);
 
@@ -27,6 +28,23 @@ class WorkspaceDirectoryBrowserTest {
         assertThat(listing.parentPath()).isNull();
         assertThat(listing.entries()).extracting(path -> path.getFileName().toString())
                 .containsExactly("project");
+    }
+
+    @Test
+    void hidesManagedDirectoryAtEveryBrowseLevel() throws Exception {
+        Path root = Files.createDirectory(temp.resolve("root"));
+        Path project = Files.createDirectory(root.resolve("project"));
+        Files.createDirectory(project.resolve(".agent4j"));
+        Files.createDirectory(project.resolve("src"));
+        WorkspaceDirectoryBrowser browser = new WorkspaceDirectoryBrowser(root);
+
+        assertThat(browser.browse(root).entries())
+                .extracting(path -> path.getFileName().toString())
+                .doesNotContain(".agent4j");
+        assertThat(browser.browse(project).entries())
+                .extracting(path -> path.getFileName().toString())
+                .containsExactly("src")
+                .doesNotContain(".agent4j");
     }
 
     @Test

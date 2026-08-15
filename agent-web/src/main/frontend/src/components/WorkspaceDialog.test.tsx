@@ -5,6 +5,22 @@ import { describe, expect, it, vi } from 'vitest'
 import { WorkspaceDialog } from './WorkspaceDialog'
 
 describe('WorkspaceDialog', () => {
+  it('创建空项目调用项目接口并在成功后关闭', async () => {
+    const user = userEvent.setup()
+    const createProject = vi.fn(async () => undefined)
+    const onClose = vi.fn()
+    render(<WorkspaceDialog createWorkspace={async () => undefined} createProject={createProject} onClose={onClose} />)
+
+    await user.click(screen.getByRole('tab', { name: '新建空项目' }))
+    await user.type(screen.getByLabelText('工作区名称'), 'Blank')
+    await user.type(screen.getByLabelText('项目目录名'), 'blank-project')
+    await user.type(screen.getByLabelText('仓库标识'), 'blank')
+    await user.click(screen.getByRole('button', { name: '创建空项目' }))
+
+    expect(createProject).toHaveBeenCalledWith({ displayName: 'Blank', directoryName: 'blank-project', repositoryId: 'blank' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('提交精确工作区字段并关闭对话框', async () => {
     const user = userEvent.setup()
     const createWorkspace = vi.fn(async () => undefined)

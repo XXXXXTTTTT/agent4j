@@ -15,7 +15,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.Instant;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
@@ -29,19 +29,27 @@ public final class WorkspaceFileService {
     private final WorkspaceAccessService workspaceAccess;
     private final long maxFileBytes;
     private final WorkspaceFileAuditSink auditSink;
+    private final Clock clock;
 
     public WorkspaceFileService(WorkspaceAccessService workspaceAccess, long maxFileBytes) {
-        this(workspaceAccess, maxFileBytes, WorkspaceFileAuditSink.noop());
+        this(workspaceAccess, maxFileBytes, WorkspaceFileAuditSink.noop(), Clock.systemUTC());
     }
 
     public WorkspaceFileService(WorkspaceAccessService workspaceAccess, long maxFileBytes,
             WorkspaceFileAuditSink auditSink) {
+        this(workspaceAccess, maxFileBytes, auditSink, Clock.systemUTC());
+    }
+
+    /** 创建文件服务并注入审计时间源，生产环境统一由应用时钟提供当前时刻。 */
+    public WorkspaceFileService(WorkspaceAccessService workspaceAccess, long maxFileBytes,
+            WorkspaceFileAuditSink auditSink, Clock clock) {
         this.workspaceAccess = Objects.requireNonNull(workspaceAccess, "workspaceAccess 不能为空");
         if (maxFileBytes <= 0) {
             throw new IllegalArgumentException("maxFileBytes 必须为正数");
         }
         this.maxFileBytes = maxFileBytes;
         this.auditSink = Objects.requireNonNull(auditSink, "auditSink 不能为空");
+        this.clock = Objects.requireNonNull(clock, "clock 不能为空");
     }
 
     /** 列出工作区内一个目录的直接子项。 */
@@ -70,7 +78,7 @@ public final class WorkspaceFileService {
                 .thenComparing(WorkspaceFileEntry::name));
         List<WorkspaceFileEntry> result = List.copyOf(entries);
         auditSink.record(new WorkspaceFileAuditEvent(WorkspaceFileAuditEventType.FILE_LISTED,
-                Instant.now(), userId, workspaceId, relativePath == null ? "" : relativePath, 0, null, "SUCCESS"));
+                clock.instant(), userId, workspaceId, relativePath == null ? "" : relativePath, 0, null, "SUCCESS"));
         return result;
     }
 
@@ -82,7 +90,7 @@ public final class WorkspaceFileService {
         byte[] bytes = readBytes(file);
         WorkspaceFileContent result = content(workspace.workspacePath(), file, decodeUtf8(bytes));
         auditSink.record(new WorkspaceFileAuditEvent(WorkspaceFileAuditEventType.FILE_READ,
-                Instant.now(), userId, workspaceId, result.path(), bytes.length, result.sha256(), "SUCCESS"));
+                clock.instant(), userId, workspaceId, result.path(), bytes.length, result.sha256(), "SUCCESS"));
         return result;
     }
 
@@ -104,7 +112,7 @@ public final class WorkspaceFileService {
             String actual = sha256(readBytes(file));
             if (expectedSha256 != null && !expectedSha256.isBlank() && !actual.equals(expectedSha256)) {
                 auditSink.record(new WorkspaceFileAuditEvent(WorkspaceFileAuditEventType.FILE_CONFLICT,
-                        Instant.now(), userId, workspaceId, relativePath, 0, actual, "CONFLICT"));
+                        clock.instant(), userId, workspaceId, relativePath, 0, actual, "CONFLICT"));
                 throw new FileConflictException(actual);
             }
         } else if (expectedSha256 != null && !expectedSha256.isBlank()) {
@@ -128,7 +136,7 @@ public final class WorkspaceFileService {
         }
         WorkspaceFileContent result = read(workspaceId, userId, relativePath);
         auditSink.record(new WorkspaceFileAuditEvent(WorkspaceFileAuditEventType.FILE_WRITTEN,
-                Instant.now(), userId, workspaceId, result.path(), bytes.length, result.sha256(), "SUCCESS"));
+                clock.instant(), userId, workspaceId, result.path(), bytes.length, result.sha256(), "SUCCESS"));
         return result;
     }
 

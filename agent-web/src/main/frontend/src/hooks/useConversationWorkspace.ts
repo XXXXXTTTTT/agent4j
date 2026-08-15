@@ -4,6 +4,7 @@ import {
   archiveConversation,
   browseWorkspaceDirectories,
   createConversation,
+  createProject,
   createWorkspace,
   getIdentity,
   listConversationTurns,
@@ -35,7 +36,7 @@ import type {
   ModelConfigurationSnapshot,
 } from '../api/contracts'
 import type { SlashCommandCatalog, SlashCommandResult } from '../api/commandApi'
-import type { CreateWorkspaceCommand, ImportDesktopWorkspaceCommand, ImportWorkspaceCommand, OrchestrationMode, RoleModelGroups, UpdateModelEndpointCommand, UpdateModelGroupCommand, UpdateModelProviderCommand } from '../api/conversationApi'
+import type { CreateProjectCommand, CreateWorkspaceCommand, ImportDesktopWorkspaceCommand, ImportWorkspaceCommand, OrchestrationMode, RoleModelGroups, UpdateModelEndpointCommand, UpdateModelGroupCommand, UpdateModelProviderCommand } from '../api/conversationApi'
 
 export interface ConversationWorkspaceApi {
   getIdentity(): Promise<Actor>
@@ -43,6 +44,7 @@ export interface ConversationWorkspaceApi {
   listConversations(workspaceId: string, includeArchived?: boolean): Promise<Conversation[]>
   searchConversations(workspaceId: string, query: string, includeArchived?: boolean): Promise<Conversation[]>
   createWorkspace(command: CreateWorkspaceCommand): Promise<Workspace>
+  createProject?(command: CreateProjectCommand): Promise<Workspace>
   browseWorkspaceDirectories?(path: string): Promise<WorkspaceDirectoryListing>
   importWorkspace?(command: ImportWorkspaceCommand): Promise<Workspace>
   importDesktopWorkspace?(command: ImportDesktopWorkspaceCommand): Promise<Workspace>
@@ -71,6 +73,7 @@ const DEFAULT_API: ConversationWorkspaceApi = {
   listConversations: (workspaceId, includeArchived) => listConversations(workspaceId, includeArchived),
   searchConversations: (workspaceId, query, includeArchived) => searchConversations(workspaceId, query, includeArchived),
   createWorkspace: (command) => createWorkspace(command),
+  createProject: (command) => createProject(command),
   browseWorkspaceDirectories: (path) => browseWorkspaceDirectories(path),
   importWorkspace: (command) => importWorkspace(command),
   importDesktopWorkspace: (command) => importDesktopWorkspace(command),
@@ -112,6 +115,7 @@ export interface UseConversationWorkspaceResult {
   modelConfiguration: ModelConfigurationSnapshot
   selectWorkspace(workspaceId: string): Promise<void>
   createWorkspace(command: CreateWorkspaceCommand): Promise<void>
+  createProject?(command: CreateProjectCommand): Promise<void>
   browseWorkspaceDirectories(path: string): Promise<WorkspaceDirectoryListing>
   importWorkspace(command: ImportWorkspaceCommand): Promise<void>
   importDesktopWorkspace(command: ImportDesktopWorkspaceCommand): Promise<void>
@@ -293,6 +297,20 @@ export function useConversationWorkspace(
     setError(null)
     try {
       const created = await apiRef.current.createWorkspace(command)
+      setWorkspaces((items) => [created, ...items.filter((item) => item.workspaceId !== created.workspaceId)])
+      await selectWorkspace(created.workspaceId)
+    } catch (failure) {
+      setError(asError(failure))
+      throw failure
+    }
+  }, [selectWorkspace])
+
+  const createProjectEntry = useCallback(async (command: CreateProjectCommand): Promise<void> => {
+    const create = apiRef.current.createProject
+    if (create === undefined) throw new Error('空项目创建接口未配置')
+    setError(null)
+    try {
+      const created = await create(command)
       setWorkspaces((items) => [created, ...items.filter((item) => item.workspaceId !== created.workspaceId)])
       await selectWorkspace(created.workspaceId)
     } catch (failure) {
@@ -488,7 +506,7 @@ export function useConversationWorkspace(
   return {
     identity, workspaces, activeWorkspace, conversations, activeConversation, turns, searchQuery,
     loading, submitting, error, includeArchived, selectWorkspace, selectConversation, search, toggleArchived,
-    createConversation: create, createWorkspace: createWorkspaceEntry,
+    createConversation: create, createWorkspace: createWorkspaceEntry, createProject: createProjectEntry,
     browseWorkspaceDirectories: browseWorkspaceDirectoryEntries,
     importWorkspace: importWorkspaceEntry,
     importDesktopWorkspace: importDesktopWorkspaceEntry,

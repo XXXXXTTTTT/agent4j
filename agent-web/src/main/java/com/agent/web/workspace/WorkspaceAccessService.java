@@ -44,11 +44,52 @@ public final class WorkspaceAccessService {
         Objects.requireNonNull(actor, "actor 不能为空");
         requireText(displayName, "displayName");
         requireText(repositoryId, "repositoryId");
+        Path validatedPath = validateWorkspacePath(Path.of(workspacePath));
+        if (validatedPath.equals(configuredRoot)) {
+            throw new IllegalArgumentException("配置工作区根目录不能注册为普通工作区");
+        }
+        Path managedRoot = configuredRoot.resolve(".agent4j").normalize();
+        if (validatedPath.equals(managedRoot) || validatedPath.startsWith(managedRoot)) {
+            throw new IllegalArgumentException("配置工作区管理目录不能注册为普通工作区");
+        }
+        repository.findWorkspaceByPath(validatedPath)
+                .ifPresent(existing -> {
+                    String ownerHint = existing.ownerUserId().equals(actor.userId())
+                            ? "" : "，原由其他用户注册";
+                    throw new IllegalArgumentException("工作区路径已注册" + ownerHint);
+                });
+        return createRecord(actor, workspaceId, displayName, validatedPath, repositoryId);
+    }
+
+    /** 为 ZIP 导入发布的受限目录创建工作区记录；普通请求不能使用管理目录。 */
+    WorkspaceRecord createImported(
+            Actor actor,
+            UUID workspaceId,
+            String displayName,
+            String workspacePath,
+            String repositoryId) {
+        Objects.requireNonNull(actor, "actor 不能为空");
+        requireText(displayName, "displayName");
+        requireText(repositoryId, "repositoryId");
+        Path validatedPath = validateWorkspacePath(Path.of(workspacePath));
+        Path importsRoot = configuredRoot.resolve(".agent4j").resolve("imports").normalize();
+        if (!validatedPath.startsWith(importsRoot) || validatedPath.equals(importsRoot)) {
+            throw new IllegalArgumentException("导入工作区路径必须位于受控导入目录内");
+        }
+        return createRecord(actor, workspaceId, displayName, validatedPath, repositoryId);
+    }
+
+    private WorkspaceRecord createRecord(
+            Actor actor, UUID workspaceId, String displayName, Path workspacePath, String repositoryId) {
+        repository.findWorkspaceByPath(workspacePath)
+                .ifPresent(existing -> {
+                    throw new IllegalArgumentException("工作区路径已注册");
+                });
         return repository.createWorkspace(
                 Objects.requireNonNull(workspaceId, "workspaceId 不能为空"),
                 actor,
                 displayName.trim(),
-                validateWorkspacePath(Path.of(workspacePath)),
+                workspacePath,
                 repositoryId.trim(),
                 clock.instant());
     }

@@ -1,23 +1,25 @@
 import { ArrowLeft, ChevronRight, FolderOpen, FolderPlus, LoaderCircle, Upload, X } from 'lucide-react'
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 
-import type { CreateWorkspaceCommand, ImportDesktopWorkspaceCommand, ImportWorkspaceCommand } from '../api/conversationApi'
+import type { CreateProjectCommand, CreateWorkspaceCommand, ImportDesktopWorkspaceCommand, ImportWorkspaceCommand } from '../api/conversationApi'
 import type { WorkspaceDirectoryListing } from '../api/contracts'
 
 interface WorkspaceDialogProps {
   createWorkspace(command: CreateWorkspaceCommand): Promise<void>
+  createProject?(command: CreateProjectCommand): Promise<void>
   browseWorkspaceDirectories?(path: string): Promise<WorkspaceDirectoryListing>
   importWorkspace?(command: ImportWorkspaceCommand): Promise<void>
   importDesktopWorkspace?(command: ImportDesktopWorkspaceCommand): Promise<void>
   onClose(): void
 }
 
-type WorkspaceSource = 'mounted' | 'import'
+type WorkspaceSource = 'mounted' | 'project' | 'import'
 
 /** 选择受控挂载目录或导入浏览器选择的外部项目文件夹。 */
-export function WorkspaceDialog({ createWorkspace, browseWorkspaceDirectories, importWorkspace, importDesktopWorkspace, onClose }: WorkspaceDialogProps) {
+export function WorkspaceDialog({ createWorkspace, createProject, browseWorkspaceDirectories, importWorkspace, importDesktopWorkspace, onClose }: WorkspaceDialogProps) {
   const [source, setSource] = useState<WorkspaceSource>('mounted')
   const [displayName, setDisplayName] = useState('')
+  const [directoryName, setDirectoryName] = useState('')
   const [workspacePath, setWorkspacePath] = useState(() => browseWorkspaceDirectories === undefined ? '' : '/agent-workspace')
   const [repositoryId, setRepositoryId] = useState('')
   const [directory, setDirectory] = useState<WorkspaceDirectoryListing | null>(null)
@@ -60,7 +62,15 @@ export function WorkspaceDialog({ createWorkspace, browseWorkspaceDirectories, i
     setSubmitting(true)
     setError(null)
     try {
-      if (source === 'import') {
+      if (source === 'project') {
+        if (createProject === undefined) throw new Error('空项目创建接口未配置')
+        const directory = directoryName.trim()
+        if (directory.length === 0) {
+          setError(new Error('请填写项目目录名'))
+          return
+        }
+        await createProject({ displayName: name, directoryName: directory, repositoryId: repository })
+      } else if (source === 'import') {
         if (desktopArchive === null && files.length === 0) {
           setError(new Error('请选择要导入的文件夹'))
           return
@@ -128,6 +138,9 @@ export function WorkspaceDialog({ createWorkspace, browseWorkspaceDirectories, i
           </button>
         </header>
         <div className="workspace-source-tabs" role="tablist" aria-label="工作区来源">
+          <button type="button" role="tab" aria-selected={source === 'project'} onClick={() => setSource('project')} disabled={submitting}>
+            <FolderPlus aria-hidden="true" size={14} />新建空项目
+          </button>
           <button type="button" role="tab" aria-selected={source === 'mounted'} onClick={() => setSource('mounted')} disabled={submitting}>
             <FolderOpen aria-hidden="true" size={14} />选择已挂载项目
           </button>
@@ -138,7 +151,13 @@ export function WorkspaceDialog({ createWorkspace, browseWorkspaceDirectories, i
         <form onSubmit={(event) => void submit(event)}>
           <label className="field-label" htmlFor="workspace-display-name">工作区名称</label>
           <input id="workspace-display-name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} autoFocus required />
-          {source === 'mounted' ? (
+          {source === 'project' ? (
+            <>
+              <label className="field-label" htmlFor="workspace-directory-name">项目目录名</label>
+              <input id="workspace-directory-name" value={directoryName} onChange={(event) => setDirectoryName(event.target.value)} placeholder="my-project" required />
+              <p className="workspace-dialog-hint">将在受控 Agent 工作区根目录创建空项目，并自动打开新工作区。</p>
+            </>
+          ) : source === 'mounted' ? (
             <>
               <label className="field-label" htmlFor="workspace-path">工作区路径</label>
               <input id="workspace-path" value={workspacePath} onChange={(event) => setWorkspacePath(event.target.value)} placeholder="/agent-workspace/project" required />
@@ -197,7 +216,7 @@ export function WorkspaceDialog({ createWorkspace, browseWorkspaceDirectories, i
             <button type="button" className="secondary-command" onClick={onClose} disabled={submitting}>取消</button>
             <button type="submit" className="primary-command workspace-dialog-submit" disabled={submitting}>
               {submitting ? <LoaderCircle className="workspace-directory-spinner" aria-hidden="true" size={15} /> : source === 'import' ? <Upload aria-hidden="true" size={15} /> : <FolderPlus aria-hidden="true" size={15} />}
-              {submitting ? '导入中' : source === 'import' ? '导入并创建' : '创建工作区'}
+              {submitting ? (source === 'project' ? '创建中' : '导入中') : source === 'project' ? '创建空项目' : source === 'import' ? '导入并创建' : '创建工作区'}
             </button>
           </footer>
         </form>

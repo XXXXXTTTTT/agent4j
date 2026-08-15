@@ -82,6 +82,31 @@ public final class JdbcConversationRepository implements WorkspaceRepository, Co
                 .optional();
     }
 
+    /** 查询路径归属，不依赖当前用户成员关系，避免不同用户注册同一物理目录。 */
+    @Override
+    public Optional<WorkspaceRecord> findWorkspaceByPath(Path workspacePath) {
+        Objects.requireNonNull(workspacePath, "workspacePath 不能为空");
+        return jdbcClient.sql("""
+                select workspace_id, owner_user_id, display_name, workspace_path,
+                       repository_id, created_at, updated_at
+                from agent_workspaces
+                where workspace_path = :workspacePath
+                order by workspace_id
+                limit 1
+                """)
+                .param("workspacePath", workspacePath.toString())
+                .query((resultSet, rowNumber) -> new WorkspaceRecord(
+                        resultSet.getObject("workspace_id", UUID.class),
+                        resultSet.getString("owner_user_id"),
+                        resultSet.getString("display_name"),
+                        Path.of(resultSet.getString("workspace_path")),
+                        resultSet.getString("repository_id"),
+                        WorkspacePermission.OWNER,
+                        resultSet.getTimestamp("created_at").toInstant(),
+                        resultSet.getTimestamp("updated_at").toInstant()))
+                .optional();
+    }
+
     /** 创建用户、工作区和 OWNER 成员关系。 */
     @Override
     public WorkspaceRecord createWorkspace(

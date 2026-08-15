@@ -78,6 +78,24 @@ foreach ($entry in $files.GetEnumerator()) {
     if ($result.path -ne $entry.Key) { throw "文件写入响应路径不正确: $($entry.Key)" }
 }
 
+$rootListing = @(Invoke-Json GET "/api/workspaces/$workspaceId/files" $null)
+if (-not ($rootListing | Where-Object { $_.path -eq "src" -and $_.kind -eq "DIRECTORY" })) {
+    throw "文件树根目录缺少 src 目录"
+}
+$nestedListing = @(Invoke-Json GET "/api/workspaces/$workspaceId/files?path=src/main/java/demo" $null)
+if (-not ($nestedListing | Where-Object { $_.path -eq "src/main/java/demo/NumberLabel.java" -and $_.kind -eq "FILE" })) {
+    throw "文件树嵌套目录缺少 NumberLabel.java"
+}
+$initialSource = Invoke-Json GET "/api/workspaces/$workspaceId/files/content?path=src/main/java/demo/NumberLabel.java" $null
+if ([string]::IsNullOrWhiteSpace($initialSource.sha256)) { throw "文件读取响应缺少 SHA-256" }
+try {
+    Invoke-Json PUT "/api/workspaces/$workspaceId/files/content" @{ path = "src/main/java/demo/NumberLabel.java"; content = $files["src/main/java/demo/NumberLabel.java"] + "`n"; expectedSha256 = "stale-sha" } | Out-Null
+    throw "过期 SHA 写入没有被拒绝"
+} catch {
+    if ($_.Exception.Response -eq $null -or [int]$_.Exception.Response.StatusCode -ne 409) { throw }
+}
+$initialSource | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $evidence "initial-source.json")
+
 New-Item -ItemType Directory -Force -Path $hostProject | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $hostProject "src\main\java\demo") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $hostProject "src\test\java\demo") | Out-Null

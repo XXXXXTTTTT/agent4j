@@ -360,10 +360,11 @@ public class HarnessConfiguration {
     WorkspaceFileService workspaceFileService(
             WorkspaceAccessService workspaceAccessService,
             Environment environment,
-            WorkspaceFileAuditSink auditSink) {
+            WorkspaceFileAuditSink auditSink,
+            Clock harnessClock) {
         long maxBytes = environment.getProperty(
                 "agent.workspace-files.max-file-bytes", Long.class, 10 * 1024 * 1024L);
-        return new WorkspaceFileService(workspaceAccessService, maxBytes, auditSink);
+        return new WorkspaceFileService(workspaceAccessService, maxBytes, auditSink, harnessClock);
     }
 
     /** 绑定当前会话的 Run 启动服务。 */

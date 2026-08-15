@@ -177,6 +177,8 @@ export async function listWorkspaces(fetcher: typeof fetch = globalThis.fetch): 
 
 export interface CreateWorkspaceCommand { displayName: string; workspacePath: string; repositoryId: string }
 
+export interface CreateProjectCommand { displayName: string; directoryName: string; repositoryId: string }
+
 export async function createWorkspace(command: CreateWorkspaceCommand, fetcher: typeof fetch = globalThis.fetch): Promise<Workspace> {
   const body = {
     displayName: nonBlankStringAt(command.displayName, 'displayName'),
@@ -184,6 +186,15 @@ export async function createWorkspace(command: CreateWorkspaceCommand, fetcher: 
     repositoryId: nonBlankStringAt(command.repositoryId, 'repositoryId'),
   }
   return decodeWorkspace(await requestJson('/api/workspaces', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, fetcher))
+}
+
+export async function createProject(command: CreateProjectCommand, fetcher: typeof fetch = globalThis.fetch): Promise<Workspace> {
+  const body = {
+    displayName: nonBlankStringAt(command.displayName, 'displayName'),
+    directoryName: nonBlankStringAt(command.directoryName, 'directoryName'),
+    repositoryId: nonBlankStringAt(command.repositoryId, 'repositoryId'),
+  }
+  return decodeWorkspace(await requestJson('/api/workspaces/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, fetcher))
 }
 
 export async function browseWorkspaceDirectories(path = '/agent-workspace', fetcher: typeof fetch = globalThis.fetch): Promise<WorkspaceDirectoryListing> {

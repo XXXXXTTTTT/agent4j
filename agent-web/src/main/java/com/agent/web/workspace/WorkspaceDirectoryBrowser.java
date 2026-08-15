@@ -31,10 +31,17 @@ public final class WorkspaceDirectoryBrowser {
         if (!current.startsWith(configuredRoot)) {
             throw new IllegalArgumentException("workspacePath 必须位于配置工作区内");
         }
+        Path managedRoot = configuredRoot.resolve(".agent4j").normalize();
+        if (current.equals(managedRoot) || current.startsWith(managedRoot)) {
+            throw new IllegalArgumentException("workspacePath 不能访问配置工作区管理目录");
+        }
         List<Path> entries = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(current)) {
             for (Path entry : stream) {
                 if (!Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) {
+                    continue;
+                }
+                if (entry.getFileName().toString().equals(".agent4j")) {
                     continue;
                 }
                 try {

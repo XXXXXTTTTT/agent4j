@@ -167,7 +167,7 @@ public final class WorkspaceImportService {
             moveAtomically(stagingDirectory, finalDirectory);
             published = true;
             ensureGitWorkTree(finalDirectory);
-            WorkspaceRecord result = workspaceAccess.create(
+            WorkspaceRecord result = workspaceAccess.createImported(
                     actor, workspaceId, displayName, finalDirectory.toString(), repositoryId);
             AUDIT.info("WORKSPACE_IMPORT_COMPLETED user={} workspace={} files={} archiveBytes={} extractedBytes={} status=COMPLETED time={}",
                     actor.userId(), workspaceId, files, archiveBytes, extractedBytes, beijingNow());

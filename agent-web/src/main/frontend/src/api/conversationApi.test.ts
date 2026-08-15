@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   createConversation,
+  createProject,
   createWorkspace,
   browseWorkspaceDirectories,
   decodeActor,
@@ -155,6 +156,16 @@ describe('Conversation API HTTP 请求', () => {
     }, fetcher)).rejects.toMatchObject({
       message: 'workspacePath 必须位于配置工作区内',
       status: 400,
+    })
+  })
+
+  it('通过空项目接口创建项目并返回新工作区', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response(WORKSPACE, 201))
+
+    await expect(createProject({ displayName: 'Demo', directoryName: 'demo', repositoryId: 'demo' }, fetcher)).resolves.toEqual(WORKSPACE)
+    expect(fetcher).toHaveBeenCalledWith('/api/workspaces/projects', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayName: 'Demo', directoryName: 'demo', repositoryId: 'demo' }),
     })
   })
 

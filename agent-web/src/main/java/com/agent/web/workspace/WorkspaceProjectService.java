@@ -9,8 +9,12 @@ import org.eclipse.jgit.api.errors.GitAPIException;
 
 import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Clock;
 import java.util.Objects;
 
@@ -63,12 +67,36 @@ public final class WorkspaceProjectService {
                     clock.instant(), actor.userId(), workspace.workspaceId(), directoryName, 0, null, "SUCCESS"));
             return workspace;
         } catch (RuntimeException exception) {
-            try {
-                Files.deleteIfExists(project);
-            } catch (IOException cleanupFailure) {
-                exception.addSuppressed(cleanupFailure);
-            }
+            deleteTree(project, exception);
             throw exception;
+        }
+    }
+
+    /** 注册失败时递归删除已初始化的 Git 工作树，避免留下半成品项目。 */
+    private static void deleteTree(Path root, RuntimeException original) {
+        if (root == null || Files.notExists(root, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        try {
+            Files.walkFileTree(root, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                    Files.deleteIfExists(file);
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult postVisitDirectory(Path directory, IOException exception)
+                        throws IOException {
+                    if (exception != null) {
+                        throw exception;
+                    }
+                    Files.deleteIfExists(directory);
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException cleanupFailure) {
+            original.addSuppressed(cleanupFailure);
         }
     }
 

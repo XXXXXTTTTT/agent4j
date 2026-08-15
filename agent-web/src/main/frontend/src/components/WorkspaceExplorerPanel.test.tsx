@@ -17,6 +17,9 @@ describe('WorkspaceExplorerPanel', () => {
 
   it('loads a project tree, opens a file and navigates it with ArrowDown', async () => {
     const user = userEvent.setup()
+    api.listWorkspaceFiles.mockImplementation(async (_workspaceId: string, path = '') => path === ''
+      ? [{ name: 'src', path: 'src', kind: 'DIRECTORY' as const, size: 0, lastModified: 'now' }, { name: 'README.md', path: 'README.md', kind: 'FILE' as const, size: 4, lastModified: 'now' }]
+      : [])
     render(<WorkspaceExplorerPanel workspaceId="ws-1" />)
     const readme = await screen.findByRole('treeitem', { name: /README\.md/ })
     expect(screen.getByRole('tree', { name: '项目文件' })).toBeVisible()
@@ -36,5 +39,41 @@ describe('WorkspaceExplorerPanel', () => {
     await user.type(editor, 'new')
     await user.click(screen.getByRole('button', { name: '保存文件' }))
     expect(api.writeWorkspaceFile).toHaveBeenCalledWith('ws-1', 'README.md', 'new', 'sha-1')
+  })
+
+  it('按目录路径懒加载并展开折叠目录，维护 aria-expanded', async () => {
+    const user = userEvent.setup()
+    api.listWorkspaceFiles.mockImplementation(async (_workspaceId: string, path = '') => path === ''
+      ? [{ name: 'src', path: 'src', kind: 'DIRECTORY' as const, size: 0, lastModified: 'now' }]
+      : [{ name: 'main.java', path: 'src/main.java', kind: 'FILE' as const, size: 12, lastModified: 'now' }])
+    render(<WorkspaceExplorerPanel workspaceId="ws-1" />)
+
+    const src = await screen.findByRole('treeitem', { name: /src/ })
+    expect(src).toHaveAttribute('aria-expanded', 'false')
+    await user.click(src)
+    expect(await screen.findByRole('treeitem', { name: /main\.java/ })).toBeVisible()
+    expect(src).toHaveAttribute('aria-expanded', 'true')
+    expect(api.listWorkspaceFiles).toHaveBeenCalledWith('ws-1', 'src')
+
+    await user.click(src)
+    expect(screen.queryByRole('treeitem', { name: /main\.java/ })).not.toBeInTheDocument()
+    expect(src).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('使用键盘右箭头展开、左箭头折叠目录并将焦点移入子项', async () => {
+    const user = userEvent.setup()
+    api.listWorkspaceFiles.mockImplementation(async (_workspaceId: string, path = '') => path === ''
+      ? [{ name: 'src', path: 'src', kind: 'DIRECTORY' as const, size: 0, lastModified: 'now' }]
+      : [{ name: 'main.java', path: 'src/main.java', kind: 'FILE' as const, size: 12, lastModified: 'now' }])
+    render(<WorkspaceExplorerPanel workspaceId="ws-1" />)
+    const src = await screen.findByRole('treeitem', { name: /src/ })
+    src.focus()
+    await user.keyboard('{ArrowRight}')
+    const child = await screen.findByRole('treeitem', { name: /main\.java/ })
+    expect(src).toHaveAttribute('aria-expanded', 'true')
+    await vi.waitFor(() => expect(child).toHaveFocus())
+    await user.keyboard('{ArrowLeft}')
+    expect(src).toHaveAttribute('aria-expanded', 'false')
+    expect(src).toHaveFocus()
   })
 })

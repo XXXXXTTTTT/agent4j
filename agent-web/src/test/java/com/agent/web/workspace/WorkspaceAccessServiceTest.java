@@ -48,8 +48,67 @@ class WorkspaceAccessServiceTest {
                 .hasMessageContaining("现有目录");
     }
 
+    @Test
+    void rejectsConfiguredRootWhenCreatingOrdinaryWorkspace() throws Exception {
+        Path root = Files.createTempDirectory("agent4j-root");
+        FakeRepository repository = new FakeRepository();
+        WorkspaceAccessService service = new WorkspaceAccessService(
+                repository, root, Clock.fixed(NOW, ZoneOffset.UTC));
+
+        assertThatThrownBy(() -> service.create(
+                new Actor("local", "Local"), UUID.randomUUID(), "Root", root.toString(), "repo"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("配置工作区根目录不能注册为普通工作区");
+    }
+
+    @Test
+    void rejectsPathRegisteredByAnotherUser() throws Exception {
+        Path root = Files.createTempDirectory("agent4j-root");
+        Path project = Files.createDirectory(root.resolve("project"));
+        FakeRepository repository = new FakeRepository();
+        repository.pathWorkspace = new WorkspaceRecord(
+                WORKSPACE_ID, "other", "Project", project, "repo", WorkspacePermission.OWNER,
+                NOW, NOW);
+        WorkspaceAccessService service = new WorkspaceAccessService(
+                repository, root, Clock.fixed(NOW, ZoneOffset.UTC));
+
+        assertThatThrownBy(() -> service.create(
+                new Actor("local", "Local"), UUID.randomUUID(), "Project", project.toString(), "repo"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("其他用户注册");
+    }
+
+    @Test
+    void rejectsManagedDirectoryAndAnyDuplicatePhysicalPath() throws Exception {
+        Path root = Files.createTempDirectory("agent4j-root");
+        Path managed = Files.createDirectory(root.resolve(".agent4j"));
+        FakeRepository repository = new FakeRepository();
+        WorkspaceAccessService service = new WorkspaceAccessService(
+                repository, root, Clock.fixed(NOW, ZoneOffset.UTC));
+
+        assertThatThrownBy(() -> service.create(
+                new Actor("local", "Local"), UUID.randomUUID(), "Managed", managed.toString(), "repo"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("管理目录");
+
+        Path project = Files.createDirectory(root.resolve("project"));
+        repository.pathWorkspace = new WorkspaceRecord(
+                WORKSPACE_ID, "local", "Project", project, "repo", WorkspacePermission.OWNER,
+                NOW, NOW);
+        assertThatThrownBy(() -> service.create(
+                new Actor("local", "Local"), UUID.randomUUID(), "Duplicate", project.toString(), "other-repo"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("已注册");
+    }
+
     private static final class FakeRepository implements WorkspaceRepository {
         private WorkspaceRecord workspace;
+        private WorkspaceRecord pathWorkspace;
+
+        @Override
+        public Optional<WorkspaceRecord> findWorkspaceByPath(Path workspacePath) {
+            return Optional.ofNullable(pathWorkspace);
+        }
 
         @Override
         public Optional<WorkspaceRecord> findWorkspace(UUID workspaceId, String userId) {
