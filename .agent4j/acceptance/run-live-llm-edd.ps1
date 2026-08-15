@@ -42,11 +42,6 @@ if ($env:AGENT_LLM_ENABLED -ne "true") {
     throw "AGENT_LLM_ENABLED 必须精确为 true"
 }
 
-$mavenVersion = (& mvn -version 2>&1 | Out-String)
-if ($mavenVersion -notmatch 'Java version:\s+21(?:\D|$)') {
-    throw "真实 LLM EDD 要求 Maven 使用 Java 21。当前 Maven 环境为:`n$mavenVersion"
-}
-
 & mvn -pl agent-eval -am '-Dgroups=edd' '-Dtest=LlmEddTest' '-Dsurefire.failIfNoSpecifiedTests=false' test
 if ($LASTEXITCODE -ne 0) {
     throw "真实 LLM EDD 失败: exitCode=$LASTEXITCODE"

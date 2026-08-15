@@ -9,11 +9,6 @@ $fixture = Join-Path $PSScriptRoot "square-root-fix"
 $evidence = Join-Path $PSScriptRoot "evidence"
 New-Item -ItemType Directory -Force -Path $evidence | Out-Null
 
-$mavenVersion = (& mvn -version 2>&1 | Out-String)
-if ($mavenVersion -notmatch 'Java version:\s+21(?:\D|$)') {
-    throw "验收夹具要求 Maven 使用 Java 21。当前 Maven 环境为:`n$mavenVersion"
-}
-
 $fixturePom = @'
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
@@ -37,6 +32,22 @@ $fixturePom = @'
     </dependencies>
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-toolchains-plugin</artifactId>
+                <version>3.2.0</version>
+                <executions>
+                    <execution>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>select-jdk-toolchain</goal>
+                        </goals>
+                        <configuration>
+                            <version>21</version>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>

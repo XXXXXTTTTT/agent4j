@@ -33,6 +33,25 @@ Showcase: 将真实截图保存为 docs/assets/workbench-showcase.png 后，取�
 
 本地模式先在宿主机编译 `agent-web`，再由 `Dockerfile.local` 启动已生成的 Jar，并挂载 Docker Socket 供沙箱调用：
 
+项目通过 Maven Toolchains 为编译和测试选择 Java 21。因此，`mvn -version` 显示 Maven 自身运行在 Java 17 时，项目仍会使用已配置的 Java 21 JDK。若 Maven 未自动发现 Java 21，请创建 `%USERPROFILE%\.m2\toolchains.xml`：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<toolchains>
+    <toolchain>
+        <type>jdk</type>
+        <provides>
+            <version>21</version>
+        </provides>
+        <configuration>
+            <jdkHome>C:\path\to\jdk-21</jdkHome>
+        </configuration>
+    </toolchain>
+</toolchains>
+```
+
+`jdkHome` 必须替换为本机 Java 21 JDK 根目录。该目录下应直接包含 `bin\java.exe`，不能填写 JRE 目录。
+
 ```powershell
 if (!(Test-Path .env)) { Copy-Item .env.example .env }
 mvn -pl agent-web -am package -DskipTests
