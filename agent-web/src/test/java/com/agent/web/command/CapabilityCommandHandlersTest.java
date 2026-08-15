@@ -18,8 +18,12 @@ import com.agent.web.model.ModelGroupRecord;
 import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.skill.SkillInstallationRecord;
 import com.agent.web.skill.SkillInstallationStatus;
+import com.agent.web.workspace.WorkspaceAccessService;
+import com.agent.web.workspace.WorkspacePermission;
+import com.agent.web.workspace.WorkspaceRecord;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -61,7 +65,8 @@ class CapabilityCommandHandlersTest {
         when(skillInstallations.list(WORKSPACE_ID)).thenReturn(List.of(skill));
         InMemoryCommandRegistry registry = new InMemoryCommandRegistry();
         registry.replace(CapabilityCommandHandlers.definitions(
-                mcpInstallations, skillInstallations, modelConfigurations));
+                mcpInstallations, skillInstallations, modelConfigurations,
+                mock(WorkspaceAccessService.class)));
         CommandDispatcher dispatcher = new CommandDispatcher(
                 registry, (definition, context) -> CommandAuthorizationDecision.allow(), event -> { });
         CommandContext context = new CommandContext("actor-1", WORKSPACE_ID.toString(), "conversation-1");
@@ -96,7 +101,8 @@ class CapabilityCommandHandlersTest {
                         List.of(endpointId), NOW, NOW))));
         InMemoryCommandRegistry registry = new InMemoryCommandRegistry();
         registry.replace(CapabilityCommandHandlers.definitions(
-                mcpInstallations, skillInstallations, modelConfigurations));
+                mcpInstallations, skillInstallations, modelConfigurations,
+                mock(WorkspaceAccessService.class)));
         CommandDispatcher dispatcher = new CommandDispatcher(
                 registry, (definition, context) -> CommandAuthorizationDecision.allow(), event -> { });
 
@@ -130,7 +136,8 @@ class CapabilityCommandHandlersTest {
         ModelConfigurationService modelConfigurations = mock(ModelConfigurationService.class);
         InMemoryCommandRegistry registry = new InMemoryCommandRegistry();
         registry.replace(CapabilityCommandHandlers.definitions(
-                mcpInstallations, skillInstallations, modelConfigurations));
+                mcpInstallations, skillInstallations, modelConfigurations,
+                mock(WorkspaceAccessService.class)));
         CommandDispatcher dispatcher = new CommandDispatcher(
                 registry, (definition, context) -> CommandAuthorizationDecision.allow(), event -> { });
 
@@ -151,6 +158,35 @@ class CapabilityCommandHandlersTest {
         assertThat(agents).anySatisfy(agent -> assertThat(agent)
                 .containsEntry("agentId", "verifier")
                 .containsEntry("graphId", "multiagent-verifier"));
+    }
+
+    @Test
+    void showsAuthorizedCurrentWorkspaceDetails() {
+        McpInstallationService mcpInstallations = mock(McpInstallationService.class);
+        GitHubSkillInstallationService skillInstallations = mock(GitHubSkillInstallationService.class);
+        ModelConfigurationService modelConfigurations = mock(ModelConfigurationService.class);
+        WorkspaceAccessService workspaceAccess = mock(WorkspaceAccessService.class);
+        when(workspaceAccess.requireWorkspace(WORKSPACE_ID, "actor-1", WorkspacePermission.VIEWER))
+                .thenReturn(new WorkspaceRecord(WORKSPACE_ID, "actor-1", "产品工作区",
+                        Path.of("D:/projects/agent4j"), "agent4j", WorkspacePermission.OWNER,
+                        NOW, NOW));
+        InMemoryCommandRegistry registry = new InMemoryCommandRegistry();
+        registry.replace(CapabilityCommandHandlers.definitions(
+                mcpInstallations, skillInstallations, modelConfigurations, workspaceAccess));
+        CommandDispatcher dispatcher = new CommandDispatcher(
+                registry, (definition, context) -> CommandAuthorizationDecision.allow(), event -> { });
+
+        CommandResult result = dispatcher.dispatch("/workspace", new CommandContext(
+                "actor-1", WORKSPACE_ID.toString(), "conversation-1"));
+
+        assertThat(result.status()).isEqualTo(CommandResult.Status.COMPLETED);
+        assertThat(result.message()).isEqualTo("当前工作区");
+        assertThat(result.data()).containsEntry("workspaceId", WORKSPACE_ID.toString())
+                .containsEntry("displayName", "产品工作区")
+                .containsEntry("workspacePath", "D:/projects/agent4j")
+                .containsEntry("repositoryId", "agent4j")
+                .containsEntry("permission", "OWNER");
+        verify(workspaceAccess).requireWorkspace(WORKSPACE_ID, "actor-1", WorkspacePermission.VIEWER);
     }
 
     @SuppressWarnings("unchecked")

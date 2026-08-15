@@ -18,6 +18,9 @@ import com.agent.web.model.ModelGroupRecord;
 import com.agent.web.orchestration.ProductionMultiAgentOrchestrator;
 import com.agent.web.skill.GitHubSkillInstallationService;
 import com.agent.web.skill.SkillInstallationRecord;
+import com.agent.web.workspace.WorkspaceAccessService;
+import com.agent.web.workspace.WorkspacePermission;
+import com.agent.web.workspace.WorkspaceRecord;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,10 +38,12 @@ public final class CapabilityCommandHandlers {
     public static List<CommandDefinition> definitions(
             McpInstallationService mcpInstallations,
             GitHubSkillInstallationService skillInstallations,
-            ModelConfigurationService modelConfigurations) {
+            ModelConfigurationService modelConfigurations,
+            WorkspaceAccessService workspaceAccess) {
         Objects.requireNonNull(mcpInstallations, "mcpInstallations 不能为空");
         Objects.requireNonNull(skillInstallations, "skillInstallations 不能为空");
         Objects.requireNonNull(modelConfigurations, "modelConfigurations 不能为空");
+        Objects.requireNonNull(workspaceAccess, "workspaceAccess 不能为空");
         return List.of(
                 definition("mcp", "MCP", "显示当前工作区的 MCP 安装状态",
                         context -> mcpResult(context, mcpInstallations)),
@@ -47,7 +52,9 @@ public final class CapabilityCommandHandlers {
                 definition("models", "Models", "显示当前用户的模型组和端点状态",
                         context -> modelResult(modelConfigurations)),
                 definition("agents", "Agents", "显示已注册的多 Agent 编排能力",
-                        context -> agentsResult()));
+                        context -> agentsResult()),
+                definition("workspace", "Workspace", "显示当前工作区的名称、路径与权限",
+                        context -> workspaceResult(context, workspaceAccess)));
     }
 
     private static CommandDefinition definition(
@@ -165,5 +172,18 @@ public final class CapabilityCommandHandlers {
         view.put("ownedStateKeys", descriptor.ownedStateKeys().stream().sorted().toList());
         view.put("handoffTargets", descriptor.handoffTargets().stream().sorted().toList());
         return Map.copyOf(view);
+    }
+
+    private static CommandResult workspaceResult(
+            CommandContext context, WorkspaceAccessService workspaceAccess) {
+        WorkspaceRecord workspace = workspaceAccess.requireWorkspace(
+                UUID.fromString(context.workspaceId()), context.actorId(), WorkspacePermission.VIEWER);
+        String separator = workspace.workspacePath().getFileSystem().getSeparator();
+        return new CommandResult(CommandResult.Status.COMPLETED, null, "当前工作区", Map.of(
+                "workspaceId", workspace.workspaceId().toString(),
+                "displayName", workspace.displayName(),
+                "workspacePath", workspace.workspacePath().toString().replace(separator, "/"),
+                "repositoryId", workspace.repositoryId(),
+                "permission", workspace.permission().name()));
     }
 }
