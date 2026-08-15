@@ -27,6 +27,8 @@ import com.agent.web.workspace.WorkspaceDirectoryBrowser;
 import com.agent.web.workspace.WorkspaceImportService;
 import com.agent.web.workspace.WorkspaceProjectService;
 import com.agent.web.workspace.WorkspaceFileService;
+import com.agent.web.audit.WorkspaceFileAuditSink;
+import com.agent.web.audit.Slf4jWorkspaceFileAuditSink;
 import com.agent.web.mcp.catalog.OfficialMcpCatalogClient;
 import com.agent.web.mcp.installation.McpInstallationRepository;
 import com.agent.web.mcp.installation.InstalledMcpCatalogProvider;
@@ -334,15 +336,22 @@ public class HarnessConfiguration {
                 workspaceAccessService, productionProperties.workspace(), importProperties, harnessClock);
     }
 
+    /** 创建独立的工作区文件审计写入器。 */
+    @Bean
+    WorkspaceFileAuditSink workspaceFileAuditSink(ObjectMapper objectMapper) {
+        return new Slf4jWorkspaceFileAuditSink(objectMapper);
+    }
+
     /** 创建受配置根目录保护的空项目服务。 */
     @Bean
     @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
     WorkspaceProjectService workspaceProjectService(
             WorkspaceAccessService workspaceAccessService,
             ProductionAgentProperties productionProperties,
-            Clock harnessClock) {
+            Clock harnessClock,
+            WorkspaceFileAuditSink auditSink) {
         return new WorkspaceProjectService(
-                workspaceAccessService, productionProperties.workspace(), harnessClock);
+                workspaceAccessService, productionProperties.workspace(), harnessClock, auditSink);
     }
 
     /** 创建工作区文件树和文本读写服务。 */
@@ -350,10 +359,11 @@ public class HarnessConfiguration {
     @ConditionalOnProperty(name = "agent.production.enabled", havingValue = "true")
     WorkspaceFileService workspaceFileService(
             WorkspaceAccessService workspaceAccessService,
-            Environment environment) {
+            Environment environment,
+            WorkspaceFileAuditSink auditSink) {
         long maxBytes = environment.getProperty(
                 "agent.workspace-files.max-file-bytes", Long.class, 10 * 1024 * 1024L);
-        return new WorkspaceFileService(workspaceAccessService, maxBytes);
+        return new WorkspaceFileService(workspaceAccessService, maxBytes, auditSink);
     }
 
     /** 绑定当前会话的 Run 启动服务。 */

@@ -46,6 +46,12 @@
         <appender-ref ref="AUDIT_ROLLING_FILE"/>
     </logger>
 
+    <logger name="com.agent.audit.workspace" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ROLLING_FILE"/>
+        <appender-ref ref="AUDIT_ROLLING_FILE"/>
+    </logger>
+
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="ROLLING_FILE"/>

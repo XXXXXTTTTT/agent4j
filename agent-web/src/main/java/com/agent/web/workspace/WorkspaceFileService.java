@@ -1,5 +1,8 @@
 package com.agent.web.workspace;
 
+import com.agent.web.audit.WorkspaceFileAuditEvent;
+import com.agent.web.audit.WorkspaceFileAuditEventType;
+import com.agent.web.audit.WorkspaceFileAuditSink;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
@@ -25,13 +28,20 @@ public final class WorkspaceFileService {
 
     private final WorkspaceAccessService workspaceAccess;
     private final long maxFileBytes;
+    private final WorkspaceFileAuditSink auditSink;
 
     public WorkspaceFileService(WorkspaceAccessService workspaceAccess, long maxFileBytes) {
+        this(workspaceAccess, maxFileBytes, WorkspaceFileAuditSink.noop());
+    }
+
+    public WorkspaceFileService(WorkspaceAccessService workspaceAccess, long maxFileBytes,
+            WorkspaceFileAuditSink auditSink) {
         this.workspaceAccess = Objects.requireNonNull(workspaceAccess, "workspaceAccess 不能为空");
         if (maxFileBytes <= 0) {
             throw new IllegalArgumentException("maxFileBytes 必须为正数");
         }
         this.maxFileBytes = maxFileBytes;
+        this.auditSink = Objects.requireNonNull(auditSink, "auditSink 不能为空");
     }
 
     /** 列出工作区内一个目录的直接子项。 */
@@ -58,7 +68,10 @@ public final class WorkspaceFileService {
         entries.sort(Comparator.comparing((WorkspaceFileEntry value) -> value.kind()
                         == WorkspaceFileEntry.Kind.DIRECTORY ? 0 : 1)
                 .thenComparing(WorkspaceFileEntry::name));
-        return List.copyOf(entries);
+        List<WorkspaceFileEntry> result = List.copyOf(entries);
+        auditSink.record(new WorkspaceFileAuditEvent(WorkspaceFileAuditEventType.FILE_LISTED,
+                Instant.now(), userId, workspaceId, relativePath == null ? "" : relativePath, 0, null, "SUCCESS"));
+        return result;
     }
 
     /** 读取工作区内 UTF-8 文本文件。 */
@@ -67,7 +80,10 @@ public final class WorkspaceFileService {
                 workspaceId, userId, WorkspacePermission.VIEWER);
         Path file = resolveExisting(workspace, relativePath, false);
         byte[] bytes = readBytes(file);
-        return content(workspace.workspacePath(), file, decodeUtf8(bytes));
+        WorkspaceFileContent result = content(workspace.workspacePath(), file, decodeUtf8(bytes));
+        auditSink.record(new WorkspaceFileAuditEvent(WorkspaceFileAuditEventType.FILE_READ,
+                Instant.now(), userId, workspaceId, result.path(), bytes.length, result.sha256(), "SUCCESS"));
+        return result;
     }
 
     /** 按 SHA-256 乐观并发条件原子写入 UTF-8 文本文件。 */
@@ -87,6 +103,8 @@ public final class WorkspaceFileService {
             }
             String actual = sha256(readBytes(file));
             if (expectedSha256 != null && !expectedSha256.isBlank() && !actual.equals(expectedSha256)) {
+                auditSink.record(new WorkspaceFileAuditEvent(WorkspaceFileAuditEventType.FILE_CONFLICT,
+                        Instant.now(), userId, workspaceId, relativePath, 0, actual, "CONFLICT"));
                 throw new FileConflictException(actual);
             }
         } else if (expectedSha256 != null && !expectedSha256.isBlank()) {
@@ -108,7 +126,10 @@ public final class WorkspaceFileService {
         } catch (IOException exception) {
             throw new IllegalArgumentException("文件写入失败", exception);
         }
-        return read(workspaceId, userId, relativePath);
+        WorkspaceFileContent result = read(workspaceId, userId, relativePath);
+        auditSink.record(new WorkspaceFileAuditEvent(WorkspaceFileAuditEventType.FILE_WRITTEN,
+                Instant.now(), userId, workspaceId, result.path(), bytes.length, result.sha256(), "SUCCESS"));
+        return result;
     }
 
     private WorkspaceFileEntry entry(Path file, Path workspaceRoot) throws IOException {

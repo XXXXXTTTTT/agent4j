@@ -1,6 +1,9 @@
 package com.agent.web.workspace;
 
 import com.agent.web.identity.Actor;
+import com.agent.web.audit.WorkspaceFileAuditEvent;
+import com.agent.web.audit.WorkspaceFileAuditEventType;
+import com.agent.web.audit.WorkspaceFileAuditSink;
 
 import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
@@ -13,11 +16,18 @@ public final class WorkspaceProjectService {
 
     private final WorkspaceAccessService workspaceAccess;
     private final Path configuredRoot;
+    private final WorkspaceFileAuditSink auditSink;
 
     public WorkspaceProjectService(WorkspaceAccessService workspaceAccess, Path configuredRoot,
             java.time.Clock ignoredClock) {
+        this(workspaceAccess, configuredRoot, ignoredClock, WorkspaceFileAuditSink.noop());
+    }
+
+    public WorkspaceProjectService(WorkspaceAccessService workspaceAccess, Path configuredRoot,
+            java.time.Clock ignoredClock, WorkspaceFileAuditSink auditSink) {
         this.workspaceAccess = Objects.requireNonNull(workspaceAccess, "workspaceAccess 不能为空");
         this.configuredRoot = realDirectory(configuredRoot);
+        this.auditSink = Objects.requireNonNull(auditSink, "auditSink 不能为空");
     }
 
     /** 创建单层目录项目，不覆盖已有目录。 */
@@ -39,8 +49,11 @@ public final class WorkspaceProjectService {
             throw new IllegalArgumentException("项目目录创建失败", exception);
         }
         try {
-            return workspaceAccess.create(actor, java.util.UUID.randomUUID(), displayName,
+            WorkspaceRecord workspace = workspaceAccess.create(actor, java.util.UUID.randomUUID(), displayName,
                     project.toString(), repositoryId);
+            auditSink.record(new WorkspaceFileAuditEvent(WorkspaceFileAuditEventType.PROJECT_CREATED,
+                    java.time.Instant.now(), actor.userId(), workspace.workspaceId(), directoryName, 0, null, "SUCCESS"));
+            return workspace;
         } catch (RuntimeException exception) {
             try {
                 Files.deleteIfExists(project);
