@@ -96,7 +96,8 @@ public class CommandRegistryConfiguration {
                 contextService,
                 new AgentRunCommandCheckpointService(agentRunService, auditSink)));
         definitions.addAll(CapabilityCommandHandlers.definitions(
-                mcpInstallations, skillInstallations, modelConfigurations, workspaceAccessService));
+                mcpInstallations, skillInstallations, modelConfigurations, workspaceAccessService,
+                conversationService));
         definitions.addAll(builtInWorkflows(workflowBridge));
         Path globalDirectory = properties.globalDirectory().isBlank()
                 ? null : Path.of(properties.globalDirectory());

@@ -11,6 +11,8 @@ import com.agent.core.orchestration.OrchestrationMode;
 import com.agent.web.mcp.installation.McpInstallationDetails;
 import com.agent.web.mcp.installation.McpInstallationRecord;
 import com.agent.web.mcp.installation.McpInstallationService;
+import com.agent.web.conversation.ConversationService;
+import com.agent.web.conversation.ConversationTurnRecord;
 import com.agent.web.model.ModelConfigurationService;
 import com.agent.web.model.ModelConfigurationSnapshot;
 import com.agent.web.model.ModelEndpointRecord;
@@ -39,11 +41,13 @@ public final class CapabilityCommandHandlers {
             McpInstallationService mcpInstallations,
             GitHubSkillInstallationService skillInstallations,
             ModelConfigurationService modelConfigurations,
-            WorkspaceAccessService workspaceAccess) {
+            WorkspaceAccessService workspaceAccess,
+            ConversationService conversations) {
         Objects.requireNonNull(mcpInstallations, "mcpInstallations 不能为空");
         Objects.requireNonNull(skillInstallations, "skillInstallations 不能为空");
         Objects.requireNonNull(modelConfigurations, "modelConfigurations 不能为空");
         Objects.requireNonNull(workspaceAccess, "workspaceAccess 不能为空");
+        Objects.requireNonNull(conversations, "conversations 不能为空");
         return List.of(
                 definition("mcp", "MCP", "显示当前工作区的 MCP 安装状态",
                         context -> mcpResult(context, mcpInstallations)),
@@ -54,7 +58,9 @@ public final class CapabilityCommandHandlers {
                 definition("agents", "Agents", "显示已注册的多 Agent 编排能力",
                         context -> agentsResult()),
                 definition("workspace", "Workspace", "显示当前工作区的名称、路径与权限",
-                        context -> workspaceResult(context, workspaceAccess)));
+                        context -> workspaceResult(context, workspaceAccess)),
+                definition("runs", "Runs", "显示当前会话的最新 Run 状态",
+                        context -> runsResult(context, conversations)));
     }
 
     private static CommandDefinition definition(
@@ -185,5 +191,28 @@ public final class CapabilityCommandHandlers {
                 "workspacePath", workspace.workspacePath().toString().replace(separator, "/"),
                 "repositoryId", workspace.repositoryId(),
                 "permission", workspace.permission().name()));
+    }
+
+    private static CommandResult runsResult(CommandContext context, ConversationService conversations) {
+        List<ConversationTurnRecord> turns = conversations.listTurns(
+                UUID.fromString(context.conversationId()));
+        Map<String, Object> latestRun = turns.stream()
+                .max(java.util.Comparator.comparingLong(ConversationTurnRecord::turnIndex))
+                .map(CapabilityCommandHandlers::runView)
+                .orElseGet(Map::of);
+        return new CommandResult(CommandResult.Status.COMPLETED, null, "当前会话 Run 状态", Map.of(
+                "turnCount", turns.size(),
+                "latestRun", latestRun));
+    }
+
+    private static Map<String, Object> runView(ConversationTurnRecord turn) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("turnIndex", turn.turnIndex());
+        view.put("status", turn.status().name());
+        view.put("createdAt", turn.createdAt().toString());
+        if (turn.runId() != null) {
+            view.put("runId", turn.runId().toString());
+        }
+        return Map.copyOf(view);
     }
 }

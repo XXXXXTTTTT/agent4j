@@ -8,6 +8,9 @@ import com.agent.core.command.InMemoryCommandRegistry;
 import com.agent.core.llm.InferenceCapability;
 import com.agent.core.llm.TaskType;
 import com.agent.web.capability.InstallationScope;
+import com.agent.web.conversation.ConversationService;
+import com.agent.web.conversation.ConversationTurnRecord;
+import com.agent.web.conversation.ConversationTurnStatus;
 import com.agent.web.mcp.installation.McpInstallationDetails;
 import com.agent.web.mcp.installation.McpInstallationRecord;
 import com.agent.web.mcp.installation.McpInstallationService;
@@ -66,7 +69,7 @@ class CapabilityCommandHandlersTest {
         InMemoryCommandRegistry registry = new InMemoryCommandRegistry();
         registry.replace(CapabilityCommandHandlers.definitions(
                 mcpInstallations, skillInstallations, modelConfigurations,
-                mock(WorkspaceAccessService.class)));
+                mock(WorkspaceAccessService.class), mock(ConversationService.class)));
         CommandDispatcher dispatcher = new CommandDispatcher(
                 registry, (definition, context) -> CommandAuthorizationDecision.allow(), event -> { });
         CommandContext context = new CommandContext("actor-1", WORKSPACE_ID.toString(), "conversation-1");
@@ -102,7 +105,7 @@ class CapabilityCommandHandlersTest {
         InMemoryCommandRegistry registry = new InMemoryCommandRegistry();
         registry.replace(CapabilityCommandHandlers.definitions(
                 mcpInstallations, skillInstallations, modelConfigurations,
-                mock(WorkspaceAccessService.class)));
+                mock(WorkspaceAccessService.class), mock(ConversationService.class)));
         CommandDispatcher dispatcher = new CommandDispatcher(
                 registry, (definition, context) -> CommandAuthorizationDecision.allow(), event -> { });
 
@@ -137,7 +140,7 @@ class CapabilityCommandHandlersTest {
         InMemoryCommandRegistry registry = new InMemoryCommandRegistry();
         registry.replace(CapabilityCommandHandlers.definitions(
                 mcpInstallations, skillInstallations, modelConfigurations,
-                mock(WorkspaceAccessService.class)));
+                mock(WorkspaceAccessService.class), mock(ConversationService.class)));
         CommandDispatcher dispatcher = new CommandDispatcher(
                 registry, (definition, context) -> CommandAuthorizationDecision.allow(), event -> { });
 
@@ -172,7 +175,8 @@ class CapabilityCommandHandlersTest {
                         NOW, NOW));
         InMemoryCommandRegistry registry = new InMemoryCommandRegistry();
         registry.replace(CapabilityCommandHandlers.definitions(
-                mcpInstallations, skillInstallations, modelConfigurations, workspaceAccess));
+                mcpInstallations, skillInstallations, modelConfigurations, workspaceAccess,
+                mock(ConversationService.class)));
         CommandDispatcher dispatcher = new CommandDispatcher(
                 registry, (definition, context) -> CommandAuthorizationDecision.allow(), event -> { });
 
@@ -187,6 +191,39 @@ class CapabilityCommandHandlersTest {
                 .containsEntry("repositoryId", "agent4j")
                 .containsEntry("permission", "OWNER");
         verify(workspaceAccess).requireWorkspace(WORKSPACE_ID, "actor-1", WorkspacePermission.VIEWER);
+    }
+
+    @Test
+    void showsCurrentConversationRunSummaryWithoutPromptOrErrorContent() {
+        McpInstallationService mcpInstallations = mock(McpInstallationService.class);
+        GitHubSkillInstallationService skillInstallations = mock(GitHubSkillInstallationService.class);
+        ModelConfigurationService modelConfigurations = mock(ModelConfigurationService.class);
+        WorkspaceAccessService workspaceAccess = mock(WorkspaceAccessService.class);
+        ConversationService conversations = mock(ConversationService.class);
+        UUID conversationId = UUID.fromString("4a0372d2-5e47-49a7-af30-ca7bdf2af8af");
+        UUID runId = UUID.fromString("aa4bf863-a0e9-4d8c-b668-d98682320478");
+        when(conversations.listTurns(conversationId)).thenReturn(List.of(new ConversationTurnRecord(
+                UUID.fromString("e6843a43-3c25-4da5-9d64-41ced613f359"), conversationId, 2,
+                "保密请求", null, runId, ConversationTurnStatus.RUNNING, null, NOW, null)));
+        InMemoryCommandRegistry registry = new InMemoryCommandRegistry();
+        registry.replace(CapabilityCommandHandlers.definitions(mcpInstallations, skillInstallations,
+                modelConfigurations, workspaceAccess, conversations));
+        CommandDispatcher dispatcher = new CommandDispatcher(
+                registry, (definition, context) -> CommandAuthorizationDecision.allow(), event -> { });
+
+        CommandResult result = dispatcher.dispatch("/runs", new CommandContext(
+                "actor-1", WORKSPACE_ID.toString(), conversationId.toString()));
+
+        assertThat(result.status()).isEqualTo(CommandResult.Status.COMPLETED);
+        assertThat(result.message()).isEqualTo("当前会话 Run 状态");
+        assertThat(result.data()).containsEntry("turnCount", 1)
+                .containsEntry("latestRun", Map.of(
+                        "turnIndex", 2L,
+                        "runId", runId.toString(),
+                        "status", "RUNNING",
+                        "createdAt", NOW.toString()))
+                .doesNotContainKeys("userContent", "assistantContent", "error");
+        verify(conversations).listTurns(conversationId);
     }
 
     @SuppressWarnings("unchecked")
