@@ -36,9 +36,9 @@ export function registerDefaultWorkbenchPanels(api: DockPanelRegistrar): void {
     id: 'activity',
     component: 'activity',
     title: '活动',
-    initialWidth: 56,
-    minimumWidth: 48,
-    maximumWidth: 56,
+    initialWidth: 156,
+    minimumWidth: 136,
+    maximumWidth: 190,
   })
   api.addPanel({
     id: 'sidebar',
@@ -118,7 +118,8 @@ export function serializeWorkbenchDockLayout(layout: SerializedDockview): string
 function isPersistedDockviewLayout(value: unknown): value is PersistedDockviewLayout {
   if (!isRecord(value) || value.version !== WORKBENCH_DOCK_LAYOUT_VERSION || !isRecord(value.layout)) return false
   if (!isRecord(value.layout.grid) || !isRecord(value.layout.panels)) return false
-  return Object.keys(value.layout.panels).every((panelId) => isWorkbenchDockPanelId(panelId))
+  const panelIds = Object.keys(value.layout.panels)
+  return panelIds.length > 0 && panelIds.every((panelId) => isWorkbenchDockPanelId(panelId))
 }
 
 function isWorkbenchDockPanelId(value: string): value is WorkbenchDockPanelId {

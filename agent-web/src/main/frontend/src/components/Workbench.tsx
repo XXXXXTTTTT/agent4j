@@ -106,6 +106,7 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
           onClick={() => selectActivity(id)}
         >
           <Icon aria-hidden="true" size={18} />
+          <span className="workbench-activity-label">{label}</span>
         </button>
       ))}
     </nav>

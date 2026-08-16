@@ -33,6 +33,20 @@ interface PanelContextValue {
 
 const PanelContext = createContext<PanelContextValue | null>(null)
 
+const WORKBENCH_PANEL_TITLES: Record<WorkbenchDockPanelId, string> = {
+  activity: '活动',
+  sidebar: '项目与会话',
+  conversation: '对话',
+  inspector: '执行详情',
+}
+
+const WORKBENCH_PANEL_IDS: WorkbenchDockPanelId[] = [
+  'activity',
+  'sidebar',
+  'conversation',
+  'inspector',
+]
+
 function useCompactDockLayout(): boolean {
   const query = '(max-width: 760px)'
   const [compact, setCompact] = useState(() =>
@@ -66,6 +80,8 @@ export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChan
   const { resolvedColorMode } = useAppearance()
   const apiRef = useRef<DockviewApi | null>(null)
   const [api, setApi] = useState<DockviewApi | null>(null)
+  const [layoutRevision, setLayoutRevision] = useState(0)
+  const [viewMenuOpen, setViewMenuOpen] = useState(false)
   const compactLayout = useCompactDockLayout()
   const compactLayoutRef = useRef(compactLayout)
   const previousCompactLayoutRef = useRef(compactLayout)
@@ -98,6 +114,31 @@ export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChan
     })
   }, [])
 
+  const addPanel = useCallback((nextApi: DockviewApi, panelId: WorkbenchDockPanelId, compact: boolean) => {
+    if (nextApi.getPanel(panelId) !== undefined) return
+    const referencePanel = nextApi.activePanel ?? nextApi.panels[0]
+    const dimensions = panelId === 'activity'
+      ? { initialWidth: 156, minimumWidth: 136, maximumWidth: 190 }
+      : panelId === 'sidebar'
+        ? { initialWidth: 320, minimumWidth: 280, maximumWidth: 380 }
+        : panelId === 'inspector' && !compact
+          ? { initialWidth: 480, minimumWidth: 320, maximumWidth: 480 }
+          : {}
+    nextApi.addPanel({
+      id: panelId,
+      component: 'workbench-panel',
+      title: WORKBENCH_PANEL_TITLES[panelId],
+      inactive: true,
+      ...dimensions,
+      ...(referencePanel === undefined
+        ? {}
+        : { position: { referencePanel, direction: compact ? 'within' as const : 'right' as const } }),
+      params: { panelId },
+      renderer: 'always',
+      floating: false,
+    })
+  }, [])
+
   const syncInspectorPanel = useCallback((nextApi: DockviewApi, open: boolean, compact: boolean) => {
     const existingPanel = nextApi.getPanel('inspector')
     if (!open) {
@@ -105,20 +146,8 @@ export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChan
       return
     }
     if (existingPanel !== undefined) return
-    nextApi.addPanel({
-      id: 'inspector',
-      component: 'workbench-panel',
-      title: '执行详情',
-      initialWidth: compact ? undefined : 480,
-      minimumWidth: compact ? undefined : 320,
-      maximumWidth: compact ? undefined : 480,
-      inactive: true,
-      position: { referencePanel: 'conversation', direction: compact ? 'within' : 'right' },
-      params: { panelId: 'inspector' },
-      renderer: 'always',
-      floating: false,
-    })
-  }, [])
+    addPanel(nextApi, 'inspector', compact)
+  }, [addPanel])
 
   const onReady = useCallback(({ api: readyApi }: DockviewReadyEvent) => {
     apiRef.current = readyApi
@@ -143,7 +172,10 @@ export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChan
 
   useEffect(() => {
     if (api === null) return undefined
-    const disposable = api.onDidMutateLayout(() => persist(api))
+    const disposable = api.onDidMutateLayout(() => {
+      persist(api)
+      setLayoutRevision((revision) => revision + 1)
+    })
     return () => disposable.dispose()
   }, [api, persist])
 
@@ -191,15 +223,66 @@ export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChan
     persist(nextApi)
   }, [compactLayout, onInspectorOpenChange, persist, registerPanels])
 
+  const togglePanel = useCallback((panelId: WorkbenchDockPanelId) => {
+    const nextApi = apiRef.current
+    if (nextApi === null) return
+    const existingPanel = nextApi.getPanel(panelId)
+    if (existingPanel === undefined) {
+      addPanel(nextApi, panelId, compactLayout)
+      if (panelId === 'inspector') onInspectorOpenChange(true)
+    } else {
+      existingPanel.api.close()
+      if (panelId === 'inspector') onInspectorOpenChange(false)
+    }
+    persist(nextApi)
+    setLayoutRevision((revision) => revision + 1)
+  }, [addPanel, compactLayout, onInspectorOpenChange, persist])
+
+  const toolbar = (
+    <div className="workbench-dock-toolbar">
+      <span className="workbench-dock-toolbar-label">工作台布局</span>
+      <div className="workbench-view-menu">
+        <button
+          type="button"
+          className="subtle-button"
+          aria-haspopup="menu"
+          aria-expanded={viewMenuOpen}
+          aria-controls="workbench-view-menu"
+          onClick={() => setViewMenuOpen((open) => !open)}
+        >
+          视图
+        </button>
+        {viewMenuOpen ? (
+          <div id="workbench-view-menu" className="workbench-view-menu-popover" role="menu" aria-label="显示或隐藏视图">
+            {WORKBENCH_PANEL_IDS.map((panelId) => {
+              const visible = api?.getPanel(panelId) !== undefined
+              return (
+                <button
+                  key={panelId}
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={visible}
+                  onClick={() => togglePanel(panelId)}
+                >
+                  <span>{WORKBENCH_PANEL_TITLES[panelId]}</span>
+                  <span>{visible ? '隐藏' : '显示'}</span>
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
+      </div>
+      <button type="button" className="subtle-button" onClick={restoreDefaultLayout}>恢复默认布局</button>
+      <span className="sr-only" aria-live="polite">布局版本 {layoutRevision}</span>
+    </div>
+  )
+
   // Dockview relies on browser canvas/animation primitives that jsdom does not provide.
   // Keep component tests deterministic while production browsers use the real dock.
   if (typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent)) {
     return (
       <section className="workbench-dock-layout" data-testid="workbench-dock-layout">
-        <div className="workbench-dock-toolbar">
-          <span className="workbench-dock-toolbar-label">工作台布局</span>
-          <button type="button" className="subtle-button">恢复默认布局</button>
-        </div>
+        {toolbar}
         <div className="workbench-dockview-fallback">
           {panels.activity}
           {panels.sidebar}
@@ -212,12 +295,7 @@ export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChan
 
   return (
     <section className="workbench-dock-layout" data-testid="workbench-dock-layout">
-      <div className="workbench-dock-toolbar">
-        <span className="workbench-dock-toolbar-label">工作台布局</span>
-        <button type="button" className="subtle-button" onClick={restoreDefaultLayout}>
-          恢复默认布局
-        </button>
-      </div>
+      {toolbar}
       <PanelContext.Provider value={contextValue}>
         <DockviewReact
           className="workbench-dockview"

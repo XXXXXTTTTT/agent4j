@@ -27,7 +27,7 @@ describe('workbench Dockview layout', () => {
     expect(addPanel.mock.calls[1][0].position).toEqual({ referencePanel: 'activity', direction: 'right' })
     expect(addPanel.mock.calls[2][0].position).toEqual({ referencePanel: 'sidebar', direction: 'right' })
     expect(addPanel.mock.calls[3][0].position).toEqual({ referencePanel: 'conversation', direction: 'right' })
-    expect(addPanel.mock.calls[0][0]).toMatchObject({ minimumWidth: 48, maximumWidth: 56 })
+    expect(addPanel.mock.calls[0][0]).toMatchObject({ minimumWidth: 136, maximumWidth: 190 })
     expect(addPanel.mock.calls[1][0]).toMatchObject({ minimumWidth: 280, maximumWidth: 380 })
     expect(addPanel.mock.calls[3][0]).toMatchObject({ minimumWidth: 320, maximumWidth: 480 })
   })
@@ -47,6 +47,10 @@ describe('workbench Dockview layout', () => {
 
     expect(JSON.parse(raw)).toMatchObject({ version: WORKBENCH_DOCK_LAYOUT_VERSION })
     expect(parsePersistedWorkbenchDockLayout(raw)).toEqual(layout)
+    expect(parsePersistedWorkbenchDockLayout(JSON.stringify({
+      version: WORKBENCH_DOCK_LAYOUT_VERSION,
+      layout: serializedLayout([]),
+    }))).toBeNull()
     expect(parsePersistedWorkbenchDockLayout(JSON.stringify({ version: 99, layout }))).toBeNull()
     expect(parsePersistedWorkbenchDockLayout(JSON.stringify({
       version: WORKBENCH_DOCK_LAYOUT_VERSION,
