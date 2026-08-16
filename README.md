@@ -58,6 +58,16 @@ mvn -pl agent-web -am package -DskipTests
 docker compose -f docker-compose.local.yml --env-file .env up -d --build
 ```
 
+PowerShell 工作区终端需要在 Windows 宿主机运行原生 PTY bridge。它不能放入 Linux Docker 容器，否则只能得到 Bash。另开一个 PowerShell 窗口执行，并把 `-WorkspaceRoot` 指向 Compose 当前挂载的同一个宿主目录：
+
+```powershell
+.\agent-terminal\start.ps1 -WorkspaceRoot D:\agent4j
+```
+
+Bridge 只监听 `127.0.0.1:8090`，默认只接受 `http://localhost:8080` 和 `http://127.0.0.1:8080` 的浏览器 Origin，并限制最多 4 个 PTY 连接及每个连接 4 MiB 的待发送输出。它使用 `node-pty` 启动真实的 `powershell.exe`；工作区路径会经过 realpath 校验，关闭浏览器连接会终止对应 PowerShell 进程。
+
+这是宿主机 PowerShell 入口而不是安全沙箱：PowerShell 用户可以执行该 Windows 账户有权限执行的任意命令，也可以在会话中 `Set-Location` 到工作区之外。若需要物理隔离，请使用 Agent Run 的 Docker 沙箱终端。可通过 `AGENT_TERMINAL_ALLOWED_ORIGINS`、`AGENT_TERMINAL_MAX_CONCURRENT_PTY` 和 `AGENT_TERMINAL_MAX_BUFFERED_OUTPUT_BYTES` 调整桥接器限制。
+
 `Copy-Item` 只在 `.env` 不存在时执行，避免覆盖已有模型密钥、数据库密码和工作区配置。首次启动后，数据库凭据会保存在 PostgreSQL 数据卷中；修改 `.env` 中的 `POSTGRES_USER` 或 `POSTGRES_PASSWORD` 不会自动修改已初始化的数据卷。
 
 ### Windows 桌面工作台

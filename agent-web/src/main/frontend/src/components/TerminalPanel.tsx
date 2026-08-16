@@ -4,8 +4,8 @@ import { Terminal as TerminalIcon } from 'lucide-react'
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react'
 import { useAppearance } from '../appearance/AppearanceProvider'
 import { getTerminalTheme } from '../appearance/terminalTheme'
-import { InteractiveTerminalSession } from '../terminal/InteractiveTerminalSession'
-import type { WebSocketFactory } from '../terminal/TerminalSession'
+import { PowerShellTerminalSession } from '../terminal/PowerShellTerminalSession'
+import type { NativeTerminalSocketFactory } from '../terminal/PowerShellTerminalSession'
 
 export interface TerminalPanelHandle {
   reset(): void
@@ -14,7 +14,7 @@ export interface TerminalPanelHandle {
 
 interface TerminalPanelProps {
   active: boolean
-  workspaceId: string | null
+  workspacePath: string | null
   terminalRef: Ref<TerminalPanelHandle>
 }
 
@@ -22,12 +22,12 @@ function defaultWebSocketFactory(url: string) {
   return new WebSocket(url)
 }
 
-/** 提供可输入的工作区 PTY，并保留 Agent Run 的 ANSI 日志输出。 */
-export function TerminalPanel({ active, workspaceId, terminalRef }: TerminalPanelProps) {
+/** 提供 Windows PowerShell PTY，并保留 Agent Run 的 ANSI 日志输出。 */
+export function TerminalPanel({ active, workspacePath, terminalRef }: TerminalPanelProps) {
   const { preferences, resolvedColorMode } = useAppearance()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<import('@xterm/xterm').Terminal | null>(null)
-  const interactiveSessionRef = useRef<InteractiveTerminalSession | null>(null)
+  const interactiveSessionRef = useRef<PowerShellTerminalSession | null>(null)
   const bufferRef = useRef('')
   const [transcript, setTranscript] = useState('')
   const [connectionState, setConnectionState] = useState<'disconnected' | 'connecting' | 'connected' | 'closed'>('disconnected')
@@ -57,7 +57,7 @@ export function TerminalPanel({ active, workspaceId, terminalRef }: TerminalPane
         const terminal = new Terminal({
           convertEol: false,
           cursorBlink: true,
-          disableStdin: workspaceId === null,
+          disableStdin: workspacePath === null,
           fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, monospace',
           fontSize: 13,
           lineHeight: 1.25,
@@ -74,11 +74,11 @@ export function TerminalPanel({ active, workspaceId, terminalRef }: TerminalPane
           terminal.write(text)
         }
         let dataDisposable: { dispose(): void } | null = null
-        if (workspaceId !== null) {
+        if (workspacePath !== null) {
           setConnectionState('connecting')
-          const session = new InteractiveTerminalSession(
-            workspaceId,
-            defaultWebSocketFactory as WebSocketFactory,
+          const session = new PowerShellTerminalSession(
+            workspacePath,
+            defaultWebSocketFactory as NativeTerminalSocketFactory,
             {
               onOutput: append,
               onStateChange: (readyState) => {
@@ -86,7 +86,6 @@ export function TerminalPanel({ active, workspaceId, terminalRef }: TerminalPane
                 else if (readyState === 1) setConnectionState('connected')
                 else setConnectionState('closed')
               },
-              onExit: (exitCode) => append(`\r\n[终端进程已退出，exit ${exitCode ?? 'unknown'}]\r\n`),
               onError: (error) => setTerminalError(error.message),
             },
           )
@@ -114,7 +113,7 @@ export function TerminalPanel({ active, workspaceId, terminalRef }: TerminalPane
       xtermRef.current?.dispose()
       xtermRef.current = null
     }
-  }, [preferences.accentColor, preferences.themePreset, resolvedColorMode, workspaceId])
+  }, [preferences.accentColor, preferences.themePreset, resolvedColorMode, workspacePath])
 
   useEffect(() => {
     if (active) xtermRef.current?.focus()
@@ -124,7 +123,7 @@ export function TerminalPanel({ active, workspaceId, terminalRef }: TerminalPane
     <section className="tool-panel terminal-panel" data-testid="terminal-panel">
       <div className="tool-panel-bar terminal-bar">
         <div className="panel-title"><TerminalIcon aria-hidden="true" size={16} /><span>WORKSPACE TERMINAL</span></div>
-        <span className={`terminal-mode is-${connectionState}`}>{workspaceId === null ? '选择工作区后可输入' : `PTY / ${connectionState}`}</span>
+        <span className={`terminal-mode is-${connectionState}`}>{workspacePath === null ? '选择工作区后可输入' : `PowerShell / ${connectionState}`}</span>
       </div>
       <div className="xterm-host" ref={hostRef} aria-label="交互式工作区终端" />
       {terminalError === null ? null : <p className="terminal-error" role="alert">{terminalError}</p>}
