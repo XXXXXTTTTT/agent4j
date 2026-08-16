@@ -2,6 +2,7 @@ import { Activity, Code2, Globe2, MessageSquare, PanelRightClose, PanelRightOpen
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 
 import type { UseRunWorkbenchResult } from '../hooks/useRunWorkbench'
+import { useChatScrollSync } from '../hooks/useChatScrollSync'
 import { AgentConversation } from './AgentConversation'
 import { ApprovalDialog } from './ApprovalDialog'
 import { ConversationComposer } from './ConversationComposer'
@@ -13,6 +14,8 @@ import type { UseConversationWorkspaceResult } from '../hooks/useConversationWor
 import { CapabilityWorkbenchRuntime } from './CapabilityWorkbenchRuntime'
 import { WorkspaceExplorerPanel } from './WorkspaceExplorerPanel'
 import { WorkbenchDockLayout } from './WorkbenchDockLayout'
+import { ChatTimelineMinimap, type ChatTimelineEntry } from './ChatTimelineMinimap'
+import type { ConversationTurn } from '../api/contracts'
 
 const CodeDiffPanel = lazy(() => import('./CodeDiffPanel').then((module) => ({
   default: module.CodeDiffPanel,
@@ -45,6 +48,34 @@ const ACTIVITY_ITEMS: Array<{ id: ActivityView; label: string; icon: typeof Code
   { id: 'capability', label: '能力', icon: ShieldCheck },
 ]
 
+function turnStatus(status: ConversationTurn['status']): ChatTimelineEntry['status'] {
+  if (status === 'FAILED') return 'failed'
+  if (status === 'RUNNING') return 'running'
+  if (status === 'PENDING') return 'pending'
+  return 'success'
+}
+
+function buildTimelineEntries(turns: ConversationTurn[], run: UseRunWorkbenchResult['run']): ChatTimelineEntry[] {
+  const entries: ChatTimelineEntry[] = []
+  for (const turn of turns) {
+    const status = turnStatus(turn.status)
+    entries.push({ id: `${turn.turnId}-user`, label: `第 ${turn.turnIndex + 1} 轮 · 你`, summary: turn.userContent.slice(0, 80) || '空消息', role: 'user', status })
+    entries.push({ id: `${turn.turnId}-agent`, label: `第 ${turn.turnIndex + 1} 轮 · Agent`, summary: turn.error ?? turn.assistantContent?.slice(0, 80) ?? '正在处理', role: 'agent', status })
+  }
+  if (run === null) return entries
+  const variables = run.state.variables
+  const task = variables['demo.task'] ?? variables['planner.task']
+  if (task !== undefined) entries.push({ id: `${run.runId}-user`, label: '当前任务 · 你', summary: task.slice(0, 80), role: 'user', status: 'success' })
+  entries.push({ id: `${run.runId}-agent`, label: '当前执行 · Agent', summary: variables['final_response']?.slice(0, 80) ?? '正在执行任务', role: 'agent', status: run.status === 'FAILED' ? 'failed' : run.status === 'COMPLETED' ? 'success' : 'running' })
+  if (variables['tool.request'] !== undefined || variables['tool.result'] !== undefined || variables['tool.error'] !== undefined) {
+    entries.push({ id: `${run.runId}-tool`, label: '工具检查点', summary: variables['tool.error'] ?? variables['tool.result']?.slice(0, 80) ?? '调用工具', role: 'tool', status: variables['tool.error'] === undefined ? 'success' : 'failed' })
+  }
+  if (variables['coder.request'] !== undefined || variables['coder.updatedFiles'] !== undefined) entries.push({ id: `${run.runId}-coder`, label: '代码变更', summary: variables['coder.summary']?.slice(0, 80) ?? '生成代码变更', role: 'agent', status: variables['coder.error'] === undefined ? 'success' : 'failed' })
+  if (variables['ops.command'] !== undefined) entries.push({ id: `${run.runId}-ops`, label: '测试执行', summary: variables['ops.command'], role: 'tool', status: variables['ops.exitCode'] === undefined ? 'running' : variables['ops.exitCode'] === '0' ? 'success' : 'failed' })
+  if (variables['reviewer.summary'] !== undefined || run.error !== null) entries.push({ id: `${run.runId}-result`, label: '执行结果', summary: variables['reviewer.summary'] ?? run.error ?? '执行完成', role: 'agent', status: run.error === null ? 'success' : 'failed' })
+  return entries
+}
+
 /** 编排对话式任务流与执行证据检查器。 */
 export function Workbench({ controller, onTerminalReady, conversation }: WorkbenchProps) {
   const [activeTab, setActiveTab] = useState<WorkbenchTab>('code')
@@ -55,6 +86,7 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
   const [focusInspectorAfterOpen, setFocusInspectorAfterOpen] = useState(false)
   const inspectorHeadingRef = useRef<HTMLHeadingElement>(null)
   const [reviewOpened, setReviewOpened] = useState(false)
+  const chatScroll = useChatScrollSync()
   const belongsToConversation = conversation === undefined
     || controller.run === null
     || controller.run.graphId === 'governed-cli'
@@ -67,6 +99,7 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
   const currentNode = latestTrace?.type === 'NODE_STARTED'
     ? latestTrace.nodeName
     : run?.nextNode ?? null
+  const timelineEntries = buildTimelineEntries(conversation?.turns ?? [], run)
   function selectActivity(view: ActivityView): void {
     setActiveActivity(view)
     if (view === 'conversation' || view === 'project') setInspectorOpen(false)
@@ -122,9 +155,22 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
 
   const conversationPanel = (
     <main id="activity-conversation-panel" className="conversation-column" data-testid="workspace-main" data-active-context={activeActivity}>
-      <div className="conversation-scroll">
-        <AgentConversation run={run} currentNode={currentNode} turns={conversation?.turns} traceEvents={traceEvents} />
-        {run === null ? null : <ApprovalDialog run={run} decide={controller.decide} />}
+      <div className="conversation-scroll-shell">
+        <div className="conversation-scroll" ref={chatScroll.containerRef}>
+          <AgentConversation run={run} currentNode={currentNode} turns={conversation?.turns} traceEvents={traceEvents} />
+          {run === null ? null : <ApprovalDialog run={run} decide={controller.decide} />}
+        </div>
+        <ChatTimelineMinimap
+          messages={timelineEntries}
+          scrollProgress={chatScroll.scrollProgress}
+          activeMessageId={chatScroll.activeMessageId}
+          onSelectTurn={chatScroll.scrollToMessage}
+          onProgressChange={(progress) => {
+            const container = chatScroll.containerRef.current
+            if (container === null) return
+            container.scrollTop = progress * Math.max(0, container.scrollHeight - container.clientHeight)
+          }}
+        />
       </div>
       {conversation === undefined ? <RunLauncher controller={controller} /> : <ConversationComposer conversation={conversation} runController={controller} />}
     </main>

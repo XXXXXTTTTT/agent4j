@@ -133,18 +133,18 @@ function PersistedTurns({ turns }: { turns: ConversationTurn[] }) {
   return (
     <>
       {turns.map((turn) => (
-        <div className="persisted-turn" key={turn.turnId}>
-          <article className="conversation-message user-message">
+        <div className="persisted-turn" data-turn-id={turn.turnId} key={turn.turnId}>
+          <article className="conversation-message user-message" data-message-id={`${turn.turnId}-user`}>
             <span className="message-avatar"><User aria-hidden="true" size={16} /></span>
             <div className="message-body"><span className="message-author">你</span><MarkdownMessage markdown={turn.userContent} /></div>
           </article>
           {turn.assistantContent === null && turn.error === null ? (
-            <article className="conversation-message agent-message">
+            <article className="conversation-message agent-message" data-message-id={`${turn.turnId}-agent`}>
               <span className="message-avatar agent-avatar"><Bot aria-hidden="true" size={17} /></span>
               <div className="message-body"><div className="agent-message-heading"><span className="message-author">Agent4J</span><TurnStatus status={turn.status} /></div><p className="agent-progress-copy">正在处理这条消息。</p></div>
             </article>
           ) : (
-            <article className={`conversation-message agent-message ${turn.status === 'FAILED' ? 'is-failed' : ''}`}>
+            <article className={`conversation-message agent-message ${turn.status === 'FAILED' ? 'is-failed' : ''}`} data-message-id={`${turn.turnId}-agent`}>
               <span className="message-avatar agent-avatar"><Bot aria-hidden="true" size={17} /></span>
               <div className="message-body"><div className="agent-message-heading"><span className="message-author">Agent4J</span><TurnStatus status={turn.status} /></div><MarkdownMessage markdown={turn.assistantContent ?? turn.error ?? ''} /></div>
             </article>
@@ -159,7 +159,7 @@ function PersistedMessages({ messages }: { messages: ChatMessage[] }) {
   return (
     <>
       {messages.map((message, index) => (
-        <article className={`conversation-message persisted-message role-${message.role}`} key={`message-${index}`}>
+        <article className={`conversation-message persisted-message role-${message.role}`} data-message-id={`message-${index}`} key={`message-${index}`}>
           <span className="message-avatar"><MessageIcon role={message.role} /></span>
           <div className="message-body">
             <div className="event-heading">
@@ -239,13 +239,13 @@ export function AgentConversation({ run, currentNode, turns = [], traceEvents = 
     <section className="conversation-stream" aria-label="Agent 会话">
       {turns.length > 0 ? <PersistedTurns turns={historicalTurns} /> : messages.length > 0 ? <PersistedMessages messages={messages} /> : null}
       {currentTask !== undefined ? (
-        <article className="conversation-message user-message">
+        <article className="conversation-message user-message" data-message-id={`${run.runId}-user`}>
           <span className="message-avatar"><User aria-hidden="true" size={16} /></span>
           <div><span className="message-author">你</span><MarkdownMessage markdown={currentTask} /></div>
         </article>
       ) : null}
 
-      <article className="conversation-message agent-message">
+      <article className="conversation-message agent-message" data-message-id={`${run.runId}-agent`}>
         <span className="message-avatar agent-avatar"><Bot aria-hidden="true" size={17} /></span>
         <div className="message-body">
           <div className="agent-message-heading">
@@ -287,7 +287,7 @@ export function AgentConversation({ run, currentNode, turns = [], traceEvents = 
       </article>
 
       {handoffEvents.map((event) => (
-        <article className="conversation-message handoff-message" key={event.eventId}>
+        <article className="conversation-message handoff-message" data-message-id={`${run.runId}-${event.eventId}`} key={event.eventId}>
           <span className="message-avatar agent-avatar"><Bot aria-hidden="true" size={17} /></span>
           <div className="message-body">
             <div className="event-heading">
@@ -301,7 +301,7 @@ export function AgentConversation({ run, currentNode, turns = [], traceEvents = 
       ))}
 
       {toolRequest === undefined && toolResponse === undefined && toolResult === undefined && toolError === undefined ? null : (
-        <article className={`conversation-message event-message ${toolError === undefined ? '' : 'is-failed'}`}>
+        <article className={`conversation-message event-message ${toolError === undefined ? '' : 'is-failed'}`} data-message-id={`${run.runId}-tool`}>
           <span className="message-avatar"><ImageIcon aria-hidden="true" size={16} /></span>
           <div className="message-body">
             <div className="event-heading">
@@ -329,7 +329,7 @@ export function AgentConversation({ run, currentNode, turns = [], traceEvents = 
       )}
 
       {updatedFiles === undefined ? null : (
-        <article className="conversation-message event-message">
+        <article className="conversation-message event-message" data-message-id={`${run.runId}-files`}>
           <span className="message-avatar"><Code2 aria-hidden="true" size={16} /></span>
           <div className="message-body">
             <span className="message-author">代码变更</span>
@@ -339,7 +339,7 @@ export function AgentConversation({ run, currentNode, turns = [], traceEvents = 
       )}
 
       {coderRequest === undefined && coderResponse === undefined && coderError === undefined ? null : (
-        <article className="conversation-message event-message">
+        <article className="conversation-message event-message" data-message-id={`${run.runId}-coder`}>
           <span className="message-avatar"><Code2 aria-hidden="true" size={16} /></span>
           <div className="message-body">
             <div className="event-heading">
@@ -355,7 +355,7 @@ export function AgentConversation({ run, currentNode, turns = [], traceEvents = 
       )}
 
       {command === undefined ? null : (
-        <article className="conversation-message event-message">
+        <article className="conversation-message event-message" data-message-id={`${run.runId}-ops`}>
           <span className="message-avatar"><Terminal aria-hidden="true" size={16} /></span>
           <div className="message-body">
             <div className="event-heading">
@@ -375,7 +375,7 @@ export function AgentConversation({ run, currentNode, turns = [], traceEvents = 
       )}
 
       {reviewSummary === undefined && !hasFailureEvidence && reviewFeedback === undefined ? null : (
-        <article className={`conversation-message result-message ${hasFailureEvidence ? 'is-failed' : ''}`}>
+        <article className={`conversation-message result-message ${hasFailureEvidence ? 'is-failed' : ''}`} data-message-id={`${run.runId}-result`}>
           <span className="message-avatar">
             {hasFailureEvidence
               ? <CircleAlert aria-hidden="true" size={17} />

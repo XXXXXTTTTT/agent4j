@@ -111,6 +111,16 @@ function traceEvents(): TraceEvent[] {
 }
 
 describe('Workbench', () => {
+  it('在对话工作区显示时间轴刻度并可定位历史轮次', async () => {
+    const user = userEvent.setup()
+    render(<Workbench controller={controller()} conversation={conversationController()} onTerminalReady={() => undefined} />)
+
+    const timeline = screen.getByRole('complementary', { name: '对话时间轴' })
+    expect(within(timeline).getByRole('button', { name: /第 1 轮 · 你/ })).toBeVisible()
+    await user.click(within(timeline).getByRole('button', { name: /第 1 轮 · Agent/ }))
+    expect(document.querySelector('[data-message-id="turn-1-agent"]')).toBeInTheDocument()
+  })
+
   it('允许收纳低频检查器，让中心对话保持主工作区', async () => {
     const user = userEvent.setup()
     render(<Workbench controller={controller()} conversation={conversationController()} onTerminalReady={() => undefined} />)
