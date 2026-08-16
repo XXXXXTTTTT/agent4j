@@ -26,6 +26,15 @@ function controller(overrides: Partial<UseConversationWorkspaceResult> = {}): Us
 }
 
 describe('ConversationSidebar', () => {
+  it('separates fixed identity/tools/footer regions from the independently scrolling conversation list', () => {
+    render(<AppearanceProvider><ConversationSidebar controller={controller()} connectionState={{ trace: null, terminal: null }} /></AppearanceProvider>)
+
+    expect(document.querySelector('.conversation-sidebar-header')).toBeInTheDocument()
+    expect(document.querySelector('.conversation-sidebar-tools')).toBeInTheDocument()
+    expect(document.querySelector('.conversation-list')).toBeInTheDocument()
+    expect(document.querySelector('.conversation-sidebar-footer')).toBeInTheDocument()
+  })
+
   it('展示服务端身份、运行通道状态并转发文件夹导入回调', async () => {
     const user = userEvent.setup()
     const importWorkspace = vi.fn(async () => undefined)

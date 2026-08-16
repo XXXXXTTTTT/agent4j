@@ -12,6 +12,7 @@ import { TraceTimeline } from './TraceTimeline'
 import type { UseConversationWorkspaceResult } from '../hooks/useConversationWorkspace'
 import { CapabilityWorkbenchRuntime } from './CapabilityWorkbenchRuntime'
 import { WorkspaceExplorerPanel } from './WorkspaceExplorerPanel'
+import { WorkbenchDockLayout } from './WorkbenchDockLayout'
 
 const CodeDiffPanel = lazy(() => import('./CodeDiffPanel').then((module) => ({
   default: module.CodeDiffPanel,
@@ -93,6 +94,100 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
     void conversation.reload().catch(() => undefined)
   }, [conversation?.reload, run?.runId, run?.status])
 
+  const activityPanel = conversation === undefined ? null : (
+    <nav className="workbench-activity-bar" role="navigation" aria-label="工作台活动栏">
+      {ACTIVITY_ITEMS.map(({ id, label, icon: Icon }) => (
+        <button
+          key={id}
+          type="button"
+          aria-label={label}
+          aria-current={activeActivity === id ? 'page' : undefined}
+          title={label}
+          onClick={() => selectActivity(id)}
+        >
+          <Icon aria-hidden="true" size={18} />
+        </button>
+      ))}
+    </nav>
+  )
+
+  const sidebarPanel = conversation === undefined ? null : (
+    <div id="activity-project-panel" className="workbench-project-column" data-active-context={activeActivity}>
+      {activeActivity === 'project' && conversation.activeWorkspace !== null
+        ? <WorkspaceExplorerPanel workspaceId={conversation.activeWorkspace.workspaceId} />
+        : <ConversationSidebar controller={conversation} connectionState={belongsToConversation ? controller.connectionState : { trace: null, terminal: null }} activeContext={activeActivity} />}
+    </div>
+  )
+
+  const conversationPanel = (
+    <main id="activity-conversation-panel" className="conversation-column" data-testid="workspace-main" data-active-context={activeActivity}>
+      <div className="conversation-scroll">
+        <AgentConversation run={run} currentNode={currentNode} turns={conversation?.turns} traceEvents={traceEvents} />
+        {run === null ? null : <ApprovalDialog run={run} decide={controller.decide} />}
+      </div>
+      {conversation === undefined ? <RunLauncher controller={controller} /> : <ConversationComposer conversation={conversation} runController={controller} />}
+    </main>
+  )
+
+  const inspectorPanel = (
+    <aside id="execution-inspector" className="execution-inspector" aria-label="执行检查器" data-active-context={activeActivity} hidden={!inspectorOpen}>
+      <div className="inspector-heading">
+        <div>
+          <p className="section-kicker">RUN EVIDENCE</p>
+          <h2 ref={inspectorHeadingRef} tabIndex={-1}>执行详情</h2>
+        </div>
+        <span className="checkpoint-label">{run === null ? '尚未运行' : `Checkpoint ${run.version}`}</span>
+      </div>
+      <div className="workspace-tabs" role="tablist" aria-label="检查器视图">
+        {TABS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === id}
+            aria-controls={`${id}-view`}
+            onClick={() => {
+              setActiveTab(id)
+              if (id === 'review') setReviewOpened(true)
+            }}
+          >
+            <Icon aria-hidden="true" size={16} />
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="workspace-views">
+        <div id="code-view" role="tabpanel" hidden={activeTab !== 'code'}>
+          <Suspense fallback={<div className="empty-tool-state">正在加载编辑器</div>}>
+            <CodeDiffPanel unifiedDiff={diff} />
+          </Suspense>
+        </div>
+        <div id="terminal-view" role="tabpanel" hidden={activeTab !== 'terminal'}>
+          <TerminalPanel active={inspectorOpen && activeTab === 'terminal'} terminalRef={onTerminalReady} />
+        </div>
+        <div id="review-view" role="tabpanel" hidden={activeTab !== 'review'}>
+          {reviewOpened ? (
+            <Suspense fallback={<div className="empty-tool-state">正在加载编辑器</div>}>
+              <ReviewEvidencePanel run={run} history={history} />
+            </Suspense>
+          ) : null}
+        </div>
+        <div id="trace-view" role="tabpanel" hidden={activeTab !== 'trace'}>
+          {inspectorOpen ? <TraceTimeline
+            events={traceEvents}
+            connectionState={belongsToConversation
+              ? controller.connectionState
+              : { trace: null, terminal: null }}
+            persistedNodes={run?.state.trace ?? []}
+          /> : null}
+        </div>
+        <div id="capability-view" role="tabpanel" hidden={activeTab !== 'capability'}>
+          {conversation?.activeWorkspace == null ? <div className="empty-tool-state">请选择工作区后管理能力</div> : <CapabilityWorkbenchRuntime workspaceId={conversation.activeWorkspace.workspaceId} />}
+        </div>
+      </div>
+    </aside>
+  )
+
   return (
     <div className="workbench-shell" data-testid="workbench-shell" data-inspector-open={inspectorOpen} data-active-activity={activeActivity}>
       <header className="workbench-header">
@@ -137,94 +232,22 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
         </div>
       </header>
 
-      <div className={`agent-layout ${conversation === undefined ? '' : 'has-conversation-sidebar'}`}>
-        {conversation === undefined ? null : (
-          <nav className="workbench-activity-bar" role="navigation" aria-label="工作台活动栏">
-            {ACTIVITY_ITEMS.map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                type="button"
-                aria-label={label}
-                aria-current={activeActivity === id ? 'page' : undefined}
-                title={label}
-                onClick={() => selectActivity(id)}
-              >
-                <Icon aria-hidden="true" size={18} />
-              </button>
-            ))}
-          </nav>
+      <div className={`agent-layout ${conversation === undefined ? '' : 'has-conversation-sidebar workbench-dock-host'}`}>
+        {conversation === undefined ? <>
+          {conversationPanel}
+          {inspectorPanel}
+        </> : (
+          <WorkbenchDockLayout
+            inspectorOpen={inspectorOpen}
+            onInspectorOpenChange={setInspectorOpen}
+            panels={{
+              activity: activityPanel,
+              sidebar: sidebarPanel,
+              conversation: conversationPanel,
+              inspector: inspectorPanel,
+            }}
+          />
         )}
-        {conversation === undefined ? null : (
-          <div id="activity-project-panel" className="workbench-project-column" data-active-context={activeActivity}>
-            {activeActivity === 'project' && conversation.activeWorkspace !== null
-              ? <WorkspaceExplorerPanel workspaceId={conversation.activeWorkspace.workspaceId} />
-              : <ConversationSidebar controller={conversation} connectionState={belongsToConversation ? controller.connectionState : { trace: null, terminal: null }} activeContext={activeActivity} />}
-          </div>
-        )}
-        <main id="activity-conversation-panel" className="conversation-column" data-testid="workspace-main" data-active-context={activeActivity}>
-          <div className="conversation-scroll">
-            <AgentConversation run={run} currentNode={currentNode} turns={conversation?.turns} traceEvents={traceEvents} />
-            {run === null ? null : <ApprovalDialog run={run} decide={controller.decide} />}
-          </div>
-          {conversation === undefined ? <RunLauncher controller={controller} /> : <ConversationComposer conversation={conversation} runController={controller} />}
-        </main>
-
-        <aside id="execution-inspector" className="execution-inspector" aria-label="执行检查器" data-active-context={activeActivity} hidden={!inspectorOpen}>
-          <div className="inspector-heading">
-            <div>
-              <p className="section-kicker">RUN EVIDENCE</p>
-              <h2 ref={inspectorHeadingRef} tabIndex={-1}>执行详情</h2>
-            </div>
-            <span className="checkpoint-label">{run === null ? '尚未运行' : `Checkpoint ${run.version}`}</span>
-          </div>
-          <div className="workspace-tabs" role="tablist" aria-label="检查器视图">
-            {TABS.map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={activeTab === id}
-                aria-controls={`${id}-view`}
-                onClick={() => {
-                  setActiveTab(id)
-                  if (id === 'review') setReviewOpened(true)
-                }}
-              >
-                <Icon aria-hidden="true" size={16} />
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="workspace-views">
-            <div id="code-view" role="tabpanel" hidden={activeTab !== 'code'}>
-              <Suspense fallback={<div className="empty-tool-state">正在加载编辑器</div>}>
-                <CodeDiffPanel unifiedDiff={diff} />
-              </Suspense>
-            </div>
-            <div id="terminal-view" role="tabpanel" hidden={activeTab !== 'terminal'}>
-              <TerminalPanel active={inspectorOpen && activeTab === 'terminal'} terminalRef={onTerminalReady} />
-            </div>
-            <div id="review-view" role="tabpanel" hidden={activeTab !== 'review'}>
-              {reviewOpened ? (
-                <Suspense fallback={<div className="empty-tool-state">正在加载编辑器</div>}>
-                  <ReviewEvidencePanel run={run} history={history} />
-                </Suspense>
-              ) : null}
-            </div>
-            <div id="trace-view" role="tabpanel" hidden={activeTab !== 'trace'}>
-              {inspectorOpen ? <TraceTimeline
-                events={traceEvents}
-                connectionState={belongsToConversation
-                  ? controller.connectionState
-                  : { trace: null, terminal: null }}
-                persistedNodes={run?.state.trace ?? []}
-              /> : null}
-            </div>
-            <div id="capability-view" role="tabpanel" hidden={activeTab !== 'capability'}>
-              {conversation?.activeWorkspace == null ? <div className="empty-tool-state">请选择工作区后管理能力</div> : <CapabilityWorkbenchRuntime workspaceId={conversation.activeWorkspace.workspaceId} />}
-            </div>
-          </div>
-        </aside>
       </div>
       {controller.error === null ? null : <p className="global-error" role="alert">{controller.error.message}</p>}
     </div>
