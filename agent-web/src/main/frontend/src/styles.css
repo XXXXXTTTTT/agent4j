@@ -183,6 +183,17 @@ code { overflow-wrap: anywhere; }
 .composer-role-select { display: grid; gap: 3px; min-width: 0; }
 .composer-role-select select { width: 100%; }
 .workspace-views { flex: 1 1 auto; height: auto; min-height: 0; overflow: hidden; }
+
+/* 交互式终端由 xterm 独占可视区域，文本副本仅供辅助技术读取。 */
+.terminal-panel { background: var(--surface-base); display: flex; flex-direction: column; min-height: 0; }
+.terminal-bar { background: var(--surface-raised); flex: 0 0 auto; }
+.terminal-mode.is-connected { color: var(--success); }
+.terminal-mode.is-connecting { color: var(--warning); }
+.terminal-mode.is-closed { color: var(--danger); }
+.xterm-host { flex: 1 1 auto; min-height: 280px; min-width: 0; overflow: hidden; }
+.xterm-host .xterm { height: 100%; }
+.terminal-transcript { height: 1px; margin: -1px; overflow: hidden; padding: 0; position: absolute; width: 1px; }
+.terminal-error { color: var(--danger); font-size: 11px; margin: 0; padding: 7px 12px; }
 .workspace-views > [role="tabpanel"] { height: 100%; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .workspace-views > #capability-view { overflow: hidden; }
 .capability-panel { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-height: 0; overflow: hidden; }

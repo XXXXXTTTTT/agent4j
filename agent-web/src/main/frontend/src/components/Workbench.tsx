@@ -210,7 +210,11 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
           </Suspense>
         </div>
         <div id="terminal-view" role="tabpanel" hidden={activeTab !== 'terminal'}>
-          <TerminalPanel active={inspectorOpen && activeTab === 'terminal'} terminalRef={onTerminalReady} />
+          <TerminalPanel
+            active={inspectorOpen && activeTab === 'terminal'}
+            workspaceId={conversation?.activeWorkspace?.workspaceId ?? null}
+            terminalRef={onTerminalReady}
+          />
         </div>
         <div id="review-view" role="tabpanel" hidden={activeTab !== 'review'}>
           {reviewOpened ? (
