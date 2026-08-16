@@ -120,11 +120,11 @@ for ($attempt = 1; $attempt -le 180; $attempt++) {
 }
 
 $final = Get-Content -Raw (Join-Path $evidence "turn-final.json") | ConvertFrom-Json
-if ($final.status -ne "COMPLETED") { throw "真实 Agent 轮次未完成: $($final.status)" }
-if ([string]::IsNullOrWhiteSpace($final.assistantContent)) { throw "final_response 为空" }
 if ($null -eq $final.runId) { throw "轮次缺少 runId" }
 $run = Invoke-Json GET "/api/runs/$($final.runId)" $null
 $run | ConvertTo-Json -Depth 50 | Set-Content -LiteralPath (Join-Path $evidence "run-final.json")
+if ($final.status -ne "COMPLETED") { throw "真实 Agent 轮次未完成: $($final.status)" }
+if ([string]::IsNullOrWhiteSpace($final.assistantContent)) { throw "final_response 为空" }
 if ($run.status -ne "COMPLETED") { throw "Run 未完成: $($run.status)" }
 if ($run.state.variables.'ops.exitCode' -ne "0") { throw "Ops 退出码不是 0" }
 if ($run.state.variables.'reviewer.approved' -ne "true") { throw "Reviewer 未批准" }
@@ -141,9 +141,17 @@ curl.exe --silent --show-error --max-time 20 "http://localhost:8080/api/runs/$($
 $terminalCurlExit = $LASTEXITCODE
 $trace = Get-Content -Raw $traceSse
 foreach ($node in @("planner", "coder", "ops", "reviewer")) { if (-not $trace.Contains($node)) { throw "Trace 缺少节点: $node" } }
- $terminal = Get-Content -Raw $terminalSse
-if (-not $terminal.Contains("BUILD SUCCESS")) { throw "终端缺少 BUILD SUCCESS" }
-if (-not $terminal.Contains("Failures: 0")) { throw "终端缺少测试通过结果" }
+$terminalFrames = @(
+    Get-Content -LiteralPath $terminalSse | Where-Object { $_.StartsWith("data:", [System.StringComparison]::Ordinal) } |
+        ForEach-Object { $_.Substring(5) | ConvertFrom-Json }
+)
+$terminalSnapshot = $terminalFrames |
+    Where-Object { $_.kind -eq "SNAPSHOT" -and $null -ne $_.terminal } |
+    Select-Object -First 1
+if ($null -eq $terminalSnapshot) { throw "终端 SSE 缺少结构化快照" }
+if ([int]$terminalSnapshot.terminal.exitCode -ne 0) {
+    throw "终端 SSE 的退出码不是 0: $($terminalSnapshot.terminal.exitCode)"
+}
 
 Push-Location $hostProject
 try {
