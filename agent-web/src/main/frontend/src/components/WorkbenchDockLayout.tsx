@@ -20,11 +20,14 @@ import {
 
 import 'dockview/dist/styles/dockview.css'
 import { useAppearance } from '../appearance/AppearanceProvider'
+import { observeDockviewLayout } from './dockviewLayoutObserver'
 
 interface WorkbenchDockLayoutProps {
   panels: Record<WorkbenchDockPanelId, ReactNode>
   inspectorOpen: boolean
   onInspectorOpenChange(open: boolean): void
+  editorOpen: boolean
+  onEditorOpenChange(open: boolean): void
 }
 
 interface PanelContextValue {
@@ -36,6 +39,7 @@ const PanelContext = createContext<PanelContextValue | null>(null)
 const WORKBENCH_PANEL_TITLES: Record<WorkbenchDockPanelId, string> = {
   activity: '活动',
   sidebar: '项目与会话',
+  editor: '文件编辑器',
   conversation: '对话',
   inspector: '执行详情',
 }
@@ -43,6 +47,7 @@ const WORKBENCH_PANEL_TITLES: Record<WorkbenchDockPanelId, string> = {
 const WORKBENCH_PANEL_IDS: WorkbenchDockPanelId[] = [
   'activity',
   'sidebar',
+  'editor',
   'conversation',
   'inspector',
 ]
@@ -75,21 +80,28 @@ function WorkbenchDockPanel({ params }: IDockviewPanelProps<{ panelId: Workbench
   )
 }
 
-/** Dockview 外壳：管理四个工作区面板，业务状态由 Workbench 继续持有。 */
-export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChange }: WorkbenchDockLayoutProps) {
+/** Dockview 外壳：管理活动、侧栏、编辑器、对话和检查器，业务状态由 Workbench 继续持有。 */
+export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChange, editorOpen, onEditorOpenChange }: WorkbenchDockLayoutProps) {
   const { resolvedColorMode } = useAppearance()
   const apiRef = useRef<DockviewApi | null>(null)
+  const dockviewHostRef = useRef<HTMLDivElement | null>(null)
   const [api, setApi] = useState<DockviewApi | null>(null)
   const [layoutRevision, setLayoutRevision] = useState(0)
   const [viewMenuOpen, setViewMenuOpen] = useState(false)
   const compactLayout = useCompactDockLayout()
   const compactLayoutRef = useRef(compactLayout)
   const previousCompactLayoutRef = useRef(compactLayout)
+  const layoutRebuildTransactionRef = useRef(false)
   const contextValue = useMemo(() => ({ panels }), [panels])
   const dockTheme = resolvedColorMode === 'DARK' ? themeDark : themeLight
 
   const persist = useCallback((nextApi: DockviewApi) => {
-    if (typeof window === 'undefined' || compactLayoutRef.current) return
+    if (
+      typeof window === 'undefined'
+      || compactLayoutRef.current
+      || previousCompactLayoutRef.current !== compactLayoutRef.current
+      || layoutRebuildTransactionRef.current
+    ) return
     try {
       window.localStorage.setItem(WORKBENCH_DOCK_LAYOUT_STORAGE_KEY, serializeWorkbenchDockLayout(nextApi.toJSON()))
     } catch {
@@ -149,6 +161,20 @@ export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChan
     addPanel(nextApi, 'inspector', compact)
   }, [addPanel])
 
+  const syncEditorPanel = useCallback((nextApi: DockviewApi, open: boolean, compact: boolean) => {
+    const existingPanel = nextApi.getPanel('editor')
+    if (!open) {
+      existingPanel?.api.close()
+      return
+    }
+    if (existingPanel !== undefined) {
+      existingPanel.api.setActive()
+      return
+    }
+    addPanel(nextApi, 'editor', compact)
+    nextApi.getPanel('editor')?.api.setActive()
+  }, [addPanel])
+
   const onReady = useCallback(({ api: readyApi }: DockviewReadyEvent) => {
     apiRef.current = readyApi
     setApi(readyApi)
@@ -166,9 +192,11 @@ export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChan
       registerPanels(readyApi, compactLayout)
     }
     syncInspectorPanel(readyApi, inspectorOpen, compactLayout)
+    syncEditorPanel(readyApi, editorOpen, compactLayout)
     onInspectorOpenChange(readyApi.getPanel('inspector') !== undefined)
+    onEditorOpenChange(readyApi.getPanel('editor') !== undefined)
     persist(readyApi)
-  }, [compactLayout, inspectorOpen, onInspectorOpenChange, persist, registerPanels, syncInspectorPanel])
+  }, [compactLayout, editorOpen, inspectorOpen, onEditorOpenChange, onInspectorOpenChange, persist, registerPanels, syncEditorPanel, syncInspectorPanel])
 
   useEffect(() => {
     if (api === null) return undefined
@@ -180,48 +208,73 @@ export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChan
   }, [api, persist])
 
   useEffect(() => {
+    if (api === null || dockviewHostRef.current === null || typeof ResizeObserver === 'undefined') return undefined
+    return observeDockviewLayout(api, dockviewHostRef.current)
+  }, [api])
+
+  useEffect(() => {
     if (api === null) return undefined
     syncInspectorPanel(api, inspectorOpen, compactLayout)
+    syncEditorPanel(api, editorOpen, compactLayout)
     persist(api)
     return undefined
-  }, [api, compactLayout, inspectorOpen, persist, syncInspectorPanel])
+  }, [api, compactLayout, editorOpen, inspectorOpen, persist, syncEditorPanel, syncInspectorPanel])
 
   useEffect(() => {
     if (api === null || previousCompactLayoutRef.current === compactLayout) return
-    previousCompactLayoutRef.current = compactLayout
-    api.clear()
+    let savedDesktopLayout: SerializedDockview | null = null
     if (!compactLayout) {
-      let saved: SerializedDockview | null = null
       try {
-        saved = parsePersistedWorkbenchDockLayout(window.localStorage.getItem(WORKBENCH_DOCK_LAYOUT_STORAGE_KEY))
+        savedDesktopLayout = parsePersistedWorkbenchDockLayout(
+          window.localStorage.getItem(WORKBENCH_DOCK_LAYOUT_STORAGE_KEY),
+        )
       } catch {
-        saved = null
+        savedDesktopLayout = null
       }
-      if (saved !== null) api.fromJSON(saved, { reuseExistingPanels: false })
-      else registerPanels(api, false)
-    } else {
-      registerPanels(api, true)
     }
-    syncInspectorPanel(api, inspectorOpen, compactLayout)
+    layoutRebuildTransactionRef.current = true
+    try {
+      api.clear()
+      if (!compactLayout) {
+        if (savedDesktopLayout !== null) api.fromJSON(savedDesktopLayout, { reuseExistingPanels: false })
+        else registerPanels(api, false)
+      } else {
+        registerPanels(api, true)
+      }
+      syncInspectorPanel(api, inspectorOpen, compactLayout)
+      syncEditorPanel(api, editorOpen, compactLayout)
+      previousCompactLayoutRef.current = compactLayout
+    } finally {
+      layoutRebuildTransactionRef.current = false
+    }
     persist(api)
-  }, [api, compactLayout, inspectorOpen, persist, registerPanels, syncInspectorPanel])
+  }, [api, compactLayout, editorOpen, inspectorOpen, persist, registerPanels, syncEditorPanel, syncInspectorPanel])
 
   useEffect(() => {
     if (api === null) return undefined
     const disposable = api.onDidRemovePanel((panel) => {
+      if (layoutRebuildTransactionRef.current) return
       if (panel.id === 'inspector') onInspectorOpenChange(false)
+      if (panel.id === 'editor') onEditorOpenChange(false)
     })
     return () => disposable.dispose()
-  }, [api, onInspectorOpenChange])
+  }, [api, onEditorOpenChange, onInspectorOpenChange])
 
   const restoreDefaultLayout = useCallback(() => {
     const nextApi = apiRef.current
     if (nextApi === null) return
-    nextApi.clear()
-    registerPanels(nextApi, compactLayout)
+    layoutRebuildTransactionRef.current = true
+    try {
+      nextApi.clear()
+      registerPanels(nextApi, compactLayout)
+      syncEditorPanel(nextApi, false, compactLayout)
+    } finally {
+      layoutRebuildTransactionRef.current = false
+    }
     onInspectorOpenChange(true)
+    onEditorOpenChange(false)
     persist(nextApi)
-  }, [compactLayout, onInspectorOpenChange, persist, registerPanels])
+  }, [compactLayout, onEditorOpenChange, onInspectorOpenChange, persist, registerPanels, syncEditorPanel])
 
   const togglePanel = useCallback((panelId: WorkbenchDockPanelId) => {
     const nextApi = apiRef.current
@@ -230,13 +283,15 @@ export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChan
     if (existingPanel === undefined) {
       addPanel(nextApi, panelId, compactLayout)
       if (panelId === 'inspector') onInspectorOpenChange(true)
+      if (panelId === 'editor') onEditorOpenChange(true)
     } else {
       existingPanel.api.close()
       if (panelId === 'inspector') onInspectorOpenChange(false)
+      if (panelId === 'editor') onEditorOpenChange(false)
     }
     persist(nextApi)
     setLayoutRevision((revision) => revision + 1)
-  }, [addPanel, compactLayout, onInspectorOpenChange, persist])
+  }, [addPanel, compactLayout, onEditorOpenChange, onInspectorOpenChange, persist])
 
   const toolbar = (
     <div className="workbench-dock-toolbar">
@@ -286,6 +341,7 @@ export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChan
         <div className="workbench-dockview-fallback">
           {panels.activity}
           {panels.sidebar}
+          {panels.editor}
           {panels.conversation}
           {panels.inspector}
         </div>
@@ -297,12 +353,12 @@ export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChan
     <section className="workbench-dock-layout" data-testid="workbench-dock-layout">
       {toolbar}
       <PanelContext.Provider value={contextValue}>
-        <DockviewReact
-          className="workbench-dockview"
+        <div ref={dockviewHostRef} className="workbench-dockview-host">
+          <DockviewReact
+            className="workbench-dockview"
           components={{ 'workbench-panel': WorkbenchDockPanel }}
           onReady={onReady}
           theme={dockTheme}
-          disableAutoResizing
           keyboardNavigation
           layoutHistory={{ enabled: true, undoableProgrammaticMutations: true }}
           dndCompass
@@ -312,7 +368,8 @@ export function WorkbenchDockLayout({ panels, inspectorOpen, onInspectorOpenChan
             if (event.kind === 'close') return `${panelTitle} 已关闭`
             return undefined
           }}
-        />
+          />
+        </div>
       </PanelContext.Provider>
     </section>
   )

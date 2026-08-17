@@ -1,14 +1,12 @@
-import { FileCode2, Folder, FolderOpen, RefreshCw, Save } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { FileCode2, Folder, FolderOpen, RefreshCw } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { WorkspaceFileContent, WorkspaceFileEntry } from '../api/contracts'
-import { listWorkspaceFiles, readWorkspaceFile, writeWorkspaceFile } from '../api/workspaceFilesApi'
-import { Editor } from '../monaco/MonacoEditors'
-import { useAppearance } from '../appearance/AppearanceProvider'
-import { getEditorTheme } from '../appearance/editorTheme'
+import type { WorkspaceFileEntry } from '../api/contracts'
+import { listWorkspaceFiles } from '../api/workspaceFilesApi'
 
 interface Props {
   workspaceId: string
+  onOpenFile(path: string): void
 }
 
 type DirectoryEntries = Record<string, WorkspaceFileEntry[]>
@@ -19,50 +17,57 @@ function parentPath(path: string): string {
 }
 
 /** 在工作台项目活动栏中浏览和编辑当前工作区文本文件。 */
-export function WorkspaceExplorerPanel({ workspaceId }: Props) {
-  const { resolvedColorMode } = useAppearance()
+export function WorkspaceExplorerPanel({ workspaceId, onOpenFile }: Props) {
   const [entriesByDirectory, setEntriesByDirectory] = useState<DirectoryEntries>({})
   const [expandedDirectories, setExpandedDirectories] = useState<Set<string>>(new Set())
   const [loadingDirectories, setLoadingDirectories] = useState<Set<string>>(new Set())
   const [activePath, setActivePath] = useState('')
-  const [file, setFile] = useState<WorkspaceFileContent | null>(null)
-  const [draft, setDraft] = useState('')
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const requestGenerationRef = useRef(0)
+  const currentWorkspaceIdRef = useRef(workspaceId)
+  currentWorkspaceIdRef.current = workspaceId
 
-  const loadDirectory = useCallback(async (path: string): Promise<WorkspaceFileEntry[]> => {
-    setLoadingDirectories((items) => new Set(items).add(path))
+  const loadDirectory = useCallback(async (path: string, requestGeneration: number): Promise<WorkspaceFileEntry[]> => {
+    const isCurrentRequest = () => currentWorkspaceIdRef.current === workspaceId && requestGenerationRef.current === requestGeneration
+    if (isCurrentRequest()) setLoadingDirectories((items) => new Set(items).add(path))
     try {
       const loaded = await listWorkspaceFiles(workspaceId, path)
-      setEntriesByDirectory((items) => ({ ...items, [path]: loaded }))
+      if (isCurrentRequest()) setEntriesByDirectory((items) => ({ ...items, [path]: loaded }))
       return loaded
     } finally {
-      setLoadingDirectories((items) => {
-        const next = new Set(items)
-        next.delete(path)
-        return next
-      })
+      if (isCurrentRequest()) {
+        setLoadingDirectories((items) => {
+          const next = new Set(items)
+          next.delete(path)
+          return next
+        })
+      }
     }
   }, [workspaceId])
 
   const reload = useCallback(async () => {
+    const requestGeneration = ++requestGenerationRef.current
+    const isCurrentRequest = () => currentWorkspaceIdRef.current === workspaceId && requestGenerationRef.current === requestGeneration
     setLoading(true)
     setError(null)
     setEntriesByDirectory({})
     setExpandedDirectories(new Set())
+    setLoadingDirectories(new Set())
     try {
-      await loadDirectory('')
+      await loadDirectory('', requestGeneration)
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure))
+      if (isCurrentRequest()) setError(failure instanceof Error ? failure.message : String(failure))
     } finally {
-      setLoading(false)
+      if (isCurrentRequest()) setLoading(false)
     }
-  }, [loadDirectory])
+  }, [loadDirectory, workspaceId])
 
   useEffect(() => { void reload() }, [reload])
 
   async function toggleDirectory(path: string): Promise<WorkspaceFileEntry[]> {
+    const requestGeneration = requestGenerationRef.current
+    const isCurrentRequest = () => currentWorkspaceIdRef.current === workspaceId && requestGenerationRef.current === requestGeneration
     if (expandedDirectories.has(path)) {
       setExpandedDirectories((items) => {
         const next = new Set(items)
@@ -73,44 +78,24 @@ export function WorkspaceExplorerPanel({ workspaceId }: Props) {
     }
     setError(null)
     try {
-      const loaded = entriesByDirectory[path] ?? await loadDirectory(path)
+      const loaded = entriesByDirectory[path] ?? await loadDirectory(path, requestGeneration)
+      if (!isCurrentRequest()) return []
       setExpandedDirectories((items) => new Set(items).add(path))
       return loaded
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure))
+      if (isCurrentRequest()) setError(failure instanceof Error ? failure.message : String(failure))
       return []
     }
   }
 
-  async function open(entry: WorkspaceFileEntry): Promise<void> {
+  function open(entry: WorkspaceFileEntry): void {
     if (entry.kind === 'DIRECTORY') {
-      await toggleDirectory(entry.path)
+      void toggleDirectory(entry.path)
       return
     }
     setActivePath(entry.path)
     setError(null)
-    try {
-      const value = await readWorkspaceFile(workspaceId, entry.path)
-      setFile(value)
-      setDraft(value.content)
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure))
-    }
-  }
-
-  async function save(): Promise<void> {
-    if (file === null || saving) return
-    setSaving(true)
-    setError(null)
-    try {
-      const value = await writeWorkspaceFile(workspaceId, file.path, draft, file.sha256)
-      setFile(value)
-      setDraft(value.content)
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure))
-    } finally {
-      setSaving(false)
-    }
+    onOpenFile(entry.path)
   }
 
   const visibleEntries = useMemo(() => {
@@ -191,15 +176,11 @@ export function WorkspaceExplorerPanel({ workspaceId }: Props) {
         const directory = entry.kind === 'DIRECTORY'
         const expanded = directory && expandedDirectories.has(entry.path)
         const busy = directory && loadingDirectories.has(entry.path)
-        return <button key={entry.path} type="button" role="treeitem" data-path={entry.path} aria-selected={activePath === entry.path} aria-expanded={directory ? expanded : undefined} aria-level={level + 1} className={`workspace-file-row ${activePath === entry.path ? 'is-active' : ''}`} style={{ paddingLeft: `${10 + level * 16}px` }} onClick={() => void open(entry)} disabled={busy}>
+        return <button key={entry.path} type="button" role="treeitem" data-path={entry.path} aria-selected={activePath === entry.path} aria-expanded={directory ? expanded : undefined} aria-level={level + 1} className={`workspace-file-row ${activePath === entry.path ? 'is-active' : ''}`} style={{ paddingLeft: `${10 + level * 16}px` }} onClick={() => open(entry)} disabled={busy}>
           {directory ? (expanded ? <FolderOpen aria-hidden="true" size={15} /> : <Folder aria-hidden="true" size={15} />) : <FileCode2 aria-hidden="true" size={15} />}<span>{entry.name}</span>
         </button>
       })}
     </div>
-    <section className="workspace-explorer-editor" aria-label="文件编辑">
-      <div className="workspace-explorer-editor-bar"><code>{file?.path ?? '选择一个文本文件'}</code><button type="button" className="icon-button" aria-label="保存文件" title="保存文件" onClick={() => void save()} disabled={file === null || saving || draft === file.content}><Save size={14} /></button></div>
-      {file === null ? <div className="empty-tool-state">从文件树选择文本文件</div> : <Editor height="100%" value={draft} language="java" theme={getEditorTheme(resolvedColorMode)} onChange={(value) => setDraft(value ?? '')} options={{ minimap: { enabled: false }, automaticLayout: true, scrollBeyondLastLine: false, fontSize: 13 }} />}
-    </section>
     {error === null ? null : <p className="workspace-explorer-error" role="alert">{error}</p>}
   </aside>
 }

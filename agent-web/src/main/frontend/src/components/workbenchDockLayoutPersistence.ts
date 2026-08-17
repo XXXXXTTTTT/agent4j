@@ -3,7 +3,7 @@ import type { SerializedDockview } from 'dockview-react'
 export const WORKBENCH_DOCK_LAYOUT_STORAGE_KEY = 'agent4j.dockview.layout.v1'
 export const WORKBENCH_DOCK_LAYOUT_VERSION = 1
 
-export const WORKBENCH_DOCK_PANEL_IDS = ['activity', 'sidebar', 'conversation', 'inspector'] as const
+export const WORKBENCH_DOCK_PANEL_IDS = ['activity', 'sidebar', 'editor', 'conversation', 'inspector'] as const
 
 export type WorkbenchDockPanelId = typeof WORKBENCH_DOCK_PANEL_IDS[number]
 
@@ -51,11 +51,18 @@ export function registerDefaultWorkbenchPanels(api: DockPanelRegistrar): void {
     position: { referencePanel: 'activity', direction: 'right' },
   })
   api.addPanel({
+    id: 'editor',
+    component: 'editor',
+    title: '文件编辑器',
+    inactive: true,
+    position: { referencePanel: 'sidebar', direction: 'right' },
+  })
+  api.addPanel({
     id: 'conversation',
     component: 'conversation',
     title: '对话',
     inactive: true,
-    position: { referencePanel: 'sidebar', direction: 'right' },
+    position: { referencePanel: 'editor', direction: 'right' },
   })
   api.addPanel({
     id: 'inspector',
@@ -83,6 +90,13 @@ export function registerCompactWorkbenchPanels(api: DockPanelRegistrar): void {
     id: 'inspector',
     component: 'inspector',
     title: '执行详情',
+    inactive: true,
+    position: { referencePanel: 'conversation', direction: 'within' },
+  })
+  api.addPanel({
+    id: 'editor',
+    component: 'editor',
+    title: '文件编辑器',
     inactive: true,
     position: { referencePanel: 'conversation', direction: 'within' },
   })

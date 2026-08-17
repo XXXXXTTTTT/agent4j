@@ -1,5 +1,5 @@
 import { Activity, Code2, Globe2, MessageSquare, PanelRightClose, PanelRightOpen, RefreshCw, ShieldCheck, Terminal, FolderGit2 } from 'lucide-react'
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 
 import type { UseRunWorkbenchResult } from '../hooks/useRunWorkbench'
 import { useChatScrollSync } from '../hooks/useChatScrollSync'
@@ -13,9 +13,10 @@ import { TraceTimeline } from './TraceTimeline'
 import type { UseConversationWorkspaceResult } from '../hooks/useConversationWorkspace'
 import { CapabilityWorkbenchRuntime } from './CapabilityWorkbenchRuntime'
 import { WorkspaceExplorerPanel } from './WorkspaceExplorerPanel'
+import { WorkspaceEditorPanel, type WorkspaceEditorSnapshot } from './WorkspaceEditorPanel'
 import { WorkbenchDockLayout } from './WorkbenchDockLayout'
 import { ChatTimelineMinimap, type ChatTimelineEntry } from './ChatTimelineMinimap'
-import type { ConversationTurn } from '../api/contracts'
+import type { ConversationTurn, WorkspaceFileContent } from '../api/contracts'
 
 const CodeDiffPanel = lazy(() => import('./CodeDiffPanel').then((module) => ({
   default: module.CodeDiffPanel,
@@ -86,6 +87,11 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
   const [focusInspectorAfterOpen, setFocusInspectorAfterOpen] = useState(false)
   const inspectorHeadingRef = useRef<HTMLHeadingElement>(null)
   const [reviewOpened, setReviewOpened] = useState(false)
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editorPaths, setEditorPaths] = useState<string[]>([])
+  const [activeEditorPath, setActiveEditorPath] = useState<string | null>(null)
+  const [editorSnapshots, setEditorSnapshots] = useState<Record<string, WorkspaceEditorSnapshot>>({})
+  const [workspaceActivationRevisions, setWorkspaceActivationRevisions] = useState<Record<string, number>>({})
   const chatScroll = useChatScrollSync()
   const belongsToConversation = conversation === undefined
     || controller.run === null
@@ -100,6 +106,76 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
     ? latestTrace.nodeName
     : run?.nextNode ?? null
   const timelineEntries = buildTimelineEntries(conversation?.turns ?? [], run)
+  const activeWorkspaceId = conversation?.activeWorkspace?.workspaceId ?? null
+  const activeWorkspaceRevision = activeWorkspaceId === null ? 0 : workspaceActivationRevisions[activeWorkspaceId] ?? 0
+
+  const updateEditorSnapshot = useCallback((snapshot: WorkspaceEditorSnapshot): void => {
+    if (activeWorkspaceId === null) return
+    setEditorSnapshots((current) => ({ ...current, [activeWorkspaceId]: snapshot }))
+  }, [activeWorkspaceId])
+
+  const updateSavedEditorFile = useCallback((workspaceId: string, file: WorkspaceFileContent, savedDraft: string, latestDraft: string, activationRevision: number): void => {
+    setEditorSnapshots((current) => {
+      const currentSnapshot = current[workspaceId]
+      const currentDraft = currentSnapshot?.drafts[file.path]
+      return {
+        ...current,
+        [workspaceId]: {
+          files: { ...(currentSnapshot?.files ?? {}), [file.path]: file },
+          drafts: {
+            ...(currentSnapshot?.drafts ?? {}),
+            [file.path]: currentDraft === undefined || currentDraft === savedDraft ? latestDraft : currentDraft,
+          },
+          loadedRevisions: { ...(currentSnapshot?.loadedRevisions ?? {}), [file.path]: activationRevision },
+        },
+      }
+    })
+  }, [])
+
+  useEffect(() => {
+    if (activeWorkspaceId !== null) {
+      setWorkspaceActivationRevisions((current) => ({
+        ...current,
+        [activeWorkspaceId]: (current[activeWorkspaceId] ?? 0) + 1,
+      }))
+    }
+    setEditorOpen(false)
+    setEditorPaths([])
+    setActiveEditorPath(null)
+  }, [activeWorkspaceId])
+
+  useEffect(() => {
+    if (editorPaths.length === 0) {
+      setEditorOpen(false)
+      setActiveEditorPath(null)
+      return
+    }
+    if (activeEditorPath === null || !editorPaths.includes(activeEditorPath)) setActiveEditorPath(editorPaths.at(-1) ?? null)
+  }, [activeEditorPath, editorPaths])
+
+  function openFile(path: string): void {
+    setEditorPaths((paths) => paths.includes(path) ? paths : [...paths, path])
+    setActiveEditorPath(path)
+    setEditorOpen(true)
+  }
+
+  function closeFile(path: string, discardDraft = false): void {
+    setEditorPaths((paths) => paths.filter((item) => item !== path))
+    setActiveEditorPath((active) => active === path ? null : active)
+    if (discardDraft && activeWorkspaceId !== null) {
+      setEditorSnapshots((current) => {
+        const snapshot = current[activeWorkspaceId]
+        if (snapshot === undefined) return current
+        const files = { ...snapshot.files }
+        const drafts = { ...snapshot.drafts }
+        const loadedRevisions = { ...(snapshot.loadedRevisions ?? {}) }
+        delete files[path]
+        delete drafts[path]
+        delete loadedRevisions[path]
+        return { ...current, [activeWorkspaceId]: { files, drafts, loadedRevisions } }
+      })
+    }
+  }
   function selectActivity(view: ActivityView): void {
     setActiveActivity(view)
     if (view === 'conversation' || view === 'project') setInspectorOpen(false)
@@ -148,10 +224,14 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
   const sidebarPanel = conversation === undefined ? null : (
     <div id="activity-project-panel" className="workbench-project-column" data-active-context={activeActivity}>
       {activeActivity === 'project' && conversation.activeWorkspace !== null
-        ? <WorkspaceExplorerPanel workspaceId={conversation.activeWorkspace.workspaceId} />
+        ? <WorkspaceExplorerPanel workspaceId={conversation.activeWorkspace.workspaceId} onOpenFile={openFile} />
         : <ConversationSidebar controller={conversation} connectionState={belongsToConversation ? controller.connectionState : { trace: null, terminal: null }} activeContext={activeActivity} />}
     </div>
   )
+
+  const editorPanel = conversation?.activeWorkspace == null
+    ? <div className="empty-tool-state">请选择工作区后打开文件</div>
+    : <WorkspaceEditorPanel workspaceId={conversation.activeWorkspace.workspaceId} activationRevision={activeWorkspaceRevision} openPaths={editorPaths} activePath={activeEditorPath} onActivate={setActiveEditorPath} onClose={closeFile} snapshot={editorSnapshots[conversation.activeWorkspace.workspaceId]} onSnapshotChange={updateEditorSnapshot} onFileSaved={updateSavedEditorFile} />
 
   const conversationPanel = (
     <main id="activity-conversation-panel" className="conversation-column" data-testid="workspace-main" data-active-context={activeActivity}>
@@ -294,9 +374,12 @@ export function Workbench({ controller, onTerminalReady, conversation }: Workben
             panels={{
               activity: activityPanel,
               sidebar: sidebarPanel,
+              editor: editorPanel,
               conversation: conversationPanel,
               inspector: inspectorPanel,
             }}
+            editorOpen={editorOpen}
+            onEditorOpenChange={setEditorOpen}
           />
         )}
       </div>
